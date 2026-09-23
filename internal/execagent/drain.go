@@ -189,6 +189,10 @@ func (d *drainGuard) removeGuard(ctx context.Context) error {
 	return nil
 }
 
+//= docs/requirements/05-exec-agent.md#drain
+//# The Exec Agent SHALL hold a drain open only with a guard pod
+//# and a PodDisruptionBudget of its own, both bound to its own Host's Node.
+
 // placeGuard creates the budget and then the guard pod. A guard pod that is
 // there but has ended, which a node reboot can leave behind, is deleted so
 // that the next reconcile places a live one.

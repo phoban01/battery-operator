@@ -50,6 +50,10 @@ const maxMessageLength = 1024
 //# in the not ready reason directory names a reason, and SHALL report that
 //# reason.
 
+//= docs/requirements/05-exec-agent.md#host-checks
+//# The Exec Agent SHALL read not ready reasons from the directory
+//# its configuration names.
+
 // checkReadiness decides whether the Host is ready. Every check runs, so
 // that the message lists everything that is wrong at once; the reason is
 // that of the first failing check, in the order an operator would want to

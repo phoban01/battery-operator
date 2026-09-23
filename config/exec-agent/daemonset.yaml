@@ -40,6 +40,9 @@ spec:
       serviceAccountName: battery-operator-exec-agent
       hostNetwork: true
       dnsPolicy: ClusterFirstWithHostNet
+      #= docs/requirements/05-exec-agent.md#serving
+      #/ The Manifests SHALL run the Exec Agent on every Node labelled
+      #/ `battery.liquidmetal-x.dev/host=true`, and on no other Node.
       nodeSelector:
         battery.liquidmetal-x.dev/host: "true"
       tolerations:

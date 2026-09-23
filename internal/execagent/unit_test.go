@@ -21,6 +21,8 @@ import (
 	"errors"
 	"io"
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -42,6 +44,7 @@ import (
 
 	"github.com/phoban01/battery-operator/internal/clock"
 	"github.com/phoban01/battery-operator/internal/fakeflintlock"
+	"github.com/phoban01/battery-operator/internal/hostcheck"
 )
 
 // Names the tests share.
@@ -508,5 +511,41 @@ func TestFlintlockdOnlyOnThisHostOverMutualTLS(t *testing.T) {
 	wrongCA := ClientTLS{CertFile: certs.ClientCertFile, KeyFile: certs.ClientKeyFile, CAFile: other.CAFile}
 	if err := serverInfo(wrongCA); err == nil {
 		t.Error("the agent talked to a flintlockd whose serving certificate the configured CA did not sign")
+	}
+}
+
+//= docs/requirements/05-exec-agent.md#host-checks
+//= type=test
+//# The Exec Agent SHALL read not ready reasons from the directory
+//# its configuration names.
+
+// TestNotReadyReasonsComeFromTheConfiguredDirectory checks readiness twice
+// against the same flintlockd, once with the configured directory holding a
+// reason and once with it pointing at an empty directory beside it: only
+// the configured directory counts, and the default is not read at all.
+func TestNotReadyReasonsComeFromTheConfiguredDirectory(t *testing.T) {
+	t.Parallel()
+	fake, certs, _ := serveFake(t, fakeflintlock.Config{Name: "h", ExecEnabled: true, Version: testVersion})
+	fl, err := DialFlintlockd(fake.Addr(), clientTLS(certs), loopback)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = fl.Close() }()
+	withReason, empty := t.TempDir(), t.TempDir()
+	if err := os.WriteFile(filepath.Join(withReason, "unit.service"), []byte("configured reason\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := validConfig()
+	if cfg.NotReadyDir != hostcheck.DefaultNotReadyDir {
+		t.Fatalf("the default directory is %q, want %q", cfg.NotReadyDir, hostcheck.DefaultNotReadyDir)
+	}
+	cfg.NotReadyDir = withReason
+	ctx := context.Background()
+	if r := checkReadiness(ctx, cfg, fl); r.ready || r.reason != ReasonHostImageNotReady || !strings.Contains(r.message, "unit.service: configured reason") {
+		t.Errorf("readiness with a reason in %s = %+v, want not ready with that reason", withReason, r)
+	}
+	cfg.NotReadyDir = empty
+	if r := checkReadiness(ctx, cfg, fl); !r.ready {
+		t.Errorf("readiness with the empty directory %s configured = %+v, want ready", empty, r)
 	}
 }

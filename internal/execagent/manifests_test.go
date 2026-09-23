@@ -17,6 +17,7 @@ limitations under the License.
 package execagent_test
 
 import (
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -24,16 +25,25 @@ import (
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/yaml"
 
 	"github.com/phoban01/battery-operator/internal/execagent/execagenttest"
 )
 
+//= docs/requirements/05-exec-agent.md#serving
+//= type=test
+//# The Manifests SHALL run the Exec Agent on every Node labelled
+//# `battery.liquidmetal-x.dev/host=true`, and on no other Node.
+
 // TestDaemonSet reads config/exec-agent/daemonset.yaml strictly and checks
-// what the rest of the agent relies on: it runs in the Host's network
-// namespace as the ServiceAccount the RBAC and the admission policy name,
-// knows its Node, reaches flintlockd over mutual TLS on the Host's address,
-// and serves with a certificate of its own.
+// what the rest of the agent relies on. It is a DaemonSet selecting exactly
+// the Nodes labelled battery.liquidmetal-x.dev/host=true, tolerating every
+// taint so that no labelled Node is left out, with no affinity or node name
+// that would narrow or widen that. It runs in the Host's network namespace
+// as the ServiceAccount the RBAC and the admission policy name, knows its
+// Node, reaches flintlockd over mutual TLS on the Host's address, and
+// serves with a certificate of its own.
 func TestDaemonSet(t *testing.T) {
 	t.Parallel()
 	data, err := os.ReadFile(filepath.Join(execagenttest.ModuleRoot(), "config", "exec-agent", "daemonset.yaml"))
@@ -48,6 +58,20 @@ func TestDaemonSet(t *testing.T) {
 	if ds.Namespace != execagenttest.AgentNamespace || spec.ServiceAccountName != execagenttest.AgentServiceAccount {
 		t.Errorf("the DaemonSet runs as %s/%s, want %s/%s", ds.Namespace, spec.ServiceAccountName,
 			execagenttest.AgentNamespace, execagenttest.AgentServiceAccount)
+	}
+	if ds.Kind != "DaemonSet" {
+		t.Errorf("the Exec Agent runs as a %s, want a DaemonSet", ds.Kind)
+	}
+	if want := map[string]string{"battery.liquidmetal-x.dev/host": "true"}; !maps.Equal(spec.NodeSelector, want) {
+		t.Errorf("the DaemonSet selects Nodes by %v, want exactly %v", spec.NodeSelector, want)
+	}
+	if spec.Affinity != nil || spec.NodeName != "" {
+		t.Errorf("the DaemonSet narrows its Nodes further: affinity %v, node name %q", spec.Affinity, spec.NodeName)
+	}
+	if !slices.ContainsFunc(spec.Tolerations, func(tol corev1.Toleration) bool {
+		return tol.Key == "" && tol.Operator == corev1.TolerationOpExists && tol.Effect == ""
+	}) {
+		t.Errorf("the DaemonSet tolerates %v, want every taint, so that a tainted Host still runs it", spec.Tolerations)
 	}
 	if !spec.HostNetwork {
 		t.Error("the DaemonSet is not in the Host's network namespace")

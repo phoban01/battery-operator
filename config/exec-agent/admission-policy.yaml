@@ -105,6 +105,11 @@ spec:
       messageExpression: >-
         'the Exec Agent of ' + variables.host + ' may change only the battery.liquidmetal-x.dev/
         annotations of its Node'
+    #= docs/requirements/05-exec-agent.md#identity
+    #/ The ValidatingAdmissionPolicy of EA-051 SHALL let an Exec
+    #/ Agent's identity create and delete guard pods and PodDisruptionBudgets
+    #/ only for its own Host's Node.
+    #
     # The only pod an Exec Agent makes is its guard, on its Host's Node,
     # which it creates and deletes and never edits.
     - expression: >-

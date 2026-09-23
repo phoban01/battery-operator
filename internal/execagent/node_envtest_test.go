@@ -28,9 +28,11 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	policyv1 "k8s.io/api/policy/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8stypes "k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes"
 
 	"github.com/phoban01/battery-operator/internal/execagent"
@@ -213,6 +215,12 @@ func (noClaims) BoundOnHost(context.Context, string) ([]execagent.Claim, error) 
 //# Host's Node under the prefix `battery.liquidmetal-x.dev/`, and nothing
 //# else of any Node.
 
+//= docs/requirements/05-exec-agent.md#identity
+//= type=test
+//# The ValidatingAdmissionPolicy of EA-051 SHALL let an Exec
+//# Agent's identity create and delete guard pods and PodDisruptionBudgets
+//# only for its own Host's Node.
+
 // TestAdmissionPolicyKeepsEachAgentToItsOwnNode runs against the API server
 // with config/exec-agent/admission-policy.yaml loaded unchanged, with the
 // Exec Agents of two Hosts authenticating with real bound tokens of pods on
@@ -297,6 +305,52 @@ func TestAdmissionPolicyKeepsEachAgentToItsOwnNode(t *testing.T) {
 			t.Errorf("%s: %v, want refused by the admission policy", what, err)
 		}
 	}
+
+	// Budgets: its own Host's guard budget only.
+	minAvailable := intstr.FromInt32(1)
+	budget := func(name string) *policyv1.PodDisruptionBudget {
+		return &policyv1.PodDisruptionBudget{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: execagenttest.AgentNamespace},
+			Spec:       policyv1.PodDisruptionBudgetSpec{MinAvailable: &minAvailable},
+		}
+	}
+	pdbs := a.PolicyV1().PodDisruptionBudgets(execagenttest.AgentNamespace)
+	if _, err := pdbs.Create(ctx, budget(execagent.GuardName(hostA)), dryRun); err != nil {
+		t.Errorf("its own guard budget: %v, want admitted", err)
+	}
+	for what, b := range map[string]*policyv1.PodDisruptionBudget{
+		"another Host's guard budget": budget(execagent.GuardName(hostB)),
+		"a budget of another name":    budget("not-the-guard"),
+	} {
+		if _, err := pdbs.Create(ctx, b, dryRun); !execagenttest.IsPolicyDenial(err) {
+			t.Errorf("%s: %v, want refused by the admission policy", what, err)
+		}
+	}
+
+	// Deleting: its own guard pod and budget, and not another Host's.
+	adminPods := env.Admin.CoreV1().Pods(execagenttest.AgentNamespace)
+	adminPDBs := env.Admin.PolicyV1().PodDisruptionBudgets(execagenttest.AgentNamespace)
+	for _, host := range []string{hostA, hostB} {
+		if _, err := adminPods.Create(ctx, guard(execagent.GuardName(host), host), metav1.CreateOptions{}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := adminPDBs.Create(ctx, budget(execagent.GuardName(host)), metav1.CreateOptions{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dryDelete := metav1.DeleteOptions{DryRun: []string{metav1.DryRunAll}}
+	if err := pods.Delete(ctx, execagent.GuardName(hostA), dryDelete); err != nil {
+		t.Errorf("deleting its own guard pod: %v, want admitted", err)
+	}
+	if err := pdbs.Delete(ctx, execagent.GuardName(hostA), dryDelete); err != nil {
+		t.Errorf("deleting its own guard budget: %v, want admitted", err)
+	}
+	if err := pods.Delete(ctx, execagent.GuardName(hostB), dryDelete); !execagenttest.IsPolicyDenial(err) {
+		t.Errorf("deleting another Host's guard pod: %v, want refused by the admission policy", err)
+	}
+	if err := pdbs.Delete(ctx, execagent.GuardName(hostB), dryDelete); !execagenttest.IsPolicyDenial(err) {
+		t.Errorf("deleting another Host's guard budget: %v, want refused by the admission policy", err)
+	}
 }
 
 //= docs/requirements/05-exec-agent.md#drain
@@ -304,6 +358,11 @@ func TestAdmissionPolicyKeepsEachAgentToItsOwnNode(t *testing.T) {
 //# While claims are Bound on its Host, the Exec Agent SHALL hold an
 //# eviction-based drain of the Host's Node open, and SHALL let the drain
 //# complete when none remain or when the configured drain timeout elapses.
+
+//= docs/requirements/05-exec-agent.md#drain
+//= type=test
+//# The Exec Agent SHALL hold a drain open only with a guard pod
+//# and a PodDisruptionBudget of its own, both bound to its own Host's Node.
 
 // TestDrainGuard checks that a Bound claim on the Host puts a guard pod on
 // the Host's Node under a budget that allows no disruption, and that the
@@ -348,6 +407,26 @@ func TestDrainGuard(t *testing.T) {
 	}
 	if pdb.Spec.MinAvailable == nil || pdb.Spec.MinAvailable.IntValue() != 1 {
 		t.Errorf("guard budget = %v, want minAvailable 1", pdb.Spec)
+	}
+	// EA-041: the budget and the pod are the agent's own and bound to its
+	// Host's Node: both owned by that Node, the budget selecting that Node's
+	// guard, and that guard the only pod it selects.
+	node := f.host.ReadNode()
+	for what, owners := range map[string][]metav1.OwnerReference{"pod": pod.OwnerReferences, "budget": pdb.OwnerReferences} {
+		if len(owners) != 1 || owners[0].Kind != "Node" || owners[0].Name != node.Name || owners[0].UID != node.UID {
+			t.Errorf("guard %s owners = %v, want the Host's Node alone", what, owners)
+		}
+	}
+	selector, err := metav1.LabelSelectorAsSelector(pdb.Spec.Selector)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected, err := pods.List(ctx, metav1.ListOptions{LabelSelector: selector.String()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(selected.Items) != 1 || selected.Items[0].Name != name || selected.Items[0].Spec.NodeName != f.host.Node {
+		t.Errorf("the guard budget selects %d pods, want only the guard on %s", len(selected.Items), f.host.Node)
 	}
 	env.DeleteClaim(t, f.ns, "claim")
 	execagenttest.Eventually(t, "the guard to go when no claim is bound", gone)
