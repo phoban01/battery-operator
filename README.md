@@ -59,6 +59,20 @@ Inside it:
   dagger call duvet-report export --path=.duvet/reports
   ```
 
+- The images are defined in the same module, and nowhere else
+  ([ADR 0005](docs/adr/0005-images-built-by-dagger.md)). CI publishes them
+  on every push to `main` and every `v*` tag, to
+  `ghcr.io/phoban01/battery-operator` (the Operator) and
+  `ghcr.io/phoban01/battery-operator/exec-agent` (the Exec Agent), for
+  linux/amd64 and linux/arm64, tagged with the commit SHA and `latest` or
+  the version:
+
+  ```sh
+  dagger call images export --path=dist/images  # both images, both platforms, as OCI tarballs
+  make docker-build IMG=battery-operator:dev    # into the local Docker, e.g. for kind
+  make docker-push IMAGE_REPO=ghcr.io/you/battery-operator IMAGE_TAG=dev
+  ```
+
 ## License
 
 Apache License 2.0, as battery and flintlock are. See [LICENSE](LICENSE).
