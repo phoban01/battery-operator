@@ -77,6 +77,23 @@ cannot finish its cluster fleet until the real resources exist.
 5. **Code the operator needs moves here from flintlock-runner**, as listed
    [below](#code-moving-from-flintlock-runner). flintlock-runner then
    consumes this project instead of carrying the code itself.
+6. **The API group is `battery.liquidmetal-x.dev` until adoption.**
+   `battery.liquidmetal.dev` is liquidmetal-dev's domain, which this project
+   does not own. The `-x` marks the group as experimental, in the way
+   `x-k8s.io` marks Kubernetes SIG projects. On adoption the group becomes
+   `battery.liquidmetal.dev`, which is a breaking rename, taken while the
+   API is still `v1alpha1`.
+7. **battery runs as a sidecar** in the operator's pod, listening on
+   loopback:
+   - battery is a single-writer SQLite service, so it is one replica
+     either way;
+   - its API is never on the network (consequence 5);
+   - a restart for a Host change (consequence 1) stays inside one pod.
+
+   The cost is that the operator's leader election and battery's lifecycle
+   are coupled: the operator runs one replica too, and restarting battery
+   restarts a container in the operator's pod. A separate Deployment stays
+   possible later, behind mutual TLS.
 
 ## Consequences
 
@@ -134,33 +151,22 @@ and the first two are worth raising upstream.
    would take a battery change. The unchanged options are loopback
    (`127.0.0.1`) inside the operator's pod, which only containers of that
    pod can reach, or mTLS with a client certificate only the operator
-   holds. battery already supports mutual TLS on its API
+   holds. With battery as a sidecar (decision 7), it is loopback. battery
+   already supports mutual TLS on its API
    (`validate_client` with `client_ca_file`), and a basic-auth token.
 
 ## Open questions
 
-1. **Sidecar or separate Deployment?** Leaning sidecar, with battery in the
-   operator's pod listening on loopback:
-   - battery is a single-writer SQLite service, so it is one replica
-     either way;
-   - its API is never on the network (consequence 5);
-   - a restart for a Host change (consequence 1) stays inside one pod.
-
-   The cost is that the operator's leader election and battery's lifecycle
-   become coupled.
-2. **API group.** `battery.liquidmetal.dev` is liquidmetal-dev's domain, and
-   this project does not own it before adoption. Using it now saves a
-   breaking rename on adoption, but only with liquidmetal-dev's agreement.
-3. **Who creates the per-claim token's Secret?** The proposal has the
+1. **Who creates the per-claim token's Secret?** The proposal has the
    client create it. The operator could create it on bind instead, which
    would put the convention in one place. The operator would then need to
    create Secrets in every client namespace.
-4. **The Host Image.** flintlock-runner's bootc Host Image mixes generic
+2. **The Host Image.** flintlock-runner's bootc Host Image mixes generic
    prerequisites (flintlockd, the containerd thin pool, KVM) with CI Host
    Services (buildkitd, a Go proxy, a registry mirror). Leaning: it stays in
    flintlock-runner for now, and this project documents the prerequisites a
    Host must meet.
-5. **Upstream asks.** Raise a Host registration RPC or configuration reload
+3. **Upstream asks.** Raise a Host registration RPC or configuration reload
    (consequence 1) and an idempotent `ClaimVM` (consequence 2) with battery.
    Neither blocks `v1alpha1`.
 
@@ -191,7 +197,7 @@ transport.
 ## What happens next
 
 1. Scaffold the project and write the `v1alpha1` types and CRDs from
-   battery#46.
+   battery#46, in `battery.liquidmetal-x.dev`.
 2. Build the MicroVMClaim controller against the fake battery, then the
    Pool controller.
 3. Move the Exec Agent over and switch it to the real claim checks.
