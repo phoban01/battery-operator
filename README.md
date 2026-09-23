@@ -45,6 +45,19 @@ Inside it:
 - `devbox run build`, `test`, `lint` and `duvet` run the make targets, and
   `devbox run coverage-gate CL-001 CL-002` runs the requirements gate for
   those IDs.
+- The Dagger CLI is downloaded into `.devbox/bin` on shell entry. CI is the
+  Dagger module in `.dagger/`, and its jobs run the same functions you can
+  run locally from the repository root (the engine needs Docker):
+
+  ```sh
+  dagger call lint
+  dagger call test
+  dagger call build export --path=bin/manager
+  dagger call check-generated    # fails if make generate manifests changes the tree
+  dagger call requirements --owns="CL-001 CL-002"  # duvet report and coverage gate
+  dagger call requirements --owns=none             # the report only
+  dagger call duvet-report export --path=.duvet/reports
+  ```
 
 ## License
 

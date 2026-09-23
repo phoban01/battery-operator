@@ -1,4 +1,7 @@
-name: requirements
+name: ci
+
+# Each job runs a function of the Dagger module in .dagger/, the same
+# `dagger call` a developer runs locally from devbox.
 
 on:
   pull_request:
@@ -10,13 +13,64 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
 env:
-  DUVET_VERSION: 0.4.3
+  # matches DAGGER_VERSION in devbox.json and engineVersion in dagger.json
+  DAGGER_VERSION: 0.21.9
+  DAGGER_NO_NAG: 1
 
 jobs:
-  requirements:
-    name: duvet report and coverage gate
+  lint:
+    name: lint
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: dagger/dagger-for-github@27b130bf0f79a7f6fbbbe0fbca6760dc9bb40a77 # v8.4.1
+        with:
+          version: ${{ env.DAGGER_VERSION }}
+          call: lint
+
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: dagger/dagger-for-github@27b130bf0f79a7f6fbbbe0fbca6760dc9bb40a77 # v8.4.1
+        with:
+          version: ${{ env.DAGGER_VERSION }}
+          call: test
+
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: dagger/dagger-for-github@27b130bf0f79a7f6fbbbe0fbca6760dc9bb40a77 # v8.4.1
+        with:
+          version: ${{ env.DAGGER_VERSION }}
+          call: build export --path=bin/manager
+
+  check-generated:
+    name: check-generated
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: dagger/dagger-for-github@27b130bf0f79a7f6fbbbe0fbca6760dc9bb40a77 # v8.4.1
+        with:
+          version: ${{ env.DAGGER_VERSION }}
+          call: check-generated
+
+  requirements:
+    name: requirements
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -39,14 +93,15 @@ jobs:
           fi
           echo "::error::this PR changes .duvet/snapshot.txt, which changes only at milestones. Restore it with: git checkout origin/$BASE -- .duvet/snapshot.txt. A deliberate milestone snapshot says 'Snapshot: milestone' on its own line in the PR body."
           exit 1
-      # awslabs/duvet ships a composite action that installs the crate at a
-      # given version; pinned to a commit on main, version 0.4.3 (crates.io).
-      - name: install duvet
-        uses: awslabs/duvet@44f43e87683ae6077c64f4aa8fd519910c981fb6 # main, 2026-08-26
+      # Installs the CLI only. The calls below are run steps, so that the PR
+      # body reaches dagger through an environment variable and never through
+      # the action's own interpolation into its shell.
+      - name: install dagger
+        uses: dagger/dagger-for-github@27b130bf0f79a7f6fbbbe0fbca6760dc9bb40a77 # v8.4.1
         with:
-          version: ${{ env.DUVET_VERSION }}
+          version: ${{ env.DAGGER_VERSION }}
       - name: duvet report
-        run: make duvet
+        run: dagger --progress=plain call duvet-report export --path=.duvet/reports
       - name: upload report
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -70,5 +125,4 @@ jobs:
             exit 0
           fi
           echo "gating on: $ids"
-          # shellcheck disable=SC2086
-          SKIP_REPORT=1 hack/duvet-coverage.sh $ids
+          dagger --progress=plain call requirements --owns="$ids"
