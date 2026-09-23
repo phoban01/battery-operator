@@ -27,7 +27,7 @@ import (
 const ReleaseFinalizer = "battery.liquidmetal-x.dev/release"
 
 // MicroVMClaimPhase is where a MicroVMClaim is in its life.
-// +kubebuilder:validation:Enum=Pending;Bound;Expired;Released
+// +kubebuilder:validation:Enum=Pending;Bound;Expired
 type MicroVMClaimPhase string
 
 const (
@@ -39,8 +39,6 @@ const (
 	// MicroVMClaimExpired is a claim whose Lease lapsed because it was not
 	// renewed in time. battery deletes the MicroVM.
 	MicroVMClaimExpired MicroVMClaimPhase = "Expired"
-	// MicroVMClaimReleased is a claim whose Lease was released on deletion.
-	MicroVMClaimReleased MicroVMClaimPhase = "Released"
 )
 
 // ConditionBound is the condition type that says whether a MicroVMClaim
@@ -139,7 +137,7 @@ type HostReference struct {
 
 //= docs/requirements/01-resources.md#microvmclaim
 //# The `MicroVMClaim` resource SHALL have a status subresource that
-//# carries the phase, one of `Pending`, `Bound`, `Expired` and `Released`,
+//# carries the phase, one of `Pending`, `Bound` and `Expired`,
 //# the lease id battery chose, the MicroVM's uid, the Host's node name, the
 //# Exec Agent's address, the time the claim was bound, the time its Lease
 //# expires, and the condition `Bound`.

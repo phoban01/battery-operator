@@ -51,12 +51,28 @@ takes the agent's address from the Node report instead.
 - **CL-012** If battery reports a claim's Lease as unknown or expired, then
   the Claim Controller SHALL set the claim's phase to `Expired` and its
   condition `Bound` false with the reason `LeaseExpired`.
+- **CL-013** When battery's `Events` stream reports that the MicroVM of a
+  Bound claim was deleted, the Claim Controller SHALL set the claim's phase
+  to `Expired` and its condition `Bound` false with the reason
+  `LeaseExpired`.
+- **CL-014** When the Lease expiry time battery gave for a Bound claim has
+  passed and no `Heartbeat` for that claim has succeeded since, the Claim
+  Controller SHALL set the claim's phase to `Expired` and its condition
+  `Bound` false with the reason `LeaseExpired`.
 
 Renewal is relayed (ADR 0001, consequence 3): how long a Lease survives now
 includes the time the Claim Controller takes to react to a changed
 `renewTime`. A Holder renews well inside the Pool's heartbeat interval for
 that reason, and CL-011 keeps the expiry a consumer reads the one battery
 will enforce.
+
+A Holder that stops renewing sends no `renewTime`, so CL-010 and CL-012 alone
+would leave its claim `Bound` after battery has expired the Lease (#45, found
+by the Quint model of the claim lifecycle). battery v0.1.0 has no call that
+reads a Lease without renewing it, so the Claim Controller learns of the
+expiry from battery's `Events` stream (CL-013), and from the expiry time
+battery itself gave when the stream has missed it (CL-014). CL-014 compares
+against battery's own time, so it does not break CL-011.
 
 ## Release {#release}
 
