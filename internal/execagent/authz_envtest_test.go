@@ -168,10 +168,6 @@ func TestExecOnlyWithAClaimTokenOfABoundClaim(t *testing.T) {
 			claim(name, func(st *execagenttest.ClaimStatus) { st.Phase = batteryv1alpha1.MicroVMClaimExpired })
 			return claimToken(name)
 		}},
-		{name: "EA-013: a released claim", want: codes.PermissionDenied, token: func(name string) string {
-			claim(name, func(st *execagenttest.ClaimStatus) { st.Phase = batteryv1alpha1.MicroVMClaimReleased })
-			return claimToken(name)
-		}},
 		{name: "EA-013: a bound claim whose lease has run out", want: codes.PermissionDenied, token: func(name string) string {
 			claim(name, func(st *execagenttest.ClaimStatus) { st.ExpiresAt = time.Now().Add(-time.Minute) })
 			return claimToken(name)

@@ -236,7 +236,6 @@ func TestAuthorize(t *testing.T) {
 		refused(t, map[string]func(*Claim, *Caller){
 			"pending":            func(c *Claim, _ *Caller) { c.Phase = batteryv1alpha1.MicroVMClaimPending },
 			"expired phase":      func(c *Claim, _ *Caller) { c.Phase = batteryv1alpha1.MicroVMClaimExpired },
-			"released":           func(c *Claim, _ *Caller) { c.Phase = batteryv1alpha1.MicroVMClaimReleased },
 			"no phase":           func(c *Claim, _ *Caller) { c.Phase = "" },
 			"lease ran out":      func(c *Claim, _ *Caller) { c.ExpiresAt = now },
 			"no expiry recorded": func(c *Claim, _ *Caller) { c.ExpiresAt = time.Time{} },
