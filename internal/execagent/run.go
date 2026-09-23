@@ -192,7 +192,7 @@ func keepReporting(ctx context.Context, opts Options, clk clock.Clock, agentAddr
 			log.Info("Checked the Host's readiness", "ready", r.ready, "reason", r.reason, "message", r.message)
 			lastReady = &r
 		}
-		if err := notes.publish(ctx, nodeReport(r, agentAddress), clk.Now()); err != nil && ctx.Err() == nil {
+		if err := notes.publish(ctx, nodeReport(r, agentAddress, cfg.Flintlockd), clk.Now()); err != nil && ctx.Err() == nil {
 			log.Error(err, "Failed to publish the Node report", "node", cfg.HostNode)
 		}
 		if host, err := opts.Kube.CoreV1().Nodes().Get(ctx, cfg.HostNode, metav1.GetOptions{}); err != nil {

@@ -21,7 +21,7 @@ package execagent
 // change there (EA-051).
 const Prefix = "battery.liquidmetal-x.dev/"
 
-// The Node report (EA-034), which the Inventory Controller and the Claim
+// The Node report (EA-034, EA-035), which the Inventory Controller and the Claim
 // Controller read, and the Exec Agent's own bookkeeping of a drain (EA-040).
 const (
 	// AnnotationReady is "true" while the Exec Agent reports its Host ready
@@ -35,6 +35,10 @@ const (
 	// AnnotationAddress is the `address:port` the Exec Agent serves its exec
 	// API on (EA-002).
 	AnnotationAddress = Prefix + "exec-agent-address"
+	// AnnotationFlintlockdAddress is the `address:port` at which battery
+	// reaches this Host's flintlockd (EA-035), which the Inventory
+	// Controller gives battery (IN-003).
+	AnnotationFlintlockdAddress = Prefix + "flintlockd-address"
 	// AnnotationDrainStarted is when the Exec Agent first saw its Host's
 	// Node unschedulable, so that a restart does not restart the drain
 	// timeout (EA-040).
@@ -45,6 +49,8 @@ const (
 const (
 	ReasonReady              = "Ready"
 	ReasonHostImageNotReady  = "HostImageNotReady"
+	ReasonKVMUnavailable     = "KVMUnavailable"
+	ReasonThinPoolMissing    = "ThinPoolMissing"
 	ReasonFlintlockdNotReady = "FlintlockdNotReady"
 	ReasonExecDisabled       = "ExecDisabled"
 )

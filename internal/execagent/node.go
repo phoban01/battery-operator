@@ -54,15 +54,13 @@ const maxMessageLength = 1024
 //# The Exec Agent SHALL read not ready reasons from the directory
 //# its configuration names.
 
-// checkReadiness decides whether the Host is ready. Every check runs, so
+// checkReadiness decides whether the Host is ready: the Host Image reports
+// no reason not to be (EA-033), and the Host prerequisites of
+// docs/host-prerequisites.md hold (EA-030 to EA-032). Every check runs, so
 // that the message lists everything that is wrong at once; the reason is
 // that of the first failing check, in the order an operator would want to
-// fix them: a Host Image unit that gave up (without KVM flintlockd is not
-// even started), then flintlockd.
-//
-// The flintlockd check is flintlock-runner's, moved as it is: flintlockd
-// has to answer ServerInfo with exec enabled. The rest of the prerequisite
-// scan, and its citations, are #17's (EA-030 to EA-032).
+// fix them: a Host Image unit that gave up, then KVM and the thin pool,
+// without which flintlockd cannot run MicroVMs, then flintlockd itself.
 func checkReadiness(ctx context.Context, cfg *Config, fl *Flintlockd) readiness {
 	var problems []string
 	reason := ""
@@ -81,6 +79,23 @@ func checkReadiness(ctx context.Context, cfg *Config, fl *Flintlockd) readiness 
 		fail(ReasonHostImageNotReady, r.Unit+": "+r.Reason)
 	}
 
+	//= docs/requirements/05-exec-agent.md#host-checks
+	//# The Exec Agent SHALL report its Host not ready while `/dev/kvm`
+	//# cannot be opened.
+	if err := hostcheck.CheckKVM(cfg.KVMDevice); err != nil {
+		fail(ReasonKVMUnavailable, err.Error())
+	}
+
+	//= docs/requirements/05-exec-agent.md#host-checks
+	//# The Exec Agent SHALL report its Host not ready while
+	//# containerd's thin pool, as the configuration names it, is not present.
+	if err := hostcheck.CheckThinPool(cfg.SysBlockDir, cfg.ThinPool); err != nil {
+		fail(ReasonThinPoolMissing, err.Error())
+	}
+
+	//= docs/requirements/05-exec-agent.md#host-checks
+	//# The Exec Agent SHALL report its Host not ready while the local
+	//# `flintlockd` does not answer `ServerInfo` with the exec service enabled.
 	infoCtx, cancel := context.WithTimeout(ctx, cfg.CallTimeout)
 	info, err := fl.vms.ServerInfo(infoCtx, &emptypb.Empty{})
 	cancel()
@@ -98,7 +113,8 @@ func checkReadiness(ctx context.Context, cfg *Config, fl *Flintlockd) readiness 
 		}
 		return readiness{reason: reason, message: message}
 	}
-	return readiness{ready: true, reason: ReasonReady, message: "flintlockd answers with exec enabled and the Host Image reports no reason to be not ready"}
+	return readiness{ready: true, reason: ReasonReady, message: "KVM opens, the thin pool " + cfg.ThinPool +
+		" is present, flintlockd answers with exec enabled and the Host Image reports no reason to be not ready"}
 }
 
 //= docs/requirements/05-exec-agent.md#host-checks
@@ -109,14 +125,22 @@ func checkReadiness(ctx context.Context, cfg *Config, fl *Flintlockd) readiness 
 //# `battery.liquidmetal-x.dev/exec-agent-message`, and its own address in
 //# `battery.liquidmetal-x.dev/exec-agent-address`.
 
+//= docs/requirements/05-exec-agent.md#host-checks
+//# The Exec Agent SHALL publish in its Node report the address
+//# at which battery reaches the Host's `flintlockd`.
+
 // nodeReport is the Node report the agent keeps on its Host's Node: the
-// Host's readiness, and the address of the exec API.
-func nodeReport(r readiness, agentAddress string) map[string]any {
+// Host's readiness, the address of the exec API, and the address of the
+// Host's flintlockd. flintlockd has one endpoint, on the Host's internal
+// address, which battery and the agent both reach (ADR 0002), so the
+// latter is the endpoint the agent is configured with.
+func nodeReport(r readiness, agentAddress, flintlockdAddress string) map[string]any {
 	return map[string]any{
-		AnnotationReady:   strconv.FormatBool(r.ready),
-		AnnotationReason:  r.reason,
-		AnnotationMessage: r.message,
-		AnnotationAddress: agentAddress,
+		AnnotationReady:             strconv.FormatBool(r.ready),
+		AnnotationReason:            r.reason,
+		AnnotationMessage:           r.message,
+		AnnotationAddress:           agentAddress,
+		AnnotationFlintlockdAddress: flintlockdAddress,
 	}
 }
 

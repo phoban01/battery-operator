@@ -540,6 +540,7 @@ func TestNotReadyReasonsComeFromTheConfiguredDirectory(t *testing.T) {
 		t.Fatalf("the default directory is %q, want %q", cfg.NotReadyDir, hostcheck.DefaultNotReadyDir)
 	}
 	cfg.NotReadyDir = withReason
+	cfg.KVMDevice, cfg.SysBlockDir = fakePrerequisites(t)
 	ctx := context.Background()
 	if r := checkReadiness(ctx, cfg, fl); r.ready || r.reason != ReasonHostImageNotReady || !strings.Contains(r.message, "unit.service: configured reason") {
 		t.Errorf("readiness with a reason in %s = %+v, want not ready with that reason", withReason, r)

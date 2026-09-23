@@ -90,7 +90,7 @@ func TestDaemonSet(t *testing.T) {
 		t.Errorf("the container's downward API is %v", env)
 	}
 	for _, flag := range []string{"--flintlockd=$(HOST_IP):", "--flintlockd-cert-file=", "--flintlockd-key-file=",
-		"--flintlockd-ca-file=", "--tls-cert-file=", "--tls-key-file="} {
+		"--flintlockd-ca-file=", "--tls-cert-file=", "--tls-key-file=", "--kvm-device=/host/dev/kvm", "--thin-pool="} {
 		if !slices.ContainsFunc(c.Args, func(a string) bool { return strings.HasPrefix(a, flag) }) {
 			t.Errorf("the container's arguments %v have no %s", c.Args, flag)
 		}

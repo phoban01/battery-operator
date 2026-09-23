@@ -43,8 +43,10 @@ limitations under the License.
 //     (EA-001).
 //   - tls.go: the serving certificate, which has to name the Host's
 //     internal address (EA-002).
-//   - node.go and annotations.go: the readiness check, with the Host
-//     Image's not ready reasons (EA-033), and the Node report (EA-034).
+//   - node.go and annotations.go: the readiness check, of the Host
+//     prerequisites in internal/hostcheck (EA-030 to EA-032) and the Host
+//     Image's not ready reasons (EA-033), and the Node report (EA-034,
+//     EA-035).
 //   - drain.go: the drain guard (EA-040).
 //   - identity.go: the check, at start, that the agent's identity names its
 //     Host (EA-050), which config/exec-agent/admission-policy.yaml relies on

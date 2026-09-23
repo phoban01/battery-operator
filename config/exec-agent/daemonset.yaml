@@ -15,6 +15,17 @@
 # which have to be readable by the image's user, 65532.
 # #31 has the agent request its flintlockd certificates itself through
 # CertificateSigningRequests (ADR 0003) and keep its client key in memory.
+#
+# Host prerequisites (docs/host-prerequisites.md): the agent opens the
+# Host's /dev/kvm (EA-031) through the Host's /dev, mounted read-only at
+# /host/dev, so that an absent device is reported as such rather than
+# keeping the pod from starting, as a hostPath of type CharDevice would.
+# The container runtime's device rules refuse an unprivileged container
+# every device it was not given, however the device node gets there, so
+# the cluster has to give this container /dev/kvm, with a device plugin or
+# CDI; until it does, the agent reports KVMUnavailable, "operation not
+# permitted". The agent finds containerd's thin pool (EA-032) in sysfs,
+# which every container has read-only, so that needs no mount.
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
@@ -61,6 +72,9 @@ spec:
             - --tls-cert-file=/etc/battery/exec-agent/tls.crt
             - --tls-key-file=/etc/battery/exec-agent/tls.key
             - --port=10270
+            - --kvm-device=/host/dev/kvm
+            # containerd's devmapper pool_name on the Host.
+            - --thin-pool=flintlock-thinpool
           env:
             # The Host's Node, whose Node report the agent keeps (EA-034)
             # and whose name its identity has to carry (EA-050).
@@ -103,6 +117,10 @@ spec:
             - name: not-ready
               mountPath: /run/flr/not-ready.d
               readOnly: true
+            # EA-031: the Host's devices, for /dev/kvm.
+            - name: host-dev
+              mountPath: /host/dev
+              readOnly: true
       volumes:
         - name: certificates
           hostPath:
@@ -112,3 +130,7 @@ spec:
           hostPath:
             path: /run/flr/not-ready.d
             type: DirectoryOrCreate
+        - name: host-dev
+          hostPath:
+            path: /dev
+            type: Directory
