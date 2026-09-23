@@ -23,6 +23,7 @@ The design these requirements specify is recorded in
 | `06-deployment.md` | `DP` | The Operator process, battery as its sidecar, the battery connection and the Manifests |
 | `07-client.md` | `CC` | The Client Library that consumers use to claim and use a MicroVM |
 | `08-test-doubles.md` | `TD` | The fake battery and fake `flintlockd` that stand in for KVM and battery during development |
+| `09-certificates.md` | `CT` | The Operator as approver and signer of the Hosts' certificates, and the SPIFFE identities they carry |
 
 ## EARS patterns
 

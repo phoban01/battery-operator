@@ -62,5 +62,10 @@ use. It contains no requirements.
   way (ADR 0002).
 - **`flintlockd` client CA**: the certificate authority whose certificates
   `flintlockd` admits. It signs only for battery and for Exec Agents.
+- **serving CA**: the certificate authority that signs every Host's `flintlockd`
+  serving certificate, which battery and the Exec Agents trust.
+- **trust domain**: the SPIFFE trust domain the Operator is configured with.
+  Every certificate this project issues names a SPIFFE ID under it, in
+  flintlock's naming scheme (`spiffe://<trust domain>/flintlock/...`).
 - **Consumer**: a program that claims MicroVMs through the Client Library,
   flintlock-runner being the first.
