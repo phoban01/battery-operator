@@ -2,11 +2,7 @@
   "$schema": "https://raw.githubusercontent.com/jetify-com/devbox/0.16.0/.schema/devbox.schema.json",
   "packages": {
     "go": "1.26.5",
-    "golangci-lint": "2.13.1",
-    "kubernetes-controller-tools": "0.21.0",
     "kubebuilder": "4.15.0",
-    "setup-envtest": "0.22.3",
-    "kustomize": "5.8.1",
     "kubectl": "latest",
     "kind": "latest",
     "jq": "latest",

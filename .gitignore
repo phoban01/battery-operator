@@ -1,3 +1,18 @@
 # devbox: project-local GOPATH and the tools built into the project
 /.gopath/
 /.devbox/
+
+# kubebuilder: tools and envtest binaries in bin/, and build and test output
+bin/*
+Dockerfile.cross
+*.test
+*.out
+go.work
+!vendor/**/zz_generated.*
+.idea
+.vscode
+*.swp
+*.swo
+*~
+# a kubeconfig might contain secrets
+*.kubeconfig
