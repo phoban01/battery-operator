@@ -25,4 +25,11 @@ resources:
   kind: Pool
   path: github.com/phoban01/battery-operator/api/v1alpha1
   version: v1alpha1
+- controller: true
+  domain: k8s.io
+  external: true
+  group: certificates
+  kind: CertificateSigningRequest
+  path: k8s.io/api/certificates/v1
+  version: v1
 version: "3"
