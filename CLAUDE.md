@@ -156,7 +156,40 @@ Where the issues put new things:
 - Controllers: idempotent reconciles; RBAC through `+kubebuilder:rbac`
   markers; finalizers for external cleanup; watch secondary resources
   rather than polling.
+- Controllers are thin: see [Controller structure](#controller-structure).
 - Log messages follow the Kubernetes style: capitalised, no full stop, past
   tense, object type named, balanced key-value pairs.
 - Reference: the [Kubebuilder Book](https://book.kubebuilder.io) and the
   [API conventions](https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md).
+
+## Controller structure
+
+A controller is a thin integration layer. It fetches the object, builds a
+**scope**, runs a chain of **subreconcilers**, and writes the object and
+its status once at the end. The logic lives in the subreconcilers, which
+are small, testable on their own, and composable across controllers (#58).
+
+- **Scope:** the per-reconcile context. It holds the object and a copy of it
+  as fetched, the clients (Kubernetes, battery), the logger, the clock, and
+  the conditions and result so far. The scope owns the single patch at the
+  end, so a subreconciler changes the scope and never writes to the API
+  server itself.
+- **Subreconciler:** one concern, `Reconcile(ctx, *Scope[T]) (Result,
+  error)`. It returns whether the chain continues, requeues or stops.
+  - Generic ones work for any `T client.Object`: finalizers,
+    `observedGeneration`, conditions, deletion.
+  - Domain ones hold a controller's steps: a claim's bind, renew, expire and
+    release (`02-claims.md`); a Pool's declare, place and status
+    (`03-pools.md`).
+- **Controller:** builds the scope, runs the chain in order, patches once,
+  and declares its watches and `+kubebuilder:rbac` markers. Nothing else.
+- **Tests:** unit-test each subreconciler against a scope with fakes (the
+  fake battery, a fake client); no envtest is needed for the logic. envtest
+  covers the controller's wiring and what the API server enforces.
+- **Citations** go on the subreconciler that implements the requirement,
+  and on its test.
+
+The shared building blocks (`Scope[T]`, the subreconciler interface, a way
+to chain them, and the generic subreconcilers) arrive with #58. Until then,
+a new controller keeps the same shape with local types, so that moving it
+onto the shared ones later changes no logic.
