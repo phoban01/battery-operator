@@ -211,16 +211,39 @@ SPECIFICATION: [The Exec Agent](docs/requirements/05-exec-agent.md)
     TEXT[!MUST]:   complete when none remain or when the configured drain timeout elapses.
 
   SECTION: [Identity](#identity)
-    TEXT[!MUST]: - **EA-050** When the Exec Agent starts, the Exec Agent SHALL confirm that its identity
-    TEXT[!MUST]:   names its own Host, and SHALL refuse to start otherwise.
+    TEXT[!MUST]: - **EA-050** When the Exec Agent starts, the Exec Agent SHALL confirm that
+    TEXT[!MUST]:   its identity names its own Host, and SHALL refuse to start otherwise.
     TEXT[!MUST]: - **EA-051** The Manifests SHALL include a ValidatingAdmissionPolicy that
     TEXT[!MUST]:   lets an Exec Agent's identity change only the annotations of its own
     TEXT[!MUST]:   Host's Node under the prefix `battery.liquidmetal-x.dev/`, and nothing
     TEXT[!MUST]:   else of any Node.
-    TEXT[!MUST]: - **EA-052** The Manifests SHALL give each Exec Agent, from a Secret, a
-    TEXT[!MUST]:   client certificate and key for `flintlockd` signed by the `flintlockd`
-    TEXT[!MUST]:   client CA, and the certificate authority that verifies its Host's
-    TEXT[!MUST]:   `flintlockd` serving certificate.
+
+  SECTION: [Certificates](#certificates)
+    TEXT[!MUST]: - **EA-060** The Exec Agent SHALL generate its Host's `flintlockd` serving
+    TEXT[!MUST]:   key and its own client key on the Host, and SHALL NOT send either key off
+    TEXT[!MUST]:   the Host.
+    TEXT[!MUST]: - **EA-061** The Exec Agent SHALL obtain its Host's `flintlockd` serving
+    TEXT[!MUST]:   certificate with a `CertificateSigningRequest` for the signer
+    TEXT[!MUST]:   `battery.liquidmetal-x.dev/flintlockd-serving` that names the Host's
+    TEXT[!MUST]:   internal address and the SPIFFE ID
+    TEXT[!MUST]:   `spiffe://<trust domain>/flintlock/host/<node name>`, and nothing else.
+    TEXT[!MUST]: - **EA-062** The Exec Agent SHALL obtain its own client certificate with a
+    TEXT[!MUST]:   `CertificateSigningRequest` for the signer
+    TEXT[!MUST]:   `battery.liquidmetal-x.dev/flintlockd-client` that names the SPIFFE ID
+    TEXT[!MUST]:   `spiffe://<trust domain>/flintlock/client/exec-agent/<node name>`, and
+    TEXT[!MUST]:   nothing else.
+    TEXT[!MUST]: - **EA-063** The Exec Agent SHALL request a replacement for each certificate
+    TEXT[!MUST]:   before two thirds of the current one's validity have passed.
+    TEXT[!MUST]: - **EA-064** The Exec Agent SHALL write its Host's `flintlockd` serving
+    TEXT[!MUST]:   certificate, its key and the `flintlockd` client CA bundle to the
+    TEXT[!MUST]:   configured Host path, replacing each file atomically and leaving the key
+    TEXT[!MUST]:   readable only by its owner.
+    TEXT[!MUST]: - **EA-065** The Exec Agent SHALL keep its own client key in memory only.
+    TEXT[!MUST]: - **EA-066** The Exec Agent SHALL verify its Host's `flintlockd` serving
+    TEXT[!MUST]:   certificate against the serving CA certificate the Operator publishes.
+    TEXT[!MUST]: - **EA-067** The Manifests SHALL grant the Exec Agent's identity permission
+    TEXT[!MUST]:   to create and read `CertificateSigningRequest`s, and no other permission
+    TEXT[!MUST]:   on them.
 
 SPECIFICATION: [Deployment](docs/requirements/06-deployment.md)
   SECTION: [battery as a sidecar](#battery-sidecar)
@@ -316,3 +339,54 @@ SPECIFICATION: [Test doubles](docs/requirements/08-test-doubles.md)
     TEXT[!MUST]: - **TD-022** The Client Library SHALL be tested through a whole claim's life
     TEXT[!MUST]:   against envtest, the controllers, the fake battery, the Exec Agent and the
     TEXT[!MUST]:   fake `flintlockd`.
+
+SPECIFICATION: [Certificates](docs/requirements/09-certificates.md)
+  SECTION: [Signing](#signing)
+    TEXT[!MUST]: - **CT-001** The Operator SHALL approve and sign `CertificateSigningRequest`s
+    TEXT[!MUST]:   for the signer names `battery.liquidmetal-x.dev/flintlockd-serving` and
+    TEXT[!MUST]:   `battery.liquidmetal-x.dev/flintlockd-client`, and for no other signer
+    TEXT[!MUST]:   name.
+    TEXT[!MUST]: - **CT-002** The Operator SHALL sign an approved
+    TEXT[!MUST]:   `battery.liquidmetal-x.dev/flintlockd-serving` request with the serving CA
+    TEXT[!MUST]:   and an approved `battery.liquidmetal-x.dev/flintlockd-client` request with
+    TEXT[!MUST]:   the `flintlockd` client CA, each read from its Secret in the Operator's
+    TEXT[!MUST]:   namespace.
+    TEXT[!MUST]: - **CT-003** The Operator SHALL sign a request only while it carries the
+    TEXT[!MUST]:   condition `Approved` and not the condition `Denied`.
+    TEXT[!MUST]: - **CT-004** The Operator SHALL issue each certificate for the shorter of the
+    TEXT[!MUST]:   request's `expirationSeconds` and the configured maximum duration, and
+    TEXT[!MUST]:   never beyond the signing CA's own expiry.
+    TEXT[!MUST]: - **CT-005** The Operator SHALL publish the certificates of the serving CA
+    TEXT[!MUST]:   and the `flintlockd` client CA, without their keys, in a ConfigMap in its
+    TEXT[!MUST]:   namespace.
+
+  SECTION: [Approval](#approval)
+    TEXT[!MUST]: - **CT-010** The Operator SHALL approve a
+    TEXT[!MUST]:   `battery.liquidmetal-x.dev/flintlockd-serving` request only when the
+    TEXT[!MUST]:   requester is the Exec Agent's ServiceAccount, the requester's
+    TEXT[!MUST]:   `authentication.kubernetes.io/node-name` names an existing Node, and the
+    TEXT[!MUST]:   request's subject alternative names are exactly that Node's internal
+    TEXT[!MUST]:   address and `spiffe://<trust domain>/flintlock/host/<node name>`.
+    TEXT[!MUST]: - **CT-011** The Operator SHALL approve a
+    TEXT[!MUST]:   `battery.liquidmetal-x.dev/flintlockd-client` request only when the
+    TEXT[!MUST]:   requester is the Exec Agent's ServiceAccount and the request's only
+    TEXT[!MUST]:   subject alternative name is
+    TEXT[!MUST]:   `spiffe://<trust domain>/flintlock/client/exec-agent/<node name>` for the
+    TEXT[!MUST]:   Node in the requester's `authentication.kubernetes.io/node-name`.
+    TEXT[!MUST]: - **CT-012** The Operator SHALL approve a request only when its key usages
+    TEXT[!MUST]:   are digital signature and key encipherment with server auth for
+    TEXT[!MUST]:   `flintlockd-serving`, or with client auth for `flintlockd-client`.
+    TEXT[!MUST]: - **CT-013** If a request for either signer name fails any check, then the
+    TEXT[!MUST]:   Operator SHALL deny it with a reason that names the check.
+
+  SECTION: [Identity](#spiffe-identity)
+    TEXT[!MUST]: - **CT-020** The Operator SHALL take its SPIFFE trust domain from its
+    TEXT[!MUST]:   configuration, and SHALL refuse to start without one.
+    TEXT[!MUST]: - **CT-021** The Manifests SHALL create the serving CA and the `flintlockd`
+    TEXT[!MUST]:   client CA as cert-manager CA certificates in the Operator's namespace.
+    TEXT[!MUST]: - **CT-022** The Manifests SHALL grant read access to the Secrets of the
+    TEXT[!MUST]:   serving CA and the `flintlockd` client CA to the Operator's identity only.
+    TEXT[!MUST]: - **CT-023** The Manifests SHALL issue battery's client certificate from the
+    TEXT[!MUST]:   `flintlockd` client CA with cert-manager, naming
+    TEXT[!MUST]:   `spiffe://<trust domain>/flintlock/client/battery` as its only subject
+    TEXT[!MUST]:   alternative name.

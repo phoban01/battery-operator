@@ -8,6 +8,7 @@ decision that changes it is a new record that says which one it supersedes.
 |---|----------|--------|
 | [0001](0001-standalone-operator-over-battery-grpc.md) | A standalone operator in front of an unmodified battery | Accepted |
 | [0002](0002-battery-reaches-flintlockd-over-mtls.md) | battery reaches flintlockd over mutual TLS | Accepted |
+| [0003](0003-host-certificates-through-kubernetes-csrs.md) | Host certificates through Kubernetes certificate signing requests | Accepted |
 
 A new record copies the headings of the last one: status, date, context,
 decision, consequences, open questions. Status is one of Proposed, Accepted,

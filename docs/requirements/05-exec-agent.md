@@ -115,17 +115,48 @@ battery reaches `flintlockd` at (IN-003).
 
 ## Identity {#identity}
 
-- **EA-050** When the Exec Agent starts, the Exec Agent SHALL confirm that its identity
-  names its own Host, and SHALL refuse to start otherwise.
+- **EA-050** When the Exec Agent starts, the Exec Agent SHALL confirm that
+  its identity names its own Host, and SHALL refuse to start otherwise.
 - **EA-051** The Manifests SHALL include a ValidatingAdmissionPolicy that
   lets an Exec Agent's identity change only the annotations of its own
   Host's Node under the prefix `battery.liquidmetal-x.dev/`, and nothing
   else of any Node.
-- **EA-052** The Manifests SHALL give each Exec Agent, from a Secret, a
-  client certificate and key for `flintlockd` signed by the `flintlockd`
-  client CA, and the certificate authority that verifies its Host's
-  `flintlockd` serving certificate.
 
 EA-051 is what makes a Node report trustworthy: an agent can speak only for
 its own Host, so a compromised Host cannot mark another Host ready or point
 claims at itself.
+
+## Certificates {#certificates}
+
+- **EA-060** The Exec Agent SHALL generate its Host's `flintlockd` serving
+  key and its own client key on the Host, and SHALL NOT send either key off
+  the Host.
+- **EA-061** The Exec Agent SHALL obtain its Host's `flintlockd` serving
+  certificate with a `CertificateSigningRequest` for the signer
+  `battery.liquidmetal-x.dev/flintlockd-serving` that names the Host's
+  internal address and the SPIFFE ID
+  `spiffe://<trust domain>/flintlock/host/<node name>`, and nothing else.
+- **EA-062** The Exec Agent SHALL obtain its own client certificate with a
+  `CertificateSigningRequest` for the signer
+  `battery.liquidmetal-x.dev/flintlockd-client` that names the SPIFFE ID
+  `spiffe://<trust domain>/flintlock/client/exec-agent/<node name>`, and
+  nothing else.
+- **EA-063** The Exec Agent SHALL request a replacement for each certificate
+  before two thirds of the current one's validity have passed.
+- **EA-064** The Exec Agent SHALL write its Host's `flintlockd` serving
+  certificate, its key and the `flintlockd` client CA bundle to the
+  configured Host path, replacing each file atomically and leaving the key
+  readable only by its owner.
+- **EA-065** The Exec Agent SHALL keep its own client key in memory only.
+- **EA-066** The Exec Agent SHALL verify its Host's `flintlockd` serving
+  certificate against the serving CA certificate the Operator publishes.
+- **EA-067** The Manifests SHALL grant the Exec Agent's identity permission
+  to create and read `CertificateSigningRequest`s, and no other permission
+  on them.
+
+This is [ADR 0003](../adr/0003-host-certificates-through-kubernetes-csrs.md).
+The Operator approves a request only when it names the requester's own Node
+(`09-certificates.md`), so EA-060 to EA-062 give each Host certificates for
+itself and no other. The Host Image starts `flintlockd` once the files of
+EA-064 exist and restarts it when they change, until `flintlockd` reloads
+certificates itself.
