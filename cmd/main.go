@@ -25,6 +25,7 @@ import (
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
+	certificatesv1 "k8s.io/api/certificates/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -36,6 +37,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	batteryv1alpha1 "github.com/phoban01/battery-operator/api/v1alpha1"
+	"github.com/phoban01/battery-operator/internal/controller"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -48,6 +50,7 @@ func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
 	utilruntime.Must(batteryv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(certificatesv1.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
 
@@ -61,6 +64,7 @@ func main() {
 	var secureMetrics bool
 	var enableHTTP2 bool
 	var tlsOpts []func(*tls.Config)
+	var signerConfig controller.SignerConfig
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
@@ -78,6 +82,7 @@ func main() {
 	flag.StringVar(&metricsCertKey, "metrics-cert-key", "tls.key", "The name of the metrics server key file.")
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
+	signerConfig.BindFlags(flag.CommandLine)
 	opts := zap.Options{
 		Development: true,
 	}
@@ -85,6 +90,14 @@ func main() {
 	flag.Parse()
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
+
+	//= docs/requirements/09-certificates.md#spiffe-identity
+	//# The Operator SHALL take its SPIFFE trust domain from its
+	//# configuration, and SHALL refuse to start without one.
+	if err := signerConfig.Complete(); err != nil {
+		setupLog.Error(err, "Refused to start with an invalid certificate signer configuration")
+		os.Exit(1)
+	}
 
 	// if the enable-http2 flag is false (the default), http/2 should be disabled
 	// due to its vulnerabilities. More specifically, disabling http/2 will
@@ -177,6 +190,15 @@ func main() {
 		os.Exit(1)
 	}
 
+	if err := (&controller.CertificateSigningRequestReconciler{
+		Client:    mgr.GetClient(),
+		Scheme:    mgr.GetScheme(),
+		APIReader: mgr.GetAPIReader(),
+		Config:    signerConfig,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "Failed to create controller", "controller", "certificatesigningrequest")
+		os.Exit(1)
+	}
 	// +kubebuilder:scaffold:builder
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
