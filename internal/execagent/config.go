@@ -68,8 +68,9 @@ type Config struct {
 	// TLS is the serving certificate of the exec API (EA-002). It is
 	// required: there is no mode that serves in the clear.
 	TLS ServerTLS
-	// TokenAudiences, when set, are the audiences a caller's token has to
-	// carry. Empty accepts the API server's own.
+	// TokenAudiences are the audiences the agent's TokenReviews ask for,
+	// and a caller's token has to carry every one (EA-010). Empty is
+	// DefaultTokenAudience.
 	TokenAudiences []string
 	// ExecOpenTimeout bounds how long flintlockd has to open the exec
 	// stream of a request (EA-021).
@@ -98,9 +99,6 @@ type Config struct {
 	Guard Guard
 	// SyncInterval is the reconcile period.
 	SyncInterval time.Duration
-	// Claims names the claim resource the agent authorizes against. Empty
-	// fields take the provisional resource; see ProvisionalClaimResource.
-	Claims ClaimResourceConfig
 }
 
 // ServerTLS is the serving certificate of the exec API.
@@ -125,15 +123,6 @@ type Guard struct {
 	Image     string
 }
 
-// ClaimResourceConfig names the claim resource by group, version and
-// resource. The field paths are not configurable: a claim resource whose
-// fields differ gets a ClaimLookup of its own.
-type ClaimResourceConfig struct {
-	Group    string
-	Version  string
-	Resource string
-}
-
 // ApplyDefaults fills every unset field that has a default.
 func (c *Config) ApplyDefaults() {
 	setDefault(&c.NotReadyDir, hostcheck.DefaultNotReadyDir)
@@ -142,9 +131,9 @@ func (c *Config) ApplyDefaults() {
 	setDefault(&c.ThinPool, hostcheck.DefaultThinPool)
 	setDefault(&c.SysBlockDir, hostcheck.DefaultSysBlockDir)
 	setDefault(&c.Guard.Image, DefaultGuardImage)
-	setDefault(&c.Claims.Group, ProvisionalClaimResource.Group)
-	setDefault(&c.Claims.Version, ProvisionalClaimResource.Version)
-	setDefault(&c.Claims.Resource, ProvisionalClaimResource.Resource)
+	if len(c.TokenAudiences) == 0 {
+		c.TokenAudiences = []string{DefaultTokenAudience}
+	}
 	if c.Port == 0 {
 		c.Port = DefaultPort
 	}
@@ -210,11 +199,11 @@ func (c *Config) Validate(hostAddrs []net.IP) error {
 			fail(field, "has to be positive")
 		}
 	}
+	if len(c.TokenAudiences) == 0 || slices.Contains(c.TokenAudiences, "") {
+		fail("token-audiences", "at least one audience is required, and none may be empty")
+	}
 	if c.Guard.Namespace == "" {
 		fail("guard-namespace", "is required")
-	}
-	if c.Claims.Group == "" || c.Claims.Version == "" || c.Claims.Resource == "" {
-		fail("claims", "group, version and resource are all required")
 	}
 	if len(errs) == 0 {
 		return nil

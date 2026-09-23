@@ -20,14 +20,13 @@ rules:
   - apiGroups: ["authentication.k8s.io"]
     resources: ["tokenreviews"]
     verbs: ["create"]
-  # The claims every request is authorized against and the drain guard
-  # counts (EA-040), read and never written.
+  # The claims every request is authorized against (EA-011 to EA-013) and
+  # the drain guard counts (EA-040), read and never written. A request's
+  # claim is read with get; the drain guard's cache lists and watches.
   #
-  # PROVISIONAL: claims.test.battery.liquidmetal-x.dev/microvmclaims is the
-  # test definition of a claim resource
-  # (internal/execagent/testdata/crds/microvmclaims.yaml). #16 replaces it
-  # with this project's MicroVMClaim.
-  - apiGroups: ["claims.test.battery.liquidmetal-x.dev"]
+  # No permission on Secrets: the uid of a claim's Secret `<claim>-exec`
+  # is checked by the API server in the TokenReview (EA-012).
+  - apiGroups: ["battery.liquidmetal-x.dev"]
     resources: ["microvmclaims"]
     verbs: ["get", "list", "watch"]
   # The Host's own Node is read, and annotated with the Node report and

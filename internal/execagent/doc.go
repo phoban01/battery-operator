@@ -31,7 +31,7 @@ limitations under the License.
 //
 //   - auth.go: every request authenticated with a TokenReview of its
 //     bearer token; a review that cannot be made refuses (EA-014).
-//   - claims.go and dynclaims.go: every request that names a MicroVM
+//   - claims.go and kubeclaims.go: every request that names a MicroVM
 //     authorized against the claims, through the ClaimLookup interface; a
 //     lookup that cannot be made refuses (EA-014).
 //   - server.go: the relay to flintlockd, whose response ends with
@@ -52,28 +52,29 @@ limitations under the License.
 //     Host (EA-050), which config/exec-agent/admission-policy.yaml relies on
 //     (EA-051).
 //
-// # The claim check is provisional
+// # The claim checks
 //
-// The claim checks of 05-exec-agent.md#authorization (EA-010 to EA-013) are
-// issue #16's. Until it lands, the agent keeps flintlock-runner's check:
-// the caller has to be the identity that created a Bound, unexpired claim
-// naming the MicroVM and this Host. Claims are read through ClaimLookup,
-// and the one implementation here, DynamicClaims, reads a test definition
-// of the resource: group `claims.test.battery.liquidmetal-x.dev`, version
-// `v1alpha1`, resource `microvmclaims`, in
-// internal/execagent/testdata/crds/microvmclaims.yaml. Each fact the checks
-// turn on is one field of it, named in ProvisionalClaimResource:
+// A request that names a MicroVM runs only when all four checks of
+// 05-exec-agent.md#authorization pass:
 //
-//   - phase: `status.phase`, one of Pending, Bound, Expired and Released;
-//   - MicroVM uid: `status.microVM.uid`;
-//   - Host: `status.host.nodeName`, the node name of the Host's Node;
-//   - expiry: `status.leaseExpiresAt`, an RFC 3339 time;
-//   - creator identity: the annotation
-//     `claims.test.battery.liquidmetal-x.dev/creator`, the user name of the
-//     identity that created the claim.
+//   - EA-010 (auth.go): the bearer token passes a TokenReview for the
+//     agent's audience, DefaultTokenAudience unless configured otherwise.
+//   - EA-011 (claims.go): the token's user is
+//     `system:serviceaccount:<claim namespace>:<spec.serviceAccountName>`.
+//   - EA-012 (claims.go): the token is bound to the claim's Secret
+//     `<claim name>-exec`. A TokenReview does not report the object a
+//     Secret-bound token is bound to, only the token's id
+//     (`authentication.kubernetes.io/credential-id`); the agent reads the
+//     Secret's name and uid from the token's own `kubernetes.io.secret`
+//     claim once the review has vouched for the token, and checks that the
+//     claim's `sub` and `jti` are the ones the review reported. The API
+//     server compares the uid with the live Secret's during the review, so
+//     the agent never reads Secrets.
+//   - EA-013 (claims.go): the claim is Bound, its Lease has not expired,
+//     and it names the MicroVM's uid and this Host.
 //
-// An annotation is not a trustworthy record of who created an object,
-// because whoever may update the claim may write it. #16 replaces the
-// creator check with the Holder and bound-token checks of EA-011 and
-// EA-012, and the test resource with this project's MicroVMClaim.
+// The claim is the one the token names: the Secret's name less `-exec`, in
+// the Secret's namespace. KubeClaims (kubeclaims.go) reads it through the
+// typed MicroVMClaim API, afresh from the API server for every request, and
+// answers the drain guard from a cache of every claim, indexed by Host.
 package execagent

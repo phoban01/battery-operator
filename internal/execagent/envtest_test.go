@@ -34,12 +34,13 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 
+	batteryv1alpha1 "github.com/phoban01/battery-operator/api/v1alpha1"
 	"github.com/phoban01/battery-operator/internal/execagent"
 	"github.com/phoban01/battery-operator/internal/execagent/execagenttest"
 )
 
 // The tests of this package's _test files run the Exec Agent against a real
-// kube-apiserver serving the provisional claim resource, with the agent's
+// kube-apiserver serving this project's CRDs, with the agent's
 // shipped RBAC and admission policy, and a fake flintlockd served over
 // mutual TLS (execagenttest). Callers are real ServiceAccounts with real
 // tokens, which the agent reviews with real TokenReviews. Without the
@@ -92,15 +93,15 @@ func newFixture(t *testing.T, opts execagenttest.HostOptions) *fixture {
 	return &fixture{t: t, host: env.NewHost(t, opts), ns: ns, holder: env.ServiceAccountToken(t, ns, "holder")}
 }
 
-// bind writes a Bound claim of the holder on the Host's MicroVM, as battery
-// does when it grants one, expiring in an hour, and gives the agent's claim
-// cache a moment to hear of it.
+// bind writes a Bound claim of the holder on the Host's MicroVM, as the
+// Claim Controller does when battery grants one, expiring in an hour, with
+// its Secret, and gives the holder a claim token bound to that Secret.
 func (f *fixture) bind(name string) {
 	f.t.Helper()
-	env.PutClaim(f.t, f.ns, name, f.holder.User, execagenttest.ClaimStatus{
-		Phase: execagent.ClaimBound, VMUID: f.host.VMUID, HostNode: f.host.Node, ExpiresAt: time.Now().Add(time.Hour),
+	env.PutClaim(f.t, f.ns, name, f.holder.Name, execagenttest.ClaimStatus{
+		Phase: batteryv1alpha1.MicroVMClaimBound, VMUID: f.host.VMUID, HostNode: f.host.Node, ExpiresAt: time.Now().Add(time.Hour),
 	})
-	time.Sleep(200 * time.Millisecond)
+	f.holder.Token = env.ClaimToken(f.t, f.ns, f.holder.Name, name+execagent.ExecSecretSuffix)
 }
 
 // bearer is a static bearer token.

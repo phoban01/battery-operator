@@ -49,14 +49,17 @@ type server struct {
 	callTimeout time.Duration
 }
 
-// userKey carries the authenticated user name from the interceptor.
+// userKey carries the authenticated Caller from the interceptor.
 type userKey struct{}
 
-// userOf is the user the interceptor authenticated.
-func userOf(ctx context.Context) string {
-	user, _ := ctx.Value(userKey{}).(string)
-	return user
+// callerOf is the Caller the interceptor authenticated.
+func callerOf(ctx context.Context) Caller {
+	caller, _ := ctx.Value(userKey{}).(Caller)
+	return caller
 }
+
+// userOf is the user name the interceptor authenticated.
+func userOf(ctx context.Context) string { return callerOf(ctx).User }
 
 //= docs/requirements/05-exec-agent.md#serving
 //# The Exec Agent's exec API SHALL be flintlock's
@@ -78,20 +81,20 @@ func (s *server) register(srv *grpc.Server) {
 
 // unaryInterceptor authenticates every unary call before its handler runs.
 func (s *server) unaryInterceptor(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
-	user, err := s.authenticate(ctx, info.FullMethod)
+	caller, err := s.authenticate(ctx, info.FullMethod)
 	if err != nil {
 		return nil, err
 	}
-	return handler(context.WithValue(ctx, userKey{}, user), req)
+	return handler(context.WithValue(ctx, userKey{}, caller), req)
 }
 
 // streamInterceptor authenticates every stream before its handler runs.
 func (s *server) streamInterceptor(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
-	user, err := s.authenticate(ss.Context(), info.FullMethod)
+	caller, err := s.authenticate(ss.Context(), info.FullMethod)
 	if err != nil {
 		return err
 	}
-	return handler(srv, &userStream{ServerStream: ss, ctx: context.WithValue(ss.Context(), userKey{}, user)})
+	return handler(srv, &userStream{ServerStream: ss, ctx: context.WithValue(ss.Context(), userKey{}, caller)})
 }
 
 // userStream is a ServerStream whose context carries the user.
@@ -106,18 +109,18 @@ func (u *userStream) Context() context.Context { return u.ctx }
 // authenticate turns the outcome of the TokenReview into the status the
 // caller sees: unauthenticated for a request that is not, unavailable for a
 // review that could not be made. Both are refusals (EA-014).
-func (s *server) authenticate(ctx context.Context, method string) (string, error) {
-	user, err := s.authn.authenticate(ctx)
+func (s *server) authenticate(ctx context.Context, method string) (Caller, error) {
+	caller, err := s.authn.authenticate(ctx)
 	var review *reviewError
 	switch {
 	case err == nil:
-		return user, nil
+		return caller, nil
 	case errors.As(err, &review):
 		s.log.Error(err, "Refused a request: its token could not be reviewed", "method", method)
-		return "", status.Error(codes.Unavailable, "the exec agent could not review the bearer token; the request was refused")
+		return Caller{}, status.Error(codes.Unavailable, "the exec agent could not review the bearer token; the request was refused")
 	default:
 		s.log.Info("Refused an unauthenticated request", "method", method, "reason", err.Error())
-		return "", status.Error(codes.Unauthenticated, "the request does not authenticate: a valid bearer token is required")
+		return Caller{}, status.Error(codes.Unauthenticated, "the request does not authenticate: a valid bearer token is required")
 	}
 }
 
@@ -126,19 +129,20 @@ func (s *server) authenticate(ctx context.Context, method string) (string, error
 // for a refusal, unavailable for a lookup that could not be made (EA-014).
 // What exactly failed is logged, not told.
 func (s *server) authorize(ctx context.Context, method, vmUID string) error {
-	user := userOf(ctx)
+	caller := callerOf(ctx)
+	user := caller.User
 	lookupCtx, cancel := context.WithTimeout(ctx, s.callTimeout)
 	defer cancel()
-	err := authorizeClaims(lookupCtx, s.claims, user, vmUID, s.hostNode, s.clk.Now())
+	err := authorizeClaim(lookupCtx, s.claims, caller, vmUID, s.hostNode, s.clk.Now())
 	var lookup *lookupError
 	switch {
 	case err == nil:
 		return nil
 	case errors.As(err, &lookup):
-		s.log.Error(err, "Refused a request: its claims could not be looked up", "method", method, "user", user, "microVM", vmUID)
-		return status.Error(codes.Unavailable, "the exec agent could not look up the claims; the request was refused")
+		s.log.Error(err, "Refused a request: its claim could not be looked up", "method", method, "user", user, "microVM", vmUID)
+		return status.Error(codes.Unavailable, "the exec agent could not look up the claim; the request was refused")
 	default:
-		s.log.Info("Refused a request without a Bound claim", "method", method, "user", user, "microVM", vmUID, "reason", err.Error())
+		s.log.Info("Refused a request that no Bound claim authorizes", "method", method, "user", user, "microVM", vmUID, "reason", err.Error())
 		return status.Errorf(codes.PermissionDenied, "no Bound, unexpired claim of %s names microvm %q on host %s", user, vmUID, s.hostNode)
 	}
 }
