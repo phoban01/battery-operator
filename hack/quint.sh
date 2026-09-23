@@ -61,4 +61,5 @@ for f in specs/quint/*_test.qnt; do
 done
 
 check specs/quint/claims.qnt safety \
-  witnessOrphan witnessOrphanBesideBound witnessExpired witnessReleased
+  witnessOrphan witnessOrphanBesideBound witnessExpired witnessReleased \
+  witnessExpiredByEvent witnessExpiredByTime

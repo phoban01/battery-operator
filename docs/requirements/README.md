@@ -163,6 +163,8 @@ of date. `make duvet-models-write` rewrites it. `type=test` and
 | CL-010 | `specs/quint/claims.qnt` |
 | CL-011 | `specs/quint/claims.qnt` |
 | CL-012 | `specs/quint/claims.qnt` |
+| CL-013 | `specs/quint/claims.qnt` |
+| CL-014 | `specs/quint/claims.qnt` |
 | CL-020 | `specs/quint/claims.qnt` |
 | CL-021 | `specs/quint/claims.qnt` |
 | CL-030 | `specs/quint/claims.qnt` |

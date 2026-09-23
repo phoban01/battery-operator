@@ -140,18 +140,53 @@ module claims_test {
       .then(ctlRecover)
       .expect(and { obj("a").status.phase == Expired, not(ctrl.recovering), safety })
 
-  // The finding behind idleMirrorsBattery: a Holder that stops renewing
-  // leaves its claim Bound after battery has expired the Lease, and no
-  // requirement gives the controller a step to take.
-  run unrenewedClaimStaysBoundTest =
+  // CL-013 (#45): battery expires an unrenewed Lease, and the Events stream
+  // reports the deleted MicroVM; the claim goes Expired.
+  run unrenewedClaimExpiresByEventTest =
     init
       .then(bind("a", "v1"))
       .then(ticks(EXPIRY))
       .then(batteryExpire)
+      .expect(and { not(holds(1)), obj("a").status.phase == Bound, not(controllerIdle) })
+      .then(ctlEventDeleted("v1"))
       .expect(and {
-        not(holds(1)),
-        obj("a").status.phase == Bound,
+        obj("a").status.phase == Expired,
+        obj("a").status.bound == { status: CondFalse, reason: LeaseExpired },
         controllerIdle,
-        not(idleMirrorsBattery),
+        safety,
+      })
+
+  // CL-014 (#45): the Events stream drops the deletion; the expiry battery
+  // gave has passed, so the claim goes Expired anyway.
+  run unrenewedClaimExpiresByTimeTest =
+    init
+      .then(bind("a", "v1"))
+      .then(ticks(EXPIRY))
+      .then(batteryExpire)
+      .then(dropEvent("v1"))
+      .expect(and { obj("a").status.phase == Bound, canExpiryPassed("a") })
+      .then(ctlExpiryPassed("a"))
+      .expect(and { obj("a").status.phase == Expired, controllerIdle, safety })
+
+  // The finding of #57: a crash between a successful Heartbeat and its
+  // status write leaves the old expiry in the status, and CL-014 then
+  // expires a claim whose Lease battery has just renewed. This test fails
+  // once the model changes to close it.
+  run renewedClaimExpiredAfterCrashTest =
+    init
+      .then(bind("a", "v1"))
+      .then(ticks(2))
+      .then(renewClaim("a"))
+      .then(ctlHeartbeat("a"))
+      .then(crashController)
+      .then(ctlRecover)
+      .then(tick)
+      .expect(canExpiryPassed("a") and canHeartbeat("a"))
+      .then(ctlExpiryPassed("a"))
+      .expect(and {
+        obj("a").status.phase == Expired,
+        holdsUnexpired(1),
+        not(expiredOnlyAfterLeaseEnds),
+        safety,
       })
 }

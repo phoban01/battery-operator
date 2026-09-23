@@ -7,12 +7,15 @@
 //
 // - the Claim Controller's steps: add the finalizer, ClaimVM, write the
 //   binding, relay a renewal as Heartbeat and write battery's expiry,
-//   release under the finalizer, and recover after a restart;
+//   expire a claim from the Events stream (CL-013) or its passed expiry
+//   (CL-014), release under the finalizer, and recover after a restart;
 // - battery's steps: replenish the Pool, answer ClaimVM, Heartbeat and
-//   ReleaseVM, expire Leases nobody renews;
+//   ReleaseVM, expire Leases nobody renews, report deleted MicroVMs on the
+//   Events stream;
 // - the environment: Holders create, renew and delete claims, time passes,
 //   the controller crashes (between any two of its steps, including between
-//   ClaimVM and the status write), and battery stops and starts.
+//   ClaimVM and the status write), battery stops and starts, and the
+//   Events stream drops events.
 //
 // One Pool, a few claims and a handful of MicroVMs. Each controller step is
 // one call to battery or one write to the API server; a crash loses only
@@ -63,6 +66,10 @@ module claims {
     retired: Set[VMId],
     leases: LeaseId -> Lease,
     nextLease: LeaseId,
+    // MicroVM-deleted events on battery's Events stream that the Claim
+    // Controller has not received yet. The stream can drop any of them,
+    // and loses them all when battery stops.
+    events: Set[VMId],
   }
 
   type ControllerState = {
@@ -77,6 +84,8 @@ module claims {
     recorded: Set[LeaseId],
     // every lease id the controller has sent to ReleaseVM
     released: Set[LeaseId],
+    // how claims went Expired: "event" (CL-013), "time" (CL-014)
+    expiredVia: Set[str],
   }
 
   var now: Time
@@ -129,9 +138,10 @@ module claims {
       retired: Set(),
       leases: Map(),
       nextLease: 1,
+      events: Set(),
     },
     ctrl' = { mem: CLAIMS.mapBy(_ => Idle), recovering: false },
-    hist' = { recorded: Set(), released: Set() },
+    hist' = { recorded: Set(), released: Set(), expiredVia: Set() },
   }
 
   // ---------------------------------------------------------------------
@@ -145,11 +155,13 @@ module claims {
     ctrl' = { ...ctrl, mem: ctrl.mem.set(c, f) },
   }
 
-  // battery deletes a released or expired MicroVM; its uid is retired.
+  // battery deletes a released or expired MicroVM; its uid is retired, and
+  // the Events stream reports the deletion.
   pure def dropLeases(b: BatteryState, ls: Set[LeaseId]): BatteryState = {
     ...b,
     leases: b.leases.keys().exclude(ls).mapBy(l => b.leases.get(l)),
     retired: b.retired.union(ls.map(l => b.leases.get(l).vm)),
+    events: b.events.union(ls.map(l => b.leases.get(l).vm)),
   }
 
   // Leases battery's sweep expires at time t.
@@ -205,9 +217,17 @@ module claims {
 
   // battery stops, for a Host change (ADR 0001, consequence 1) or a crash.
   // Its database survives; calls to it fail until it is back.
+  // Events not yet delivered are lost with the stream.
   action batteryStop: bool = all {
     battery.up,
-    battery' = { ...battery, up: false },
+    battery' = { ...battery, up: false, events: Set() },
+    now' = now, claims' = claims, ctrl' = ctrl, hist' = hist,
+  }
+
+  // The Events stream drops an event (a disconnect, a slow consumer).
+  action dropEvent(vm: VMId): bool = all {
+    battery.events.contains(vm),
+    battery' = { ...battery, events: battery.events.exclude(Set(vm)) },
     now' = now, claims' = claims, ctrl' = ctrl, hist' = hist,
   }
 
@@ -419,6 +439,50 @@ module claims {
     now' = now, battery' = battery, ctrl' = ctrl, hist' = hist,
   }
 
+  //@= docs/requirements/02-claims.md#renewal
+  //@# When battery's `Events` stream reports that the MicroVM of a
+  //@# Bound claim was deleted, the Claim Controller SHALL set the claim's phase
+  //@# to `Expired` and its condition `Bound` false with the reason
+  //@# `LeaseExpired`.
+  def canReceiveEvent: bool = battery.up and battery.events != Set()
+
+  // The controller receives one MicroVM-deleted event, and expires every
+  // Bound claim on that MicroVM.
+  action ctlEventDeleted(vm: VMId): bool = all {
+    battery.up,
+    battery.events.contains(vm),
+    battery' = { ...battery, events: battery.events.exclude(Set(vm)) },
+    claims' = CLAIMS.mapBy(c =>
+      if (live(c) and obj(c).status.phase == Bound and obj(c).status.microVM == Some(vm))
+        Live(expired(obj(c)))
+      else slot(c)),
+    hist' = if (CLAIMS.exists(c => live(c) and obj(c).status.phase == Bound and obj(c).status.microVM == Some(vm)))
+      { ...hist, expiredVia: hist.expiredVia.union(Set("event")) } else hist,
+    now' = now, ctrl' = ctrl,
+  }
+
+  //@= docs/requirements/02-claims.md#renewal
+  //@# When the Lease expiry time battery gave for a Bound claim has
+  //@# passed and no `Heartbeat` for that claim has succeeded since, the Claim
+  //@# Controller SHALL set the claim's phase to `Expired` and its condition
+  //@# `Bound` false with the reason `LeaseExpired`.
+  //
+  // The controller knows a Heartbeat succeeded only from the answer it
+  // holds (HeartbeatAnswered) or from the expiry it wrote. A crash loses
+  // the first.
+  def canExpiryPassed(c: ClaimName): bool = and {
+    live(c), idle(c),
+    obj(c).status.phase == Bound,
+    getOr(obj(c).status.leaseExpiresAt, 0) <= now,
+  }
+
+  action ctlExpiryPassed(c: ClaimName): bool = all {
+    canExpiryPassed(c),
+    setClaim(c, expired(obj(c))),
+    hist' = { ...hist, expiredVia: hist.expiredVia.union(Set("time")) },
+    now' = now, battery' = battery, ctrl' = ctrl,
+  }
+
   //@= docs/requirements/02-claims.md#release
   //@# When a claim that has a lease id is deleted, the Claim
   //@# Controller SHALL call battery's `ReleaseVM` for the Lease, and SHALL remove
@@ -483,11 +547,13 @@ module claims {
   // an answer it holds counts, as does a pending recovery.
   def controllerIdle: bool = and {
     not(canRecover),
+    not(canReceiveEvent),
     CLAIMS.forall(c => and {
       not(canAddFinalizer(c)),
       not(canClaimVM(c)),
       not(canWriteBound(c)),
       not(canHeartbeat(c)),
+      not(canExpiryPassed(c)),
       not(live(c) and not(idle(c))),
       not(canRelease(c)),
       not(canReleasePending(c)),
@@ -509,6 +575,7 @@ module claims {
       crashController,
       batteryStop,
       batteryStart,
+      dropEvent(vm),
       // battery
       replenish(vm),
       batteryExpire,
@@ -523,6 +590,8 @@ module claims {
       ctlRelease(c),
       ctlReleasePending(c),
       ctlRecover,
+      ctlEventDeleted(vm),
+      ctlExpiryPassed(c),
     }
   }
 
@@ -609,23 +678,31 @@ module claims {
     statusExpiryIsBatterys,
     onlyRecordedLeasesReleased,
     boundClaimIsComplete,
+    idleMirrorsBattery,
   }
 
+  //@= docs/requirements/02-claims.md#renewal
+  //@# When the Lease expiry time battery gave for a Bound claim has
+  //@# passed and no `Heartbeat` for that claim has succeeded since, the Claim
+  //@# Controller SHALL set the claim's phase to `Expired`
+  //
   // ADR 0001, consequence 4: a Bound claim's Lease exists in battery, or
   // the claim goes Expired. As a state invariant: once the controller has
-  // nothing left to do, every Bound claim's Lease is one battery holds.
-  //
-  // KNOWN VIOLATION, see #45: under 02-claims.md the controller asks battery
-  // about a Bound claim's Lease only when spec.renewTime changes (CL-010)
-  // and when it starts or reconnects (CL-030). A Holder that stops renewing
-  // leaves its claim Bound after battery has expired the Lease, with the
-  // controller idle. So this is not in safety; claims_test.qnt's
-  // unrenewedClaimStaysBoundTest reaches the violation, and fails once the
-  // model changes to close it.
+  // nothing left to do, every Bound claim's Lease is one battery holds and
+  // has not run out. CL-013 makes it prompt, and CL-014 makes it hold when
+  // the Events stream drops the deletion (#45).
   val idleMirrorsBattery: bool =
-    (battery.up and controllerIdle) implies
+    controllerIdle implies
       CLAIMS.forall(c => (live(c) and obj(c).status.phase == Bound) implies
         holdsUnexpired(getOr(obj(c).status.leaseId, 0)))
+
+  // A claim goes Expired only once battery no longer holds its Lease, or
+  // the Lease has run out: the Holder never loses a MicroVM battery still
+  // leases to it. Not in safety: CL-014 breaks it after a crash between a
+  // Heartbeat and its status write (#57); claims_test.qnt reaches it.
+  val expiredOnlyAfterLeaseEnds: bool =
+    CLAIMS.forall(c => (live(c) and obj(c).status.phase == Expired) implies
+      not(holdsUnexpired(getOr(obj(c).status.leaseId, 0))))
 
   // ---------------------------------------------------------------------
   // Witnesses: states quint run reports reaching, to show the simulation
@@ -642,4 +719,8 @@ module claims {
   // a crash in the window
   val witnessOrphanBesideBound: bool =
     orphans != Set() and CLAIMS.exists(c => live(c) and obj(c).status.phase == Bound)
+  // a claim went Expired from battery's Events stream (CL-013)
+  val witnessExpiredByEvent: bool = hist.expiredVia.contains("event")
+  // a claim went Expired from its passed expiry time (CL-014)
+  val witnessExpiredByTime: bool = hist.expiredVia.contains("time")
 }

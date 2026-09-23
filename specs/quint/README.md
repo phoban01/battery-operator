@@ -28,7 +28,8 @@ make quint        # everything CI runs: typecheck, test, and simulate with the i
 quint typecheck specs/quint/claims.qnt
 quint test specs/quint/claims_test.qnt
 quint run specs/quint/claims.qnt --invariant safety --max-steps 60 --max-samples 20000 \
-  --witnesses witnessOrphan witnessOrphanBesideBound witnessExpired witnessReleased
+  --witnesses witnessOrphan witnessOrphanBesideBound witnessExpired witnessReleased \
+  witnessExpiredByEvent witnessExpiredByTime
 ```
 
 A violation prints the trace that breaks the invariant and the seed that
@@ -45,15 +46,19 @@ safety` names the invariant that broke. `QUINT_MAX_STEPS`,
 The steps are:
 
 - **the Claim Controller:** add the finalizer, `ClaimVM`, write the binding,
-  relay a renewal as `Heartbeat`, write battery's expiry, release under the
-  finalizer, and recover on start and on reconnecting. Each step is one
-  call to battery or one write to the API server.
-- **battery:** replenish the Pool, answer the three `Lease` calls, and
-  expire Leases nobody renews.
+  relay a renewal as `Heartbeat`, write battery's expiry, expire a Bound
+  claim when the Events stream reports its MicroVM deleted (CL-013) or when
+  battery's expiry has passed (CL-014), release under the finalizer, and
+  recover on start and on reconnecting. Each step is one call to battery or
+  one write to the API server.
+- **battery:** replenish the Pool, answer the three `Lease` calls, expire
+  Leases nobody renews, and report each deleted MicroVM on its `Events`
+  stream.
 - **the environment:** claims are created, renewed and deleted, and time
   passes. The controller can crash between any two of its steps, which
   loses the answer it held, as between `ClaimVM` and the status write.
-  battery can stop and start again.
+  battery can stop and start again. The Events stream can drop any event,
+  and loses them all when battery stops.
 
 Invariants, all in `safety`:
 
@@ -67,16 +72,24 @@ Invariants, all in `safety`:
 | `statusExpiryIsBatterys` | a claim's `leaseExpiresAt` is never later than battery's (CL-011; ADR 0001, consequence 3) |
 | `onlyRecordedLeasesReleased` | the controller releases only Leases a claim recorded (CL-031) |
 | `boundClaimIsComplete` | a Bound claim carries its lease id, MicroVM, node name, times and a true `Bound` (CL-002, RS-024) |
+| `idleMirrorsBattery` | once the controller is idle, every Bound claim's Lease is one battery holds and has not run out (ADR 0001, consequence 4; CL-013, CL-014) |
 
-`idleMirrorsBattery` states ADR 0001, consequence 4: once the controller
-is idle, every Bound claim's Lease is one battery holds. The requirements
-do not guarantee it yet (#45), so it is not in `safety`. The scenario test
-`unrenewedClaimStaysBoundTest` reaches its violation.
+`idleMirrorsBattery` is the safety form of "an unrenewed Bound claim
+eventually goes Expired", since `quint run` checks state invariants only.
+It depends on CL-014: without it, a dropped event leaves the claim Bound
+(#45).
+
+`expiredOnlyAfterLeaseEnds` (an Expired claim's Lease is gone or has run
+out) does not hold, and is not in `safety`. After a crash between a
+successful `Heartbeat` and its status write, CL-014 expires a claim whose
+Lease battery has just renewed (#57). The scenario test
+`renewedClaimExpiredAfterCrashTest` reaches it.
 
 The witnesses show that the simulation reaches the interleavings that
 matter: an orphan (`witnessOrphan`), an orphan beside a claim bound after
-the retry (`witnessOrphanBesideBound`), an expired claim and a released
-one. `make quint` fails if a witness is never reached.
+the retry (`witnessOrphanBesideBound`), an expired claim, a released one,
+and a claim expired by each of CL-013 and CL-014. `make quint` fails if a
+witness is never reached.
 
 ## Conventions
 

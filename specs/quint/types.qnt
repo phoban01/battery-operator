@@ -71,9 +71,8 @@ module types {
   // ---------------------------------------------------------------------
   // MicroVMClaim (RS-020..024)
 
-  // No requirement sets Released yet (#46), so the claim model never
-  // reaches it.
-  type ClaimPhase = Pending | Bound | Expired | Released
+  // RS-024. There is no Released phase: a released claim is deleted.
+  type ClaimPhase = Pending | Bound | Expired
 
   type ClaimSpec = {
     poolRef: PoolName,
