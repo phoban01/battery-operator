@@ -1,0 +1,19 @@
+# Binds the namespaced manager-role, which controller-gen generates from the
+# RBAC markers that name the Operator's namespace: read access to the CA
+# Secrets and write access to the CA bundle ConfigMap.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  labels:
+    app.kubernetes.io/name: battery-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: manager-rolebinding
+  namespace: system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: manager-role
+subjects:
+- kind: ServiceAccount
+  name: controller-manager
+  namespace: system
