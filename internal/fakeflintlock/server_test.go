@@ -212,10 +212,24 @@ func TestServeTwiceAndAfterClose(t *testing.T) {
 // test CA, and requires a client certificate when ClientCAFile is set,
 // which is how battery reaches flintlockd.
 func TestTLS(t *testing.T) {
+	//= docs/requirements/08-test-doubles.md#fake-flintlockd
+	//= type=test
+	//# Where a test gives it a client certificate authority, the fake
+	//# `flintlockd` SHALL serve over TLS and refuse a client whose certificate
+	//# that authority did not sign.
 	t.Parallel()
 	certs, err := WriteTestCerts(t.TempDir(), "h1")
 	if err != nil {
 		t.Fatalf("WriteTestCerts: %v", err)
+	}
+	// A second, unrelated CA, whose client certificate the server must refuse.
+	other, err := WriteTestCerts(t.TempDir(), "h1")
+	if err != nil {
+		t.Fatalf("WriteTestCerts: %v", err)
+	}
+	foreignCert, err := tls.LoadX509KeyPair(other.ClientCertFile, other.ClientKeyFile)
+	if err != nil {
+		t.Fatalf("loading foreign client cert: %v", err)
 	}
 	caPEM, err := os.ReadFile(certs.CAFile)
 	if err != nil {
@@ -246,6 +260,7 @@ func TestTLS(t *testing.T) {
 		{name: "server tls, wrong roots", creds: credentials.NewTLS(&tls.Config{RootCAs: x509.NewCertPool(), MinVersion: tls.VersionTLS12}), wantOK: false},
 		{name: "mutual tls, client with cert", mutual: true, creds: credentials.NewTLS(&tls.Config{RootCAs: roots, Certificates: []tls.Certificate{clientCert}, MinVersion: tls.VersionTLS12}), wantOK: true},
 		{name: "mutual tls, client without cert", mutual: true, creds: credentials.NewTLS(&tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}), wantOK: false},
+		{name: "mutual tls, client cert from another CA", mutual: true, creds: credentials.NewTLS(&tls.Config{RootCAs: roots, Certificates: []tls.Certificate{foreignCert}, MinVersion: tls.VersionTLS12}), wantOK: false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

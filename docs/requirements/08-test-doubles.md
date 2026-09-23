@@ -18,6 +18,9 @@ flintlock-runner, where `10-test-doubles.md` specifies them.
   test can expire a Lease without waiting.
 - **TD-005** The fake battery SHALL document every behaviour in which it
   deliberately differs from battery v0.1.0.
+- **TD-006** The fake battery SHALL let a test make it unavailable for a
+  period, delay its answers to `ClaimVM`, refuse heartbeats, fail a Pool's
+  hooks, and drop its `Events` streams.
 
 ## The fake flintlockd {#fake-flintlockd}
 
@@ -25,6 +28,9 @@ flintlock-runner, where `10-test-doubles.md` specifies them.
   `MicroVMExec` services over gRPC, with MicroVMs that exist only in memory.
 - **TD-011** The fake `flintlockd` SHALL let a test script the output and
   exit status of an exec, and cut a stream before its exit status.
+- **TD-012** Where a test gives it a client certificate authority, the fake
+  `flintlockd` SHALL serve over TLS and refuse a client whose certificate
+  that authority did not sign.
 
 ## Test environments {#test-environments}
 

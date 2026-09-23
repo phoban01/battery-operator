@@ -30,6 +30,11 @@ import (
 // deadline, and it succeeds when it does. A client's claim deadline is
 // exercised the same way, by cancelling instead of advancing.
 func TestFaultClaimLatency(t *testing.T) {
+	//= docs/requirements/08-test-doubles.md#fake-battery
+	//= type=test
+	//# The fake battery SHALL let a test make it unavailable for a
+	//# period, delay its answers to `ClaimVM`, refuse heartbeats, fail a Pool's
+	//# hooks, and drop its `Events` streams.
 	h := newHarness(t, Config{}, hostA)
 	h.createPool(h.spec("pool", 2, hostA))
 	h.b.SetFaults(Faults{ClaimLatency: 5 * time.Second})
@@ -88,6 +93,11 @@ func TestFaultClaimLatency(t *testing.T) {
 // that is briefly away, and checks that the fake serves normally again
 // once the period is over.
 func TestFaultUnavailablePeriod(t *testing.T) {
+	//= docs/requirements/08-test-doubles.md#fake-battery
+	//= type=test
+	//# The fake battery SHALL let a test make it unavailable for a
+	//# period, delay its answers to `ClaimVM`, refuse heartbeats, fail a Pool's
+	//# hooks, and drop its `Events` streams.
 	h := newHarness(t, Config{}, hostA)
 	h.createPool(h.spec("pool", 1, hostA))
 	admin := poolmgrv1.NewPoolAdminClient(h.rawConn())
@@ -124,6 +134,11 @@ func TestFaultUnavailablePeriod(t *testing.T) {
 // keeps it for inspection. Both emit VM_HOOK_FAILED, and the injection is
 // consumed, so the retry that follows succeeds.
 func TestFaultHookFailure(t *testing.T) {
+	//= docs/requirements/08-test-doubles.md#fake-battery
+	//= type=test
+	//# The fake battery SHALL let a test make it unavailable for a
+	//# period, delay its answers to `ClaimVM`, refuse heartbeats, fail a Pool's
+	//# hooks, and drop its `Events` streams.
 	t.Run("create hook, delete and replace", func(t *testing.T) {
 		h := newHarness(t, Config{}, hostA)
 		host := h.stubs[hostA]
@@ -210,6 +225,11 @@ func TestFaultHookFailure(t *testing.T) {
 // client fall back to polling and re-subscribe, and a new subscription
 // made afterwards works and is replayed the events it missed.
 func TestFaultDropEventsStream(t *testing.T) {
+	//= docs/requirements/08-test-doubles.md#fake-battery
+	//= type=test
+	//# The fake battery SHALL let a test make it unavailable for a
+	//# period, delay its answers to `ClaimVM`, refuse heartbeats, fail a Pool's
+	//# hooks, and drop its `Events` streams.
 	h := newHarness(t, Config{}, hostA)
 	h.createPool(h.spec("pool", 1, hostA))
 
@@ -263,6 +283,11 @@ func TestFaultDropEventsStream(t *testing.T) {
 // passes, and the control loop then expires it and deletes the MicroVM;
 // clearing the switch puts heartbeats back.
 func TestFaultRefuseHeartbeats(t *testing.T) {
+	//= docs/requirements/08-test-doubles.md#fake-battery
+	//= type=test
+	//# The fake battery SHALL let a test make it unavailable for a
+	//# period, delay its answers to `ClaimVM`, refuse heartbeats, fail a Pool's
+	//# hooks, and drop its `Events` streams.
 	h := newHarness(t, Config{}, hostA)
 	spec := h.spec("pool", 1, hostA)
 	h.createPool(spec)
