@@ -10,6 +10,7 @@ decision that changes it is a new record that says which one it supersedes.
 | [0002](0002-battery-reaches-flintlockd-over-mtls.md) | battery reaches flintlockd over mutual TLS | Accepted |
 | [0003](0003-host-certificates-through-kubernetes-csrs.md) | Host certificates through Kubernetes certificate signing requests | Accepted |
 | [0004](0004-exec-agent-serving-certificate.md) | The Exec Agent's serving certificate through a third signer | Accepted |
+| [0005](0005-images-built-by-dagger.md) | The images are defined in the Dagger module, not a Dockerfile | Accepted |
 
 A new record copies the headings of the last one: status, date, context,
 decision, consequences, open questions. Status is one of Proposed, Accepted,

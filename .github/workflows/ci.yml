@@ -9,12 +9,16 @@ on:
     types: [opened, synchronize, reopened, edited]
   push:
     branches: [main]
+    # a version tag publishes the images at that version
+    tags: ["v*"]
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.sha }}
+  # A tag's run and main's run of the same commit each publish, so neither
+  # may cancel the other.
+  group: ci-${{ github.event.pull_request.number || format('{0}-{1}', github.ref, github.sha) }}
   cancel-in-progress: true
 
 env:
@@ -55,6 +59,12 @@ jobs:
         with:
           version: ${{ env.DAGGER_VERSION }}
           call: build export --path=bin/manager
+      # Both images, for both platforms, so that a PR which breaks one fails
+      # here rather than when main publishes.
+      - uses: dagger/dagger-for-github@27b130bf0f79a7f6fbbbe0fbca6760dc9bb40a77 # v8.4.1
+        with:
+          version: ${{ env.DAGGER_VERSION }}
+          call: images entries
 
   check-generated:
     name: check-generated
@@ -126,3 +136,38 @@ jobs:
           fi
           echo "gating on: $ids"
           dagger --progress=plain call requirements --owns="$ids"
+
+  # Publishes both images, for linux/amd64 and linux/arm64, once every check
+  # has passed on a push to main or of a version tag, and never from a pull
+  # request. The Operator's goes to ghcr.io/phoban01/battery-operator, the
+  # Exec Agent's to ghcr.io/phoban01/battery-operator/exec-agent. Each is
+  # tagged with the commit SHA, and with latest on main or the version on a
+  # tag.
+  publish:
+    name: publish
+    if: github.event_name == 'push'
+    needs: [lint, test, build, check-generated, requirements]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - name: install dagger
+        uses: dagger/dagger-for-github@27b130bf0f79a7f6fbbbe0fbca6760dc9bb40a77 # v8.4.1
+        with:
+          version: ${{ env.DAGGER_VERSION }}
+      - name: publish
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          tags="$GITHUB_SHA"
+          case "$GITHUB_REF" in
+            refs/heads/main) tags="$tags,latest" ;;
+            refs/tags/v*) tags="$tags,$GITHUB_REF_NAME" ;;
+            *) echo "::error::publish runs only for main and version tags, not $GITHUB_REF"; exit 1 ;;
+          esac
+          echo "publishing at: $tags"
+          dagger --progress=plain call publish --tags="$tags" --username="$ACTOR" --password=env://GITHUB_TOKEN

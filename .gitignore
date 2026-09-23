@@ -4,7 +4,6 @@
 
 # kubebuilder: tools and envtest binaries in bin/, and build and test output
 bin/*
-Dockerfile.cross
 *.test
 *.out
 go.work
@@ -16,3 +15,6 @@ go.work
 *~
 # a kubeconfig might contain secrets
 *.kubeconfig
+
+# the image tarballs of `dagger call images export --path=dist/images`
+/dist/images/

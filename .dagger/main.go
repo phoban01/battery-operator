@@ -1,9 +1,11 @@
-// CI for battery-operator: lint, test, build, generated files and requirements
+// CI for battery-operator: lint, test, build, generated files, requirements and images
 //
-// Each function runs the repository's own make targets in a container with
-// the Go that go.mod pins, so CI and a local `dagger call` use the same
-// Makefile and the same tool versions. The Go module and build caches, and
-// the tools the Makefile installs into bin/, live in cache volumes.
+// The checks run the repository's own make targets in a container with the
+// Go that go.mod pins, so CI and a local `dagger call` use the same Makefile
+// and the same tool versions. The Go module and build caches, and the tools
+// the Makefile installs into bin/, live in cache volumes. The image
+// functions build with the same Go, and the Makefile's image targets call
+// them.
 //
 // Run them from the repository root, for example:
 //
@@ -13,6 +15,13 @@
 //	dagger call check-generated
 //	dagger call requirements --owns=none
 //	dagger call duvet-report export --path=.duvet/reports
+//	dagger call images export --path=dist/images
+//	dagger call operator-image export-image --name=battery-operator:dev
+//	dagger call publish --repository=ttl.sh/battery-operator-dev --tags=1h
+//
+// The two images, the Operator's and the Exec Agent's, are defined here and
+// nowhere else. There is no Dockerfile: see
+// docs/adr/0005-images-built-by-dagger.md.
 package main
 
 import (
@@ -23,16 +32,59 @@ import (
 	"dagger/battery-operator/internal/dagger"
 )
 
+// Base images come from mirrors, not Docker Hub, whose pulls have timed out
+// in CI. Each is pinned by the digest of its multi-platform index.
+// mirror.gcr.io serves Docker Hub's library images with Docker Hub's
+// digests.
 const (
 	// goImage matches the go directive in go.mod and devbox.json's go.
-	goImage = "golang:1.26.5-trixie@sha256:f1a132429b98724a904e9b3bdbaed399d8f923203c3e5170e6def66d0a7cc04c"
+	goImage = "mirror.gcr.io/library/golang:1.26.5-trixie@sha256:f1a132429b98724a904e9b3bdbaed399d8f923203c3e5170e6def66d0a7cc04c"
 	// rustImage builds duvet. It is on the same Debian release as goImage,
 	// so the binary runs there.
-	rustImage = "rust:1.97.1-trixie@sha256:b1b3c9c0d921d7fa0a6d1f9ec7e4eab87f8c8ec97644c3d791450f131dec813f"
+	rustImage = "mirror.gcr.io/library/rust:1.97.1-trixie@sha256:b1b3c9c0d921d7fa0a6d1f9ec7e4eab87f8c8ec97644c3d791450f131dec813f"
+	// runtimeImage is the base of both images: static, with no shell, as
+	// kubebuilder's scaffold had it.
+	runtimeImage = "gcr.io/distroless/static-debian13:nonroot@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3"
+	// nonroot is runtimeImage's non-root user, by number, so that the
+	// kubelet can verify runAsNonRoot.
+	nonroot = "65532:65532"
 	// duvetVersion matches DUVET_VERSION in devbox.json.
 	duvetVersion = "0.4.3"
 
 	src = "/src"
+
+	// sourceURL labels the images, which links the packages on ghcr.io to
+	// the repository.
+	sourceURL = "https://github.com/phoban01/battery-operator"
+)
+
+// platforms are what every image is built and published for.
+var platforms = []dagger.Platform{"linux/amd64", "linux/arm64"}
+
+// component is one of the two images.
+type component struct {
+	image       string // the image's name, in the tarball Images returns
+	binary      string // the binary, at /<binary> in the image
+	pkg         string // the binary's main package
+	suffix      string // appended to the repository Publish is given
+	description string
+}
+
+var (
+	operator = component{
+		image:       "operator",
+		binary:      "manager",
+		pkg:         "./cmd",
+		description: "battery-operator: the Operator's manager",
+	}
+	execAgent = component{
+		image:       "exec-agent",
+		binary:      "exec-agent",
+		pkg:         "./cmd/exec-agent",
+		suffix:      "/exec-agent",
+		description: "battery-operator: the Exec Agent, which runs on every Host",
+	}
+	components = []component{operator, execAgent}
 )
 
 type BatteryOperator struct {
@@ -123,6 +175,137 @@ func (m *BatteryOperator) Requirements(
 		WithEnvVariable("SKIP_REPORT", "1").
 		WithExec(append([]string{"hack/duvet-coverage.sh"}, ids...)).
 		Stdout(ctx)
+}
+
+// OperatorImage builds the Operator's image, which runs /manager, for one
+// platform.
+func (m *BatteryOperator) OperatorImage(
+	ctx context.Context,
+	// The platform, linux/amd64 or linux/arm64. Defaults to the engine's.
+	// +optional
+	platform dagger.Platform,
+) (*dagger.Container, error) {
+	return m.image(ctx, operator, platform)
+}
+
+// ExecAgentImage builds the Exec Agent's image, which runs /exec-agent, for
+// one platform.
+func (m *BatteryOperator) ExecAgentImage(
+	ctx context.Context,
+	// The platform, linux/amd64 or linux/arm64. Defaults to the engine's.
+	// +optional
+	platform dagger.Platform,
+) (*dagger.Container, error) {
+	return m.image(ctx, execAgent, platform)
+}
+
+// Images builds both images for linux/amd64 and linux/arm64, and returns
+// them as multi-platform OCI tarballs: operator.tar and exec-agent.tar.
+func (m *BatteryOperator) Images(ctx context.Context) (*dagger.Directory, error) {
+	dir := dag.Directory()
+	for _, c := range components {
+		variants, err := m.variants(ctx, c)
+		if err != nil {
+			return nil, err
+		}
+		dir = dir.WithFile(c.image+".tar",
+			dag.Container().AsTarball(dagger.ContainerAsTarballOpts{PlatformVariants: variants}))
+	}
+	return dir, nil
+}
+
+// Publish builds both images for linux/amd64 and linux/arm64, and pushes
+// each at every tag: the Operator's to <repository>:<tag> and the Exec
+// Agent's to <repository>/exec-agent:<tag>. It returns the references it
+// pushed, with their digests.
+func (m *BatteryOperator) Publish(
+	ctx context.Context,
+	// The tags, for example a commit SHA, latest, or v0.1.0.
+	tags []string,
+	// The Operator's repository. The Exec Agent's is below it.
+	// +default="ghcr.io/phoban01/battery-operator"
+	repository string,
+	// The registry user. Without one, the engine uses the client's
+	// credentials, such as a `docker login`'s.
+	// +optional
+	username string,
+	// The registry password or token, given with username.
+	// +optional
+	password *dagger.Secret,
+) (string, error) {
+	if len(tags) == 0 {
+		return "", fmt.Errorf("no tags given")
+	}
+	if (username == "") != (password == nil) {
+		return "", fmt.Errorf("give both a username and a password, or neither")
+	}
+	registry, _, _ := strings.Cut(repository, "/")
+
+	var out strings.Builder
+	for _, c := range components {
+		variants, err := m.variants(ctx, c)
+		if err != nil {
+			return "", err
+		}
+		for _, tag := range tags {
+			ctr := dag.Container()
+			if username != "" {
+				ctr = ctr.WithRegistryAuth(registry, username, password)
+			}
+			ref, err := ctr.Publish(ctx, repository+c.suffix+":"+tag,
+				dagger.ContainerPublishOpts{PlatformVariants: variants})
+			if err != nil {
+				return "", fmt.Errorf("publishing the %s image: %w", c.image, err)
+			}
+			fmt.Fprintln(&out, ref)
+		}
+	}
+	return out.String(), nil
+}
+
+// variants is c's image for each of platforms.
+func (m *BatteryOperator) variants(ctx context.Context, c component) ([]*dagger.Container, error) {
+	variants := make([]*dagger.Container, 0, len(platforms))
+	for _, p := range platforms {
+		ctr, err := m.image(ctx, c, p)
+		if err != nil {
+			return nil, err
+		}
+		variants = append(variants, ctr)
+	}
+	return variants, nil
+}
+
+// image is c's image for platform: c's binary alone on runtimeImage, run as
+// nonroot. An empty platform is the engine's. The binary is cross-compiled
+// on the engine's platform, so no emulation is needed.
+func (m *BatteryOperator) image(ctx context.Context, c component, platform dagger.Platform) (*dagger.Container, error) {
+	if platform == "" {
+		var err error
+		if platform, err = dag.DefaultPlatform(ctx); err != nil {
+			return nil, err
+		}
+	}
+	goos, goarch, _ := strings.Cut(string(platform), "/")
+	if goos != "linux" || goarch == "" || strings.Contains(goarch, "/") {
+		return nil, fmt.Errorf("platform %q: want linux/<arch>, for example linux/arm64", platform)
+	}
+	out := "/out/" + c.binary
+	binary := m.gobase("image").
+		WithEnvVariable("CGO_ENABLED", "0").
+		WithEnvVariable("GOOS", goos).
+		WithEnvVariable("GOARCH", goarch).
+		WithExec([]string{"go", "build", "-trimpath", "-o", out, c.pkg}).
+		File(out)
+	return dag.Container(dagger.ContainerOpts{Platform: platform}).
+		From(runtimeImage).
+		WithFile("/"+c.binary, binary).
+		WithWorkdir("/").
+		WithUser(nonroot).
+		WithEntrypoint([]string{"/" + c.binary}).
+		WithLabel("org.opencontainers.image.source", sourceURL).
+		WithLabel("org.opencontainers.image.description", c.description).
+		WithLabel("org.opencontainers.image.licenses", "Apache-2.0"), nil
 }
 
 // gobase is the Go image with the source at /src and the caches mounted.

@@ -51,7 +51,7 @@ spec:
         - operator: Exists
       containers:
         - name: exec-agent
-          image: controller:latest
+          image: ghcr.io/phoban01/battery-operator/exec-agent:latest
           command: ["/exec-agent"]
           args:
             - --flintlockd=$(HOST_IP):9090
