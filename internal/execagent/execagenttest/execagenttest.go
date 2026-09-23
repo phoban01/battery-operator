@@ -29,8 +29,15 @@ package execagenttest
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
 	"errors"
 	"fmt"
+	"math/big"
 	"net"
 	"os"
 	"path/filepath"
@@ -41,6 +48,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-logr/logr"
 	"github.com/go-logr/logr/funcr"
 	"github.com/liquidmetal-dev/flintlock/api/types"
 	authenticationv1 "k8s.io/api/authentication/v1"
@@ -56,13 +64,19 @@ import (
 	"k8s.io/client-go/discovery/cached/memory"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/restmapper"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
+	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/yaml"
 
 	batteryv1alpha1 "github.com/phoban01/battery-operator/api/v1alpha1"
+	"github.com/phoban01/battery-operator/internal/clock"
+	"github.com/phoban01/battery-operator/internal/controller"
 	"github.com/phoban01/battery-operator/internal/execagent"
 	"github.com/phoban01/battery-operator/internal/fakeflintlock"
 	"github.com/phoban01/battery-operator/internal/hostcheck"
@@ -85,6 +99,11 @@ const (
 	HostAddress = "127.0.0.1"
 	// WaitTimeout bounds every wait of the environment.
 	WaitTimeout = 30 * time.Second
+	// TrustDomain is the SPIFFE trust domain of the Operator's signer and
+	// of every Exec Agent.
+	TrustDomain = "execagenttest.example"
+	// CertificateMaxDuration is the longest validity the signer issues.
+	CertificateMaxDuration = time.Hour
 )
 
 // ErrNoAssets is returned by Start when AssetsVar is unset: the caller
@@ -104,13 +123,15 @@ type Env struct {
 	Dynamic dynamic.Interface
 	// Claims is the administrator's typed client of MicroVMClaims.
 	Claims client.Client
-	// Certs are one CA and what it signed: the serving certificate of every
-	// Exec Agent and every fake flintlockd, for HostAddress, and the client
-	// certificate each Exec Agent presents to its flintlockd.
-	Certs *fakeflintlock.TestCerts
+	// ServingCAFile is the serving CA's certificate, which signs every Exec
+	// Agent's and every fake flintlockd's serving certificate: what a
+	// consumer verifies an Exec Agent against.
+	ServingCAFile string
 
-	dir string
-	seq atomic.Int64
+	dir        string
+	seq        atomic.Int64
+	stopSigner context.CancelFunc
+	signerDone chan error
 }
 
 // ModuleRoot is the directory of go.mod: this file is three directories
@@ -126,8 +147,10 @@ func ModuleRoot() string {
 
 // Start starts kube-apiserver and etcd with this project's CRDs
 // installed, config/exec-agent/rbac.yaml and
-// config/exec-agent/admission-policy.yaml applied unchanged, and waits
-// until the API server enforces the policy.
+// config/exec-agent/admission-policy.yaml applied unchanged, and the
+// Operator's CertificateSigningRequest signer (internal/controller) running
+// in-process with throwaway CAs, and waits until the API server enforces
+// the policy and the signer has published its CA certificates.
 func Start() (*Env, error) {
 	if os.Getenv(AssetsVar) == "" {
 		return nil, ErrNoAssets
@@ -135,11 +158,6 @@ func Start() (*Env, error) {
 	root := ModuleRoot()
 	dir, err := os.MkdirTemp("", "execagenttest-")
 	if err != nil {
-		return nil, err
-	}
-	certs, err := fakeflintlock.WriteTestCerts(dir)
-	if err != nil {
-		_ = os.RemoveAll(dir)
 		return nil, err
 	}
 	env := &envtest.Environment{
@@ -151,7 +169,7 @@ func Start() (*Env, error) {
 		_ = os.RemoveAll(dir)
 		return nil, fmt.Errorf("execagenttest: starting the API server test environment: %w", err)
 	}
-	e := &Env{env: env, Config: cfg, Certs: certs, dir: dir}
+	e := &Env{env: env, Config: cfg, dir: dir}
 	ctx := context.Background()
 	if e.Admin, err = kubernetes.NewForConfig(cfg); err == nil {
 		e.Dynamic, err = dynamic.NewForConfig(cfg)
@@ -174,7 +192,11 @@ func Start() (*Env, error) {
 	if err == nil {
 		err = e.awaitPolicy(ctx)
 	}
+	if err == nil {
+		err = e.startSigner(ctx)
+	}
 	if err != nil {
+		e.stopSignerAndWait()
 		_ = env.Stop()
 		_ = os.RemoveAll(dir)
 		return nil, err
@@ -182,11 +204,134 @@ func Start() (*Env, error) {
 	return e, nil
 }
 
-// Stop stops the API server and etcd and removes the certificates.
+// Stop stops the signer, the API server and etcd, and removes the
+// certificates.
 func (e *Env) Stop() error {
+	e.stopSignerAndWait()
 	err := e.env.Stop()
 	_ = os.RemoveAll(e.dir)
 	return err
+}
+
+// startSigner creates a throwaway serving CA and client CA as the CA
+// Secrets, starts the Operator's CertificateSigningRequest signer on them,
+// approving requests from AgentServiceAccount, and waits until it has
+// published the CA certificates.
+func (e *Env) startSigner(ctx context.Context) error {
+	servingCA, err := newCA("execagenttest serving CA")
+	if err != nil {
+		return err
+	}
+	clientCA, err := newCA("execagenttest flintlockd client CA")
+	if err != nil {
+		return err
+	}
+	e.ServingCAFile = filepath.Join(e.dir, "serving-ca.crt")
+	if err := os.WriteFile(e.ServingCAFile, servingCA.certPEM, 0o600); err != nil {
+		return err
+	}
+	for name, ca := range map[string]*testCA{
+		controller.DefaultServingCASecret: servingCA,
+		controller.DefaultClientCASecret:  clientCA,
+	} {
+		if _, err := e.Admin.CoreV1().Secrets(AgentNamespace).Create(ctx, &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Namespace: AgentNamespace, Name: name},
+			Type:       corev1.SecretTypeTLS,
+			Data:       map[string][]byte{corev1.TLSCertKey: ca.certPEM, corev1.TLSPrivateKeyKey: ca.keyPEM},
+		}, metav1.CreateOptions{}); err != nil {
+			return err
+		}
+	}
+
+	ctrllog.SetLogger(logr.Discard())
+	scheme := k8sruntime.NewScheme()
+	if err := clientgoscheme.AddToScheme(scheme); err != nil {
+		return err
+	}
+	mgr, err := ctrl.NewManager(e.Config, ctrl.Options{
+		Scheme:                 scheme,
+		Metrics:                metricsserver.Options{BindAddress: "0"},
+		HealthProbeBindAddress: "0",
+	})
+	if err != nil {
+		return err
+	}
+	signerConfig := controller.SignerConfig{
+		TrustDomain:             TrustDomain,
+		MaxDuration:             CertificateMaxDuration,
+		Namespace:               AgentNamespace,
+		ServingCASecret:         controller.DefaultServingCASecret,
+		ClientCASecret:          controller.DefaultClientCASecret,
+		CABundleConfigMap:       controller.DefaultCABundleConfigMap,
+		ExecAgentServiceAccount: AgentServiceAccount,
+	}
+	if err := signerConfig.Complete(); err != nil {
+		return err
+	}
+	if err := (&controller.CertificateSigningRequestReconciler{
+		Client: mgr.GetClient(), Scheme: mgr.GetScheme(), Config: signerConfig,
+	}).SetupWithManager(mgr); err != nil {
+		return err
+	}
+	signerCtx, stop := context.WithCancel(context.Background())
+	e.stopSigner, e.signerDone = stop, make(chan error, 1)
+	go func() { e.signerDone <- mgr.Start(signerCtx) }()
+
+	deadline := time.Now().Add(WaitTimeout)
+	for {
+		cm, err := e.Admin.CoreV1().ConfigMaps(AgentNamespace).Get(ctx, controller.DefaultCABundleConfigMap, metav1.GetOptions{})
+		if err == nil && cm.Data[controller.ServingCAKey] != "" && cm.Data[controller.ClientCAKey] != "" {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("execagenttest: the signer did not publish its CA certificates within %s: %v", WaitTimeout, err)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// stopSignerAndWait stops the signer, if it runs.
+func (e *Env) stopSignerAndWait() {
+	if e.stopSigner == nil {
+		return
+	}
+	e.stopSigner()
+	<-e.signerDone
+	e.stopSigner = nil
+}
+
+// testCA is a throwaway CA in the layout cert-manager gives a CA's Secret.
+type testCA struct {
+	certPEM []byte
+	keyPEM  []byte
+}
+
+func newCA(cn string) (*testCA, error) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return nil, err
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(time.Now().UnixNano()),
+		Subject:               pkix.Name{CommonName: cn},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, key.Public(), key)
+	if err != nil {
+		return nil, err
+	}
+	keyDER, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		return nil, err
+	}
+	return &testCA{
+		certPEM: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}),
+		keyPEM:  pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}),
+	}, nil
 }
 
 // Apply creates every object of a manifest as the administrator.
@@ -442,6 +587,12 @@ type HostOptions struct {
 	DrainTimeout time.Duration
 	// ExecDisabled makes the fake flintlockd report exec disabled.
 	ExecDisabled bool
+	// CertificateClock, when set, schedules the agent's certificate
+	// renewals; nil is the real clock.
+	CertificateClock clock.Clock
+	// FlintlockdTLS, when set, is what the fake flintlockd serves with in
+	// place of the certificate the agent writes for it.
+	FlintlockdTLS *fakeflintlock.TLS
 }
 
 // Host is one Host: its Node, its fake flintlockd, one CREATED MicroVM on
@@ -468,24 +619,31 @@ type Host struct {
 	SysBlockDir string
 	// Address is where the Exec Agent serves, HostAddress and its port.
 	Address string
+	// CertDir is the Host directory the agent writes flintlockd's
+	// certificate, key and client CA bundle to.
+	CertDir string
 
 	logs *syncBuffer
+	// flintlockd is the fake flintlockd's endpoint.
+	flintlockd string
 
 	mu     sync.Mutex
 	cancel context.CancelFunc
 	done   chan error
+	certs  *execagent.Certificates
 }
 
-// NewHost creates a Host's Node at HostAddress, a fake flintlockd served on
-// loopback over mutual TLS with one CREATED MicroVM, and starts the Exec
-// Agent in front of it with its own bound identity, a real claim lookup and
-// the shipped RBAC and admission policy. Everything stops when the test
-// ends.
+// NewHost creates a Host's Node at HostAddress and starts its Exec Agent
+// with its own bound identity, a real claim lookup and the shipped RBAC and
+// admission policy. Once the agent has obtained its certificates from the
+// signer, it starts a fake flintlockd on loopback with the files the agent
+// wrote, over mutual TLS, with one CREATED MicroVM, as the Host Image
+// starts flintlockd once they exist. Everything stops when the test ends.
 func (e *Env) NewHost(t testing.TB, opts HostOptions) *Host {
 	t.Helper()
 	ctx := context.Background()
 	id := e.seq.Add(1)
-	h := &Host{env: e, t: t, opts: opts, Node: fmt.Sprintf("host-%d", id), logs: &syncBuffer{}}
+	h := &Host{env: e, t: t, opts: opts, Node: fmt.Sprintf("host-%d", id), logs: &syncBuffer{}, CertDir: filepath.Join(t.TempDir(), "flintlockd")}
 
 	node, err := e.Admin.CoreV1().Nodes().Create(ctx, &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: h.Node}}, metav1.CreateOptions{})
 	if err != nil {
@@ -496,9 +654,41 @@ func (e *Env) NewHost(t testing.TB, opts HostOptions) *Host {
 		t.Fatalf("setting the host's node status: %v", err)
 	}
 
+	// flintlockd's port is chosen now, since the agent is configured with
+	// it, and flintlockd starts only after the agent.
+	probe, err := net.Listen("tcp", net.JoinHostPort(HostAddress, "0"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.flintlockd = probe.Addr().String()
+	_ = probe.Close()
+	h.NotReadyDir = filepath.Join(t.TempDir(), "not-ready.d")
+	h.KVMDevice, h.KVMSysfsDir, h.SysBlockDir = FakeHostPrerequisites(t)
+
+	listener, err := net.Listen("tcp", net.JoinHostPort(HostAddress, "0"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.Address = listener.Addr().String()
+	h.start(listener)
+	t.Cleanup(func() {
+		h.StopAgent()
+		if t.Failed() {
+			t.Logf("exec agent log of %s:\n%s", h.Node, h.logs.String())
+		}
+	})
+
+	serverTLS := opts.FlintlockdTLS
+	if serverTLS == nil {
+		serverTLS = &fakeflintlock.TLS{
+			CertFile:     filepath.Join(h.CertDir, execagent.FlintlockdCertFile),
+			KeyFile:      filepath.Join(h.CertDir, execagent.FlintlockdKeyFile),
+			ClientCAFile: filepath.Join(h.CertDir, execagent.FlintlockdClientCAFile),
+		}
+	}
 	h.Fake = fakeflintlock.New(fakeflintlock.Config{
-		Name: h.Node, Listen: net.JoinHostPort(HostAddress, "0"), Version: "test",
-		ExecEnabled: !opts.ExecDisabled, TLS: e.Certs.ServerTLS(true),
+		Name: h.Node, Listen: h.flintlockd, Version: "test",
+		ExecEnabled: !opts.ExecDisabled, TLS: serverTLS,
 	})
 	serveCtx, stopServe := context.WithCancel(ctx)
 	served := make(chan error, 1)
@@ -517,21 +707,14 @@ func (e *Env) NewHost(t testing.TB, opts HostOptions) *Host {
 		t.Fatalf("creating a microvm: %v", err)
 	}
 	h.VMUID = vm.GetSpec().GetUid()
-	h.NotReadyDir = filepath.Join(t.TempDir(), "not-ready.d")
-	h.KVMDevice, h.KVMSysfsDir, h.SysBlockDir = FakeHostPrerequisites(t)
-
-	listener, err := net.Listen("tcp", net.JoinHostPort(HostAddress, "0"))
-	if err != nil {
-		t.Fatal(err)
+	if opts.FlintlockdTLS == nil {
+		// The agent's first checks found no flintlockd; a test starts once
+		// it has reached the one just started.
+		Eventually(t, "the exec agent reached flintlockd", func() bool {
+			a := h.ReadNode().Annotations
+			return a[execagent.AnnotationReason] != "" && a[execagent.AnnotationReason] != execagent.ReasonFlintlockdNotReady
+		})
 	}
-	h.Address = listener.Addr().String()
-	h.start(listener)
-	t.Cleanup(func() {
-		h.StopAgent()
-		if t.Failed() {
-			t.Logf("exec agent log of %s:\n%s", h.Node, h.logs.String())
-		}
-	})
 	return h
 }
 
@@ -565,29 +748,35 @@ func FakeHostPrerequisites(t testing.TB) (kvmDevice, kvmSysfsDir, sysBlockDir st
 // Log is what the Exec Agent has logged.
 func (h *Host) Log() string { return h.logs.String() }
 
+// Certificates are the certificates of the Exec Agent running now, nil
+// when it is stopped.
+func (h *Host) Certificates() *execagent.Certificates {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.certs
+}
+
 // Config is the agent's configuration on this Host.
 func (h *Host) Config() *execagent.Config {
 	open := h.opts.ExecOpenTimeout
 	if open == 0 {
 		open = 2 * time.Second
 	}
-	certs := h.env.Certs
 	cfg := &execagent.Config{
-		HostNode:   h.Node,
-		Flintlockd: h.Fake.Addr(),
-		FlintlockdTLS: execagent.ClientTLS{
-			CertFile: certs.ClientCertFile, KeyFile: certs.ClientKeyFile, CAFile: certs.CAFile,
-		},
-		TLS:             execagent.ServerTLS{CertFile: certs.ServerCertFile, KeyFile: certs.ServerKeyFile},
-		ExecOpenTimeout: open,
-		CallTimeout:     5 * time.Second,
-		NotReadyDir:     h.NotReadyDir,
-		KVMDevice:       h.KVMDevice,
-		KVMSysfsDir:     h.KVMSysfsDir,
-		SysBlockDir:     h.SysBlockDir,
-		DrainTimeout:    h.opts.DrainTimeout,
-		Guard:           execagent.Guard{Namespace: AgentNamespace},
-		SyncInterval:    50 * time.Millisecond,
+		HostNode:          h.Node,
+		Flintlockd:        h.flintlockd,
+		TrustDomain:       TrustDomain,
+		FlintlockdCertDir: h.CertDir,
+		CABundle:          execagent.CABundleRef{Namespace: AgentNamespace, Name: controller.DefaultCABundleConfigMap},
+		ExecOpenTimeout:   open,
+		CallTimeout:       5 * time.Second,
+		NotReadyDir:       h.NotReadyDir,
+		KVMDevice:         h.KVMDevice,
+		KVMSysfsDir:       h.KVMSysfsDir,
+		SysBlockDir:       h.SysBlockDir,
+		DrainTimeout:      h.opts.DrainTimeout,
+		Guard:             execagent.Guard{Namespace: AgentNamespace},
+		SyncInterval:      50 * time.Millisecond,
 	}
 	cfg.ApplyDefaults()
 	return cfg
@@ -603,7 +792,8 @@ func (h *Host) start(listener net.Listener) {
 	if err != nil {
 		h.t.Fatal(err)
 	}
-	fl, err := execagent.DialFlintlockd(cfg.Flintlockd, cfg.FlintlockdTLS, []net.IP{net.ParseIP(HostAddress)})
+	certs := execagent.NewCertificates(kube, cfg, h.opts.CertificateClock)
+	fl, err := execagent.DialFlintlockd(cfg.Flintlockd, certs, []net.IP{net.ParseIP(HostAddress)})
 	if err != nil {
 		h.t.Fatal(err)
 	}
@@ -623,7 +813,7 @@ func (h *Host) start(listener net.Listener) {
 	go func() {
 		defer func() { _ = fl.Close() }()
 		done <- execagent.Run(ctx, execagent.Options{
-			Config: cfg, Kube: kube, Claims: claims, Flintlockd: fl, Listener: listener, Ready: ready,
+			Config: cfg, Kube: kube, Claims: claims, Flintlockd: fl, Certificates: certs, Listener: listener, Ready: ready,
 			HostAddresses: []net.IP{net.ParseIP(HostAddress)}, Logger: logger,
 		})
 	}()
@@ -645,7 +835,7 @@ func (h *Host) start(listener net.Listener) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	h.mu.Lock()
-	h.cancel, h.done = cancel, done
+	h.cancel, h.done, h.certs = cancel, done, certs
 	h.mu.Unlock()
 }
 
@@ -654,7 +844,7 @@ func (h *Host) start(listener net.Listener) {
 func (h *Host) StopAgent() {
 	h.mu.Lock()
 	cancel, done := h.cancel, h.done
-	h.cancel, h.done = nil, nil
+	h.cancel, h.done, h.certs = nil, nil, nil
 	h.mu.Unlock()
 	if cancel == nil {
 		return

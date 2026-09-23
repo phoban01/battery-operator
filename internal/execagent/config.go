@@ -20,10 +20,12 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
 
+	"github.com/phoban01/battery-operator/internal/hostcert"
 	"github.com/phoban01/battery-operator/internal/hostcheck"
 )
 
@@ -46,6 +48,12 @@ const (
 	// DefaultGuardImage is the image of the drain guard pod, which only has
 	// to stay running.
 	DefaultGuardImage = "registry.k8s.io/pause:3.10"
+	// DefaultFlintlockdCertDir is the Host directory flintlockd's
+	// certificate, key and client CA bundle are written to (EA-064).
+	DefaultFlintlockdCertDir = "/etc/battery/flintlockd"
+	// minCertificateDuration is the shortest validity a
+	// CertificateSigningRequest may ask for.
+	minCertificateDuration = 10 * time.Minute
 )
 
 // Config is the configuration of the Exec Agent. cmd/exec-agent fills it
@@ -56,18 +64,24 @@ type Config struct {
 	// Flintlockd is the endpoint of this Host's flintlockd: an IP address
 	// of this Host and a port (EA-001).
 	Flintlockd string
-	// FlintlockdTLS is the client certificate the agent presents to
-	// flintlockd and the CA it verifies flintlockd's serving certificate
-	// against (EA-001). Until #31, they are files on the Host.
-	FlintlockdTLS ClientTLS
 	// Address is the address the exec API is served on. Empty means the
 	// Host's internal address, read from its Node (EA-002).
 	Address string
 	// Port is the port of the exec API.
 	Port int
-	// TLS is the serving certificate of the exec API (EA-002). It is
-	// required: there is no mode that serves in the clear.
-	TLS ServerTLS
+	// TrustDomain is the SPIFFE trust domain the agent's certificates are
+	// requested under, the Operator's (EA-061, EA-062, EA-068).
+	TrustDomain string
+	// FlintlockdCertDir is the Host directory the agent writes flintlockd's
+	// serving certificate, its key and the client CA bundle to (EA-064).
+	FlintlockdCertDir string
+	// CABundle is the ConfigMap the Operator publishes its CA certificates
+	// in (EA-066).
+	CABundle CABundleRef
+	// CertificateDuration, when set, is the validity the agent asks for in
+	// each request; the Operator may issue for less. Zero leaves it to the
+	// Operator.
+	CertificateDuration time.Duration
 	// TokenAudiences are the audiences the agent's TokenReviews ask for,
 	// and a caller's token has to carry every one (EA-010). Empty is
 	// DefaultTokenAudience.
@@ -101,18 +115,11 @@ type Config struct {
 	SyncInterval time.Duration
 }
 
-// ServerTLS is the serving certificate of the exec API.
-type ServerTLS struct {
-	CertFile string
-	KeyFile  string
-}
-
-// ClientTLS is the agent's client certificate for flintlockd, and the CA
-// that signed flintlockd's serving certificate.
-type ClientTLS struct {
-	CertFile string
-	KeyFile  string
-	CAFile   string
+// CABundleRef names the ConfigMap in which the Operator publishes its CA
+// certificates.
+type CABundleRef struct {
+	Namespace string
+	Name      string
 }
 
 // Guard is where and from what the drain guard pod is made.
@@ -130,6 +137,8 @@ func (c *Config) ApplyDefaults() {
 	setDefault(&c.KVMSysfsDir, hostcheck.DefaultKVMSysfsDir)
 	setDefault(&c.ThinPool, hostcheck.DefaultThinPool)
 	setDefault(&c.SysBlockDir, hostcheck.DefaultSysBlockDir)
+	setDefault(&c.FlintlockdCertDir, DefaultFlintlockdCertDir)
+	setDefault(&c.CABundle.Name, hostcert.CABundleConfigMap)
 	setDefault(&c.Guard.Image, DefaultGuardImage)
 	if len(c.TokenAudiences) == 0 {
 		c.TokenAudiences = []string{DefaultTokenAudience}
@@ -171,23 +180,23 @@ func (c *Config) Validate(hostAddrs []net.IP) error {
 	if err := hostcheck.ValidateHostEndpoint(c.Flintlockd, hostAddrs); err != nil {
 		fail("flintlockd", "%v", err)
 	}
-	if c.FlintlockdTLS.CertFile == "" || c.FlintlockdTLS.KeyFile == "" {
-		fail("flintlockd-cert-file", "a client certificate and key are required: flintlockd is reached over mutual TLS")
-	}
-	if c.FlintlockdTLS.CAFile == "" {
-		fail("flintlockd-ca-file", "is required: flintlockd's serving certificate is always verified")
-	}
 	if c.Address != "" && net.ParseIP(c.Address) == nil {
 		fail("address", "%q is not an IP address", c.Address)
 	}
 	if c.Port <= 0 || c.Port > 65535 {
 		fail("port", "%d is not a port", c.Port)
 	}
-	if c.TLS.CertFile == "" {
-		fail("tls-cert-file", "is required: the exec API is never served in the clear")
+	if err := hostcert.ValidateTrustDomain(c.TrustDomain); err != nil {
+		fail("trust-domain", "%v", err)
 	}
-	if c.TLS.KeyFile == "" {
-		fail("tls-key-file", "is required")
+	if !filepath.IsAbs(c.FlintlockdCertDir) {
+		fail("flintlockd-cert-dir", "%q is not an absolute path", c.FlintlockdCertDir)
+	}
+	if c.CABundle.Namespace == "" || c.CABundle.Name == "" {
+		fail("ca-bundle", "the namespace and name of the Operator's CA bundle ConfigMap are required")
+	}
+	if c.CertificateDuration != 0 && c.CertificateDuration < minCertificateDuration {
+		fail("certificate-duration", "has to be zero, or at least %s", minCertificateDuration)
 	}
 	for field, d := range map[string]time.Duration{
 		"exec-open-timeout": c.ExecOpenTimeout,

@@ -41,8 +41,14 @@ limitations under the License.
 //   - flintlockd.go: the connection to this Host's flintlockd, over mutual
 //     TLS, refused for any endpoint that is not an address of this Host
 //     (EA-001).
-//   - tls.go: the serving certificate, which has to name the Host's
-//     internal address (EA-002).
+//   - certificates.go: the Host's certificates, requested through
+//     CertificateSigningRequests that the Operator signs, with keys
+//     generated on the Host, and renewed before two thirds of their
+//     validity (EA-060 to EA-068): flintlockd's serving certificate,
+//     written to the Host with its key and the client CA bundle; the
+//     agent's client certificate for flintlockd and the exec API's serving
+//     certificate, which has to name the Host's internal address (EA-002),
+//     both kept in memory.
 //   - node.go and annotations.go: the readiness check, of the Host
 //     prerequisites in internal/hostcheck (EA-030 to EA-032) and the Host
 //     Image's not ready reasons (EA-033), and the Node report (EA-034,

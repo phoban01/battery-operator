@@ -36,6 +36,17 @@ rules:
   - apiGroups: [""]
     resources: ["nodes"]
     verbs: ["get", "patch"]
+  # The Host's certificates (ADR 0003, ADR 0004): the agent requests them
+  # and reads each request back until the Operator has signed it. It cannot
+  # list, watch, update, delete, approve or sign requests; the API server
+  # removes old requests itself.
+  #= docs/requirements/05-exec-agent.md#certificates
+  #/ The Manifests SHALL grant the Exec Agent's identity permission
+  #/ to create and read `CertificateSigningRequest`s, and no other permission
+  #/ on them.
+  - apiGroups: ["certificates.k8s.io"]
+    resources: ["certificatesigningrequests"]
+    verbs: ["create", "get"]
 ---
 # The drain guard pod and its PodDisruptionBudget (EA-040), in the Exec
 # Agent's own namespace.
@@ -74,6 +85,35 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
   name: battery-operator-exec-agent-guard
+subjects:
+  - kind: ServiceAccount
+    name: battery-operator-exec-agent
+    namespace: battery-operator-system
+---
+# The CA certificates the Operator publishes (CT-005), which the agent
+# verifies its flintlockd and its new certificates against and writes the
+# client CA bundle for flintlockd from (EA-064, EA-066). Only that one
+# ConfigMap, and only get: the agent reads it again every few minutes.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: battery-operator-exec-agent-ca-bundle
+  namespace: battery-operator-system
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["flintlockd-ca"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: battery-operator-exec-agent-ca-bundle
+  namespace: battery-operator-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: battery-operator-exec-agent-ca-bundle
 subjects:
   - kind: ServiceAccount
     name: battery-operator-exec-agent

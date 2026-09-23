@@ -202,22 +202,23 @@ func TestIdentityNamesItsHost(t *testing.T) {
 
 	h := env.NewHost(t, execagenttest.HostOptions{})
 	cfg := h.Config()
-	fl, err := execagent.DialFlintlockd(cfg.Flintlockd, cfg.FlintlockdTLS, []net.IP{net.ParseIP(execagenttest.HostAddress)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = fl.Close() }()
 	for what, kube := range map[string]kubernetes.Interface{
 		"a pod on another Node": agentClient(t, "identity-b"),
 		"a token of no pod":     unboundAgent(t),
 	} {
+		certs := execagent.NewCertificates(kube, cfg, nil)
+		fl, err := execagent.DialFlintlockd(cfg.Flintlockd, certs, []net.IP{net.ParseIP(execagenttest.HostAddress)})
+		if err != nil {
+			t.Fatal(err)
+		}
 		ready := make(chan struct{})
 		runCtx, cancel := context.WithTimeout(ctx, testTimeout)
-		err := execagent.Run(runCtx, execagent.Options{
-			Config: cfg, Kube: kube, Claims: noClaims{}, Flintlockd: fl, Ready: ready,
+		err = execagent.Run(runCtx, execagent.Options{
+			Config: cfg, Kube: kube, Claims: noClaims{}, Flintlockd: fl, Certificates: certs, Ready: ready,
 			HostAddresses: []net.IP{net.ParseIP(execagenttest.HostAddress)},
 		})
 		cancel()
+		_ = fl.Close()
 		if err == nil || !strings.Contains(err.Error(), "not on its Host") && !strings.Contains(err.Error(), "names no node") {
 			t.Errorf("Run with the identity of %s = %v, want it refused", what, err)
 		}

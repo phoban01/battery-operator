@@ -18,9 +18,18 @@ package execagent
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
 	"errors"
 	"io"
+	"math/big"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -45,6 +54,7 @@ import (
 	batteryv1alpha1 "github.com/phoban01/battery-operator/api/v1alpha1"
 	"github.com/phoban01/battery-operator/internal/clock"
 	"github.com/phoban01/battery-operator/internal/fakeflintlock"
+	"github.com/phoban01/battery-operator/internal/hostcert"
 	"github.com/phoban01/battery-operator/internal/hostcheck"
 )
 
@@ -128,9 +138,32 @@ func serveFake(t *testing.T, cfg fakeflintlock.Config) (*fakeflintlock.Server, *
 	return fake, certs, vm.GetSpec().GetUid()
 }
 
-// clientTLS is the agent's client side of certs.
-func clientTLS(certs *fakeflintlock.TestCerts) ClientTLS {
-	return ClientTLS{CertFile: certs.ClientCertFile, KeyFile: certs.ClientKeyFile, CAFile: certs.CAFile}
+// staticCertificates are Certificates that hold the client certificate and
+// the server certificate of from, as the agent's client certificate for
+// flintlockd and its serving certificate, and trust ca's CA as the serving
+// CA. from may be nil, for Certificates that hold nothing.
+func staticCertificates(t *testing.T, from, ca *fakeflintlock.TestCerts) *Certificates {
+	t.Helper()
+	c := NewCertificates(nil, &Config{}, nil)
+	if from != nil {
+		for k, files := range map[certKind][2]string{
+			flintlockdClient: {from.ClientCertFile, from.ClientKeyFile},
+			agentServing:     {from.ServerCertFile, from.ServerKeyFile},
+		} {
+			pair, err := tls.LoadX509KeyPair(files[0], files[1])
+			if err != nil {
+				t.Fatal(err)
+			}
+			c.set(k, &held{cert: &pair})
+		}
+	}
+	data, err := os.ReadFile(ca.CAFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.servingCAs = x509.NewCertPool()
+	c.servingCAs.AppendCertsFromPEM(data)
+	return c
 }
 
 // unitAgent serves the exec API over TLS in front of a fake flintlockd
@@ -140,7 +173,8 @@ func clientTLS(certs *fakeflintlock.TestCerts) ClientTLS {
 func unitAgent(t *testing.T, review func() (*authenticationv1.TokenReview, error), claims ClaimLookup) (*grpc.ClientConn, *fakeflintlock.Server, string) {
 	t.Helper()
 	fake, certs, uid := serveFake(t, fakeflintlock.Config{Name: "h", ExecEnabled: true, Version: testVersion})
-	fl, err := DialFlintlockd(fake.Addr(), clientTLS(certs), loopback)
+	held := staticCertificates(t, certs, certs)
+	fl, err := DialFlintlockd(fake.Addr(), held, loopback)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,10 +185,6 @@ func unitAgent(t *testing.T, review func() (*authenticationv1.TokenReview, error
 		r, err := review()
 		return true, r, err
 	})
-	cert, err := newServingCert(ServerTLS{CertFile: certs.ServerCertFile, KeyFile: certs.ServerKeyFile}, "127.0.0.1", logr.Discard())
-	if err != nil {
-		t.Fatal(err)
-	}
 	s := &server{
 		hostNode: testHost, fl: fl, claims: claims, clk: clock.Real{}, log: logr.Discard(),
 		authn: &authenticator{
@@ -162,7 +192,7 @@ func unitAgent(t *testing.T, review func() (*authenticationv1.TokenReview, error
 		},
 		openTimeout: time.Second, callTimeout: time.Second,
 	}
-	srv := grpc.NewServer(grpc.Creds(credentials.NewTLS(cert.tlsConfig())),
+	srv := grpc.NewServer(grpc.Creds(credentials.NewTLS(held.servingTLS())),
 		grpc.ChainUnaryInterceptor(s.unaryInterceptor), grpc.ChainStreamInterceptor(s.streamInterceptor))
 	s.register(srv)
 	l, err := net.Listen("tcp", "127.0.0.1:0")
@@ -402,37 +432,104 @@ func TestExecAPIIsFlintlocksOwn(t *testing.T) {
 //# The Exec Agent SHALL serve its exec API over TLS on the Host's
 //# internal address, with a serving certificate that names that address.
 
-// TestServingCertificateNamesTheAddress checks that the agent refuses to
-// serve with a certificate that does not name its address, accepts one
-// that does, and refuses a configuration without one. The envtest suite
-// checks that the agent serves on its Node's internal address.
+// TestServingCertificateNamesTheAddress checks that the agent puts a signed
+// serving certificate in use only when it names the exec API's address, is
+// for the key the agent generated, carries the agent's SPIFFE ID and chains
+// to the published serving CA. The envtest suite checks that the agent
+// serves on its Node's internal address with the certificate it obtained.
 func TestServingCertificateNamesTheAddress(t *testing.T) {
 	t.Parallel()
-	certs, err := fakeflintlock.WriteTestCerts(t.TempDir())
+	ca, other := newUnitCA(t), newUnitCA(t)
+	c := NewCertificates(nil, validConfig(), nil)
+	if err := c.setSpecs("127.0.0.1"); err != nil {
+		t.Fatal(err)
+	}
+	c.servingCAs, c.clientCAs = ca.pool, ca.pool
+	key, strangerKey := newUnitKey(t), newUnitKey(t)
+	agentID := hostcert.ExecAgentID("example.test", "h")
+	serving := x509.ExtKeyUsageServerAuth
+
+	if _, err := c.check(agentServing, ca.issue(t, key, agentID, "127.0.0.1", serving), key); err != nil {
+		t.Errorf("a certificate for 127.0.0.1 on 127.0.0.1: %v", err)
+	}
+	for what, chain := range map[string][]byte{
+		"a certificate for another address":   ca.issue(t, key, agentID, "10.0.0.7", serving),
+		"a certificate for another identity":  ca.issue(t, key, hostcert.HostID("example.test", "h"), "127.0.0.1", serving),
+		"a certificate for another key":       ca.issue(t, strangerKey, agentID, "127.0.0.1", serving),
+		"a certificate from another CA":       other.issue(t, key, agentID, "127.0.0.1", serving),
+		"a certificate for client auth":       ca.issue(t, key, agentID, "127.0.0.1", x509.ExtKeyUsageClientAuth),
+		"a request the Operator did not sign": nil,
+	} {
+		if _, err := c.check(agentServing, chain, key); err == nil {
+			t.Errorf("%s was put in use, want it refused", what)
+		}
+	}
+}
+
+// unitCA is a throwaway CA.
+type unitCA struct {
+	cert *x509.Certificate
+	key  *ecdsa.PrivateKey
+	pool *x509.CertPool
+}
+
+func newUnitCA(t *testing.T) *unitCA {
+	t.Helper()
+	key := newUnitKey(t)
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "unit CA"},
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
+		KeyUsage: x509.KeyUsageCertSign, BasicConstraintsValid: true, IsCA: true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, key.Public(), key)
 	if err != nil {
 		t.Fatal(err)
 	}
-	files := ServerTLS{CertFile: certs.ServerCertFile, KeyFile: certs.ServerKeyFile}
-	if _, err := newServingCert(files, "127.0.0.1", logr.Discard()); err != nil {
-		t.Errorf("a certificate for 127.0.0.1 on 127.0.0.1: %v", err)
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, err := newServingCert(files, "10.0.0.7", logr.Discard()); err == nil || !strings.Contains(err.Error(), "does not name") {
-		t.Errorf("a certificate for 127.0.0.1 on 10.0.0.7 = %v, want it refused", err)
+	pool := x509.NewCertPool()
+	pool.AddCert(cert)
+	return &unitCA{cert: cert, key: key, pool: pool}
+}
+
+func newUnitKey(t *testing.T) *ecdsa.PrivateKey {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
 	}
-	cfg := validConfig()
-	cfg.TLS = ServerTLS{}
-	if err := cfg.Validate(loopback); err == nil || !strings.Contains(err.Error(), "tls-cert-file") {
-		t.Errorf("a configuration without a serving certificate = %v, want it refused", err)
+	return key
+}
+
+// issue signs a certificate for key's public key naming uri and ip, and
+// returns it PEM encoded.
+func (ca *unitCA) issue(t *testing.T, key *ecdsa.PrivateKey, uri, ip string, usage x509.ExtKeyUsage) []byte {
+	t.Helper()
+	u, err := url.Parse(uri)
+	if err != nil {
+		t.Fatal(err)
 	}
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(time.Now().UnixNano()), Subject: pkix.Name{CommonName: "h"},
+		NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(time.Hour),
+		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{usage},
+		URIs: []*url.URL{u}, IPAddresses: []net.IP{net.ParseIP(ip)},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, ca.cert, key.Public(), ca.key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: pemCertificate, Bytes: der})
 }
 
 // validConfig is a configuration that passes Validate on loopback.
 func validConfig() *Config {
 	cfg := &Config{
-		HostNode: "h", Flintlockd: "127.0.0.1:9090",
-		FlintlockdTLS: ClientTLS{CertFile: "c", KeyFile: "k", CAFile: "ca"},
-		TLS:           ServerTLS{CertFile: "c", KeyFile: "k"},
-		Guard:         Guard{Namespace: "ns"},
+		HostNode: "h", Flintlockd: "127.0.0.1:9090", TrustDomain: "example.test",
+		CABundle: CABundleRef{Namespace: "ns"},
+		Guard:    Guard{Namespace: "ns"},
 	}
 	cfg.ApplyDefaults()
 	return cfg
@@ -449,14 +546,14 @@ func validConfig() *Config {
 // of this Host, and that the connection is mutual TLS: flintlockd answers
 // the agent's client certificate, and refuses a client whose certificate
 // its client CA did not sign; the agent refuses a flintlockd whose serving
-// certificate the configured CA did not sign; and there is no mode without
-// a client certificate.
+// certificate the serving CA did not sign; and there is no mode without a
+// client certificate.
 func TestFlintlockdOnlyOnThisHostOverMutualTLS(t *testing.T) {
 	t.Parallel()
 	fake, certs, _ := serveFake(t, fakeflintlock.Config{Name: "h", ExecEnabled: true, Version: testVersion})
 
 	for _, endpoint := range []string{"192.0.2.10:9090", "localhost:9090", "dns:///flintlockd:9090", "0.0.0.0:9090", "unix:///run/flintlockd.sock"} {
-		if _, err := DialFlintlockd(endpoint, clientTLS(certs), loopback); err == nil {
+		if _, err := DialFlintlockd(endpoint, staticCertificates(t, certs, certs), loopback); err == nil {
 			t.Errorf("DialFlintlockd(%q) succeeded, want it refused", endpoint)
 		}
 		cfg := validConfig()
@@ -468,17 +565,12 @@ func TestFlintlockdOnlyOnThisHostOverMutualTLS(t *testing.T) {
 	if err := validConfig().Validate(loopback); err != nil {
 		t.Fatalf("a configuration with flintlockd on this Host: %v", err)
 	}
-	cfg := validConfig()
-	cfg.FlintlockdTLS = ClientTLS{}
-	if err := cfg.Validate(loopback); err == nil || !strings.Contains(err.Error(), "flintlockd-cert-file") {
-		t.Errorf("a configuration without a client certificate = %v, want it refused", err)
-	}
-	if _, err := DialFlintlockd(fake.Addr(), ClientTLS{CAFile: certs.CAFile}, loopback); err == nil {
-		t.Error("DialFlintlockd without a client certificate succeeded, want it refused")
+	if _, err := DialFlintlockd(fake.Addr(), nil, loopback); err == nil {
+		t.Error("DialFlintlockd without certificates succeeded, want it refused")
 	}
 
-	serverInfo := func(files ClientTLS) error {
-		fl, err := DialFlintlockd(fake.Addr(), files, loopback)
+	serverInfo := func(c *Certificates) error {
+		fl, err := DialFlintlockd(fake.Addr(), c, loopback)
 		if err != nil {
 			return err
 		}
@@ -488,20 +580,21 @@ func TestFlintlockdOnlyOnThisHostOverMutualTLS(t *testing.T) {
 		_, err = fl.vms.ServerInfo(ctx, &emptypb.Empty{})
 		return err
 	}
-	if err := serverInfo(clientTLS(certs)); err != nil {
+	if err := serverInfo(staticCertificates(t, certs, certs)); err != nil {
 		t.Errorf("ServerInfo with the agent's client certificate: %v", err)
+	}
+	if err := serverInfo(staticCertificates(t, nil, certs)); err == nil {
+		t.Error("flintlockd answered an agent that holds no client certificate yet")
 	}
 	other, err := fakeflintlock.WriteTestCerts(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	stranger := ClientTLS{CertFile: other.ClientCertFile, KeyFile: other.ClientKeyFile, CAFile: certs.CAFile}
-	if err := serverInfo(stranger); err == nil {
+	if err := serverInfo(staticCertificates(t, other, certs)); err == nil {
 		t.Error("flintlockd answered a client certificate its client CA did not sign")
 	}
-	wrongCA := ClientTLS{CertFile: certs.ClientCertFile, KeyFile: certs.ClientKeyFile, CAFile: other.CAFile}
-	if err := serverInfo(wrongCA); err == nil {
-		t.Error("the agent talked to a flintlockd whose serving certificate the configured CA did not sign")
+	if err := serverInfo(staticCertificates(t, certs, other)); err == nil {
+		t.Error("the agent talked to a flintlockd whose serving certificate the serving CA did not sign")
 	}
 }
 
@@ -517,7 +610,7 @@ func TestFlintlockdOnlyOnThisHostOverMutualTLS(t *testing.T) {
 func TestNotReadyReasonsComeFromTheConfiguredDirectory(t *testing.T) {
 	t.Parallel()
 	fake, certs, _ := serveFake(t, fakeflintlock.Config{Name: "h", ExecEnabled: true, Version: testVersion})
-	fl, err := DialFlintlockd(fake.Addr(), clientTLS(certs), loopback)
+	fl, err := DialFlintlockd(fake.Addr(), staticCertificates(t, certs, certs), loopback)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -28,6 +28,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/yaml"
 
+	"github.com/phoban01/battery-operator/internal/execagent"
 	"github.com/phoban01/battery-operator/internal/execagent/execagenttest"
 )
 
@@ -42,8 +43,9 @@ import (
 // taint so that no labelled Node is left out, with no affinity or node name
 // that would narrow or widen that. It runs in the Host's network namespace
 // as the ServiceAccount the RBAC and the admission policy name, knows its
-// Node, reaches flintlockd over mutual TLS on the Host's address, and
-// serves with a certificate of its own.
+// Node, reaches flintlockd on the Host's address, knows the trust domain
+// its certificates are requested under, and writes flintlockd's
+// certificates to the Host.
 func TestDaemonSet(t *testing.T) {
 	t.Parallel()
 	data, err := os.ReadFile(filepath.Join(execagenttest.ModuleRoot(), "config", "exec-agent", "daemonset.yaml"))
@@ -89,10 +91,22 @@ func TestDaemonSet(t *testing.T) {
 	if env["NODE_NAME"] != "spec.nodeName" || env["HOST_IP"] != "status.hostIP" || env["POD_NAMESPACE"] != "metadata.namespace" {
 		t.Errorf("the container's downward API is %v", env)
 	}
-	for _, flag := range []string{"--flintlockd=$(HOST_IP):", "--flintlockd-cert-file=", "--flintlockd-key-file=",
-		"--flintlockd-ca-file=", "--tls-cert-file=", "--tls-key-file=", "--kvm-device=/host/dev/kvm", "--thin-pool="} {
+	certDir := "--flintlockd-cert-dir=" + execagent.DefaultFlintlockdCertDir
+	for _, flag := range []string{"--flintlockd=$(HOST_IP):", "--trust-domain=", certDir, "--kvm-device=/host/dev/kvm", "--thin-pool="} {
 		if !slices.ContainsFunc(c.Args, func(a string) bool { return strings.HasPrefix(a, flag) }) {
 			t.Errorf("the container's arguments %v have no %s", c.Args, flag)
 		}
+	}
+	// flintlockd's files are written to the Host (EA-064).
+	hostPaths := map[string]string{}
+	for _, v := range spec.Volumes {
+		if v.HostPath != nil {
+			hostPaths[v.Name] = v.HostPath.Path
+		}
+	}
+	if !slices.ContainsFunc(c.VolumeMounts, func(m corev1.VolumeMount) bool {
+		return m.MountPath == execagent.DefaultFlintlockdCertDir && !m.ReadOnly && hostPaths[m.Name] == execagent.DefaultFlintlockdCertDir
+	}) {
+		t.Errorf("the container does not mount the Host's %s writable", execagent.DefaultFlintlockdCertDir)
 	}
 }

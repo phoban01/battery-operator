@@ -32,7 +32,7 @@ import (
 const (
 	DefaultServingCASecret   = "flintlockd-serving-ca"
 	DefaultClientCASecret    = "flintlockd-client-ca"
-	DefaultCABundleConfigMap = "flintlockd-ca"
+	DefaultCABundleConfigMap = hostcert.CABundleConfigMap
 )
 
 // SignerConfig is the Operator's configuration for approving and signing the

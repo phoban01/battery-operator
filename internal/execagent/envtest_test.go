@@ -139,7 +139,7 @@ func conn(t *testing.T, address, caFile, token string) *grpc.ClientConn {
 // status the agent answers with.
 func (f *fixture) rawExec(token string) execv1.MicroVMExecClient {
 	f.t.Helper()
-	return execv1.NewMicroVMExecClient(conn(f.t, f.host.Address, env.Certs.CAFile, token))
+	return execv1.NewMicroVMExecClient(conn(f.t, f.host.Address, env.ServingCAFile, token))
 }
 
 // result is how one exchange ended.

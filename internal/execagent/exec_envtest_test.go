@@ -315,7 +315,7 @@ func TestACutResponseIsNeverASuccess(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*testTimeout)
 		defer cancel()
 		proxy := newCutProxy(t, f.host.Address)
-		client := execv1.NewMicroVMExecClient(conn(t, proxy.addr(), env.Certs.CAFile, f.holder.Token))
+		client := execv1.NewMicroVMExecClient(conn(t, proxy.addr(), env.ServingCAFile, f.holder.Token))
 		started, done := runLong(ctx, client, f.start("cut-connection"))
 		select {
 		case <-started:

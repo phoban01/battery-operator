@@ -68,8 +68,11 @@ type Options struct {
 	// Claims looks the claims up.
 	Claims ClaimLookup
 	// Flintlockd is this Host's flintlockd (EA-001); DialFlintlockd makes
-	// one.
+	// one, with Certificates.
 	Flintlockd *Flintlockd
+	// Certificates obtains and renews the agent's certificates, which Run
+	// starts before it serves; NewCertificates makes it.
+	Certificates *Certificates
 	// HostAddresses are this Host's addresses, which the configuration is
 	// validated against; nil reads them from the Host's interfaces.
 	HostAddresses []net.IP
@@ -91,8 +94,8 @@ type Options struct {
 // are; the next Run takes them over.
 func Run(ctx context.Context, opts Options) error {
 	cfg := opts.Config
-	if cfg == nil || opts.Kube == nil || opts.Claims == nil || opts.Flintlockd == nil {
-		return errors.New("execagent: Run needs a configuration, a Kubernetes client, a claim lookup and a flintlockd client")
+	if cfg == nil || opts.Kube == nil || opts.Claims == nil || opts.Flintlockd == nil || opts.Certificates == nil {
+		return errors.New("execagent: Run needs a configuration, a Kubernetes client, a claim lookup, a flintlockd client and certificates")
 	}
 	hostAddrs := opts.HostAddresses
 	if hostAddrs == nil {
@@ -130,10 +133,24 @@ func Run(ctx context.Context, opts Options) error {
 			return fmt.Errorf("execagent: the host's node %s has no internal address to serve the exec API on", cfg.HostNode)
 		}
 	}
-	cert, err := newServingCert(cfg.TLS, address, log)
-	if err != nil {
+	// The certificates come before serving: the exec API is never served
+	// without its certificate, and flintlockd does not start until its
+	// files are on the Host (ADR 0003, consequence 5).
+	certs := opts.Certificates
+	if err := certs.obtain(logr.NewContext(ctx, log), address); err != nil {
 		return err
 	}
+	renewCtx, stopRenewing := context.WithCancel(logr.NewContext(ctx, log))
+	renewed := make(chan struct{})
+	go func() {
+		defer close(renewed)
+		certs.keepRenewed(renewCtx)
+	}()
+	defer func() {
+		stopRenewing()
+		<-renewed
+	}()
+
 	listener := opts.Listener
 	if listener == nil {
 		if listener, err = net.Listen("tcp", net.JoinHostPort(address, strconv.Itoa(cfg.Port))); err != nil {
@@ -158,7 +175,7 @@ func Run(ctx context.Context, opts Options) error {
 		callTimeout: cfg.CallTimeout,
 	}
 	srv := grpc.NewServer(
-		grpc.Creds(credentials.NewTLS(cert.tlsConfig())),
+		grpc.Creds(credentials.NewTLS(certs.servingTLS())),
 		grpc.ChainUnaryInterceptor(s.unaryInterceptor),
 		grpc.ChainStreamInterceptor(s.streamInterceptor),
 		grpc.KeepaliveParams(keepalive.ServerParameters{Time: serverKeepaliveTime, Timeout: serverKeepaliveTimeout}),
