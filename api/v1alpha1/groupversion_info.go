@@ -25,6 +25,11 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
+//= docs/requirements/01-resources.md#api-group
+//# The CRDs SHALL define no `MicroVM` resource.
+
+// The group holds Pool and MicroVMClaim, and deliberately no MicroVM: the
+// MicroVMs stay internal to battery (ADR 0001, decision 3).
 var (
 	// SchemeGroupVersion is group version used to register these objects.
 	// This name is used by applyconfiguration generators (e.g. controller-gen).
