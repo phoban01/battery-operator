@@ -1,0 +1,9 @@
+apiVersion: battery.liquidmetal-x.dev/v1alpha1
+kind: MicroVMClaim
+metadata:
+  labels:
+    app.kubernetes.io/name: battery-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: microvmclaim-sample
+spec:
+  # TODO(user): Add fields here
