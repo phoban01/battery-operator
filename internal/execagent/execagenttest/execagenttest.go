@@ -17,7 +17,7 @@ limitations under the License.
 // Package execagenttest is the test environment of the Exec Agent
 // (docs/requirements/08-test-doubles.md#test-environments): a real
 // kube-apiserver and etcd, started by controller-runtime's envtest, serving
-// the provisional test definition of the claim resource, with the agent's
+// this project's CRDs from config/crd/bases, with the agent's
 // shipped RBAC and admission policy applied from config/exec-agent; and,
 // per Host, a Node, a fake flintlockd (internal/fakeflintlock) served over
 // mutual TLS on loopback and a real Exec Agent in front of it,
@@ -49,16 +49,20 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	k8sruntime "k8s.io/apimachinery/pkg/runtime"
 	k8stypes "k8s.io/apimachinery/pkg/types"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/discovery/cached/memory"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/restmapper"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	"sigs.k8s.io/yaml"
 
+	batteryv1alpha1 "github.com/phoban01/battery-operator/api/v1alpha1"
 	"github.com/phoban01/battery-operator/internal/execagent"
 	"github.com/phoban01/battery-operator/internal/fakeflintlock"
 	"github.com/phoban01/battery-operator/internal/hostcheck"
@@ -95,8 +99,11 @@ type Env struct {
 	// Admin is the test's own client: it plays battery, the Host's kubelet
 	// and the operator.
 	Admin kubernetes.Interface
-	// Dynamic is the administrator's client of the claim resource.
+	// Dynamic is the administrator's client of any resource, which Apply
+	// uses.
 	Dynamic dynamic.Interface
+	// Claims is the administrator's typed client of MicroVMClaims.
+	Claims client.Client
 	// Certs are one CA and what it signed: the serving certificate of every
 	// Exec Agent and every fake flintlockd, for HostAddress, and the client
 	// certificate each Exec Agent presents to its flintlockd.
@@ -117,8 +124,8 @@ func ModuleRoot() string {
 //# The Exec Agent SHALL be tested against envtest serving the
 //# CRDs, and the fake `flintlockd`.
 
-// Start starts kube-apiserver and etcd with the claim resource's test
-// definition installed, config/exec-agent/rbac.yaml and
+// Start starts kube-apiserver and etcd with this project's CRDs
+// installed, config/exec-agent/rbac.yaml and
 // config/exec-agent/admission-policy.yaml applied unchanged, and waits
 // until the API server enforces the policy.
 func Start() (*Env, error) {
@@ -136,7 +143,7 @@ func Start() (*Env, error) {
 		return nil, err
 	}
 	env := &envtest.Environment{
-		CRDDirectoryPaths:     []string{filepath.Join(root, "internal", "execagent", "testdata", "crds")},
+		CRDDirectoryPaths:     []string{filepath.Join(root, "config", "crd", "bases")},
 		ErrorIfCRDPathMissing: true,
 	}
 	cfg, err := env.Start()
@@ -148,6 +155,9 @@ func Start() (*Env, error) {
 	ctx := context.Background()
 	if e.Admin, err = kubernetes.NewForConfig(cfg); err == nil {
 		e.Dynamic, err = dynamic.NewForConfig(cfg)
+	}
+	if err == nil {
+		e.Claims, err = client.New(cfg, client.Options{Scheme: scheme()})
 	}
 	if err == nil {
 		_, err = e.Admin.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: AgentNamespace}}, metav1.CreateOptions{})
@@ -203,11 +213,11 @@ func (e *Env) Apply(ctx context.Context, manifest string) error {
 		if err != nil {
 			return fmt.Errorf("%s: %s: %w", manifest, gvk.Kind, err)
 		}
-		var client dynamic.ResourceInterface = e.Dynamic.Resource(mapping.Resource)
+		var res dynamic.ResourceInterface = e.Dynamic.Resource(mapping.Resource)
 		if mapping.Scope.Name() == meta.RESTScopeNameNamespace {
-			client = e.Dynamic.Resource(mapping.Resource).Namespace(obj.GetNamespace())
+			res = e.Dynamic.Resource(mapping.Resource).Namespace(obj.GetNamespace())
 		}
-		if _, err := client.Create(ctx, obj, metav1.CreateOptions{}); err != nil {
+		if _, err := res.Create(ctx, obj, metav1.CreateOptions{}); err != nil {
 			return fmt.Errorf("%s: %s %s: %w", manifest, gvk.Kind, obj.GetName(), err)
 		}
 	}
@@ -264,6 +274,9 @@ func (e *Env) Namespace(t testing.TB) string {
 
 // Identity is a ServiceAccount with a real token of its own.
 type Identity struct {
+	// Namespace and Name are the ServiceAccount's.
+	Namespace string
+	Name      string
 	// User is the user name the API server authenticates the token as.
 	User string
 	// Token is the token.
@@ -271,25 +284,46 @@ type Identity struct {
 }
 
 // ServiceAccountToken creates a ServiceAccount and requests a token for
-// it, standing for a consumer's projected token. The token is bound to no
-// object; a TokenReview authenticates it all the same.
+// it, standing for a consumer's projected token: for the API server's own
+// audience and bound to no object. The Exec Agent refuses it (EA-010);
+// Token requests one for the agent's audience.
 func (e *Env) ServiceAccountToken(t testing.TB, namespace, name string) Identity {
 	t.Helper()
-	ctx := context.Background()
-	_, err := e.Admin.CoreV1().ServiceAccounts(namespace).Create(ctx, &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: name}}, metav1.CreateOptions{})
+	_, err := e.Admin.CoreV1().ServiceAccounts(namespace).Create(context.Background(),
+		&corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: name}}, metav1.CreateOptions{})
 	if err != nil && !apierrors.IsAlreadyExists(err) {
 		t.Fatalf("creating service account %s/%s: %v", namespace, name, err)
 	}
-	return Identity{User: "system:serviceaccount:" + namespace + ":" + name, Token: e.token(t, namespace, name, nil)}
+	return Identity{
+		Namespace: namespace, Name: name, User: "system:serviceaccount:" + namespace + ":" + name,
+		Token: e.Token(t, namespace, name, nil, nil),
+	}
 }
 
-// token requests a token of a ServiceAccount, bound to the object when one
-// is given.
-func (e *Env) token(t testing.TB, namespace, name string, bound *authenticationv1.BoundObjectReference) string {
+// ClaimToken requests a claim token as the Client Library does (CC-002):
+// a token of the ServiceAccount namespace/serviceAccount, bound to the
+// Secret secretName in that namespace by its name and uid, with the Exec
+// Agent's audience.
+func (e *Env) ClaimToken(t testing.TB, namespace, serviceAccount, secretName string) string {
+	t.Helper()
+	secret, err := e.Admin.CoreV1().Secrets(namespace).Get(context.Background(), secretName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("reading secret %s/%s: %v", namespace, secretName, err)
+	}
+	return e.Token(t, namespace, serviceAccount, []string{execagent.DefaultTokenAudience},
+		&authenticationv1.BoundObjectReference{Kind: "Secret", APIVersion: "v1", Name: secret.Name, UID: secret.UID})
+}
+
+// Token requests a token of a ServiceAccount with TokenRequest, for the
+// audiences given or the API server's own when there are none, and bound
+// to the object when one is given.
+func (e *Env) Token(t testing.TB, namespace, name string, audiences []string, bound *authenticationv1.BoundObjectReference) string {
 	t.Helper()
 	expiry := int64(3600)
 	tok, err := e.Admin.CoreV1().ServiceAccounts(namespace).CreateToken(context.Background(), name,
-		&authenticationv1.TokenRequest{Spec: authenticationv1.TokenRequestSpec{ExpirationSeconds: &expiry, BoundObjectRef: bound}},
+		&authenticationv1.TokenRequest{Spec: authenticationv1.TokenRequestSpec{
+			Audiences: audiences, ExpirationSeconds: &expiry, BoundObjectRef: bound,
+		}},
 		metav1.CreateOptions{})
 	if err != nil {
 		t.Fatalf("requesting a token of %s/%s: %v", namespace, name, err)
@@ -315,79 +349,88 @@ func (e *Env) AgentConfig(t testing.TB, hostNode string) *rest.Config {
 	if err != nil {
 		t.Fatalf("creating the exec agent pod on %s: %v", hostNode, err)
 	}
-	token := e.token(t, AgentNamespace, AgentServiceAccount,
+	token := e.Token(t, AgentNamespace, AgentServiceAccount, nil,
 		&authenticationv1.BoundObjectReference{Kind: "Pod", APIVersion: "v1", Name: pod.Name, UID: pod.UID})
 	cfg := rest.AnonymousClientConfig(e.Config)
 	cfg.BearerToken = token
 	return cfg
 }
 
-// ClaimStatus is what battery would write into a claim's status.
+// ClaimStatus is what the Claim Controller would write into a claim's
+// status from battery's answer.
 type ClaimStatus struct {
-	Phase     execagent.ClaimPhase
+	Phase     batteryv1alpha1.MicroVMClaimPhase
 	VMUID     string
 	HostNode  string
 	ExpiresAt time.Time
 }
 
-// PutClaim creates or replaces a claim of the provisional resource,
-// recording creator as the identity that created it, and writes its
-// status as battery would.
-func (e *Env) PutClaim(t testing.TB, namespace, name, creator string, st ClaimStatus) {
+// PutClaim creates claim namespace/name for the Holder serviceAccount, or
+// replaces its status when it exists, and writes its status as the Claim
+// Controller would. It also creates the claim's Secret `<name>-exec`,
+// owned by the claim, as the Client Library does (CC-001), unless it
+// exists.
+func (e *Env) PutClaim(t testing.TB, namespace, name, serviceAccount string, st ClaimStatus) {
 	t.Helper()
 	ctx := context.Background()
-	res := execagent.ProvisionalClaimResource
-	client := e.Dynamic.Resource(res.GroupVersionResource()).Namespace(namespace)
-	obj := &unstructured.Unstructured{Object: map[string]any{
-		"apiVersion": res.Group + "/" + res.Version,
-		"kind":       "MicroVMClaim",
-		"metadata": map[string]any{
-			"name":      name,
-			"namespace": namespace,
-		},
-		"spec": map[string]any{"poolRef": map[string]any{"name": "pool"}},
-	}}
-	if creator != "" {
-		obj.SetAnnotations(map[string]string{res.CreatorAnnotation: creator})
-	}
-	existing, err := client.Get(ctx, name, metav1.GetOptions{})
+	claim := &batteryv1alpha1.MicroVMClaim{}
+	err := e.Claims.Get(ctx, k8stypes.NamespacedName{Namespace: namespace, Name: name}, claim)
 	switch {
 	case apierrors.IsNotFound(err):
-		existing, err = client.Create(ctx, obj, metav1.CreateOptions{})
-	case err == nil:
-		obj.SetResourceVersion(existing.GetResourceVersion())
-		existing, err = client.Update(ctx, obj, metav1.UpdateOptions{})
+		claim = &batteryv1alpha1.MicroVMClaim{
+			ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: name},
+			Spec: batteryv1alpha1.MicroVMClaimSpec{
+				PoolRef:            batteryv1alpha1.PoolReference{Name: "pool"},
+				ServiceAccountName: serviceAccount,
+			},
+		}
+		err = e.Claims.Create(ctx, claim)
+	case err == nil && claim.Spec.ServiceAccountName != serviceAccount:
+		err = fmt.Errorf("the claim exists for %q; its holder cannot change", claim.Spec.ServiceAccountName)
 	}
 	if err != nil {
 		t.Fatalf("writing claim %s/%s: %v", namespace, name, err)
 	}
-	status := map[string]any{}
-	if st.Phase != "" {
-		status["phase"] = string(st.Phase)
-	}
+	claim.Status = batteryv1alpha1.MicroVMClaimStatus{Phase: st.Phase}
 	if st.VMUID != "" {
-		status["microVM"] = map[string]any{"uid": st.VMUID}
+		claim.Status.MicroVM = &batteryv1alpha1.MicroVMReference{UID: st.VMUID}
 	}
 	if st.HostNode != "" {
-		status["host"] = map[string]any{"nodeName": st.HostNode}
+		claim.Status.Host = &batteryv1alpha1.HostReference{NodeName: st.HostNode}
 	}
 	if !st.ExpiresAt.IsZero() {
-		status["leaseExpiresAt"] = st.ExpiresAt.UTC().Format(time.RFC3339)
+		claim.Status.LeaseExpiresAt = &metav1.Time{Time: st.ExpiresAt}
 	}
-	existing.Object["status"] = status
-	if _, err := client.UpdateStatus(ctx, existing, metav1.UpdateOptions{}); err != nil {
+	if err := e.Claims.Status().Update(ctx, claim); err != nil {
 		t.Fatalf("writing the status of claim %s/%s: %v", namespace, name, err)
+	}
+	_, err = e.Admin.CoreV1().Secrets(namespace).Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
+		Namespace: namespace, Name: name + execagent.ExecSecretSuffix,
+		OwnerReferences: []metav1.OwnerReference{{
+			APIVersion: batteryv1alpha1.GroupVersion.String(), Kind: "MicroVMClaim", Name: claim.Name, UID: claim.UID,
+		}},
+	}}, metav1.CreateOptions{})
+	if err != nil && !apierrors.IsAlreadyExists(err) {
+		t.Fatalf("creating the secret of claim %s/%s: %v", namespace, name, err)
 	}
 }
 
-// DeleteClaim deletes a claim, as its consumer does when it is done.
+// DeleteClaim deletes a claim, as its consumer does when it is done. There
+// is no garbage collector here, so its Secret stays, as it does for the
+// few seconds a real one takes.
 func (e *Env) DeleteClaim(t testing.TB, namespace, name string) {
 	t.Helper()
-	err := e.Dynamic.Resource(execagent.ProvisionalClaimResource.GroupVersionResource()).Namespace(namespace).
-		Delete(context.Background(), name, metav1.DeleteOptions{})
+	err := e.Claims.Delete(context.Background(), &batteryv1alpha1.MicroVMClaim{ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: name}})
 	if err != nil && !apierrors.IsNotFound(err) {
 		t.Fatalf("deleting claim %s/%s: %v", namespace, name, err)
 	}
+}
+
+// scheme is the scheme of the typed claim client.
+func scheme() *k8sruntime.Scheme {
+	s := k8sruntime.NewScheme()
+	utilruntime.Must(batteryv1alpha1.AddToScheme(s))
+	return s
 }
 
 // HostOptions shape one Host.
@@ -560,17 +603,17 @@ func (h *Host) start(listener net.Listener) {
 	if err != nil {
 		h.t.Fatal(err)
 	}
-	dyn, err := dynamic.NewForConfig(restConfig)
-	if err != nil {
-		h.t.Fatal(err)
-	}
 	fl, err := execagent.DialFlintlockd(cfg.Flintlockd, cfg.FlintlockdTLS, []net.IP{net.ParseIP(HostAddress)})
 	if err != nil {
 		h.t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	claims := execagent.NewDynamicClaims(dyn, execagent.ProvisionalClaimResource, time.Minute)
-	go claims.Run(ctx)
+	claims, err := execagent.NewKubeClaims(ctx, restConfig, time.Minute)
+	if err != nil {
+		cancel()
+		h.t.Fatal(err)
+	}
+	go func() { _ = claims.Run(ctx) }()
 
 	logger := funcr.New(func(prefix, args string) {
 		_, _ = fmt.Fprintln(h.logs, prefix, args)

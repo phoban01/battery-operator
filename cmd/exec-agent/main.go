@@ -28,7 +28,6 @@ import (
 	"syscall"
 	"time"
 
-	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
@@ -59,7 +58,7 @@ func main() {
 		"The exec API's serving certificate, which has to name the address it is served on.")
 	flag.StringVar(&cfg.TLS.KeyFile, "tls-key-file", "", "The key of --tls-cert-file.")
 	flag.StringVar(&audiences, "token-audiences", "",
-		"Comma-separated audiences a caller's token has to carry. Empty accepts the API server's own.")
+		"Comma-separated audiences a caller's token has to carry. Empty is "+execagent.DefaultTokenAudience+".")
 	flag.DurationVar(&cfg.ExecOpenTimeout, "exec-open-timeout", execagent.DefaultExecOpenTimeout,
 		"How long flintlockd has to open the exec stream of a request.")
 	flag.DurationVar(&cfg.CallTimeout, "call-timeout", execagent.DefaultCallTimeout,
@@ -114,10 +113,6 @@ func main() {
 	if err != nil {
 		fail(err, "Failed to build the Kubernetes client")
 	}
-	dyn, err := dynamic.NewForConfig(restConfig)
-	if err != nil {
-		fail(err, "Failed to build the Kubernetes client")
-	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -130,10 +125,15 @@ func main() {
 	}
 	defer func() { _ = fl.Close() }()
 
-	res := execagent.ProvisionalClaimResource
-	res.Group, res.Version, res.Resource = cfg.Claims.Group, cfg.Claims.Version, cfg.Claims.Resource
-	claims := execagent.NewDynamicClaims(dyn, res, claimResync)
-	go claims.Run(ctx)
+	claims, err := execagent.NewKubeClaims(ctx, restConfig, claimResync)
+	if err != nil {
+		fail(err, "Failed to build the claim lookup")
+	}
+	go func() {
+		if err := claims.Run(ctx); err != nil && ctx.Err() == nil {
+			fail(err, "Stopped reading the claims")
+		}
+	}()
 
 	err = execagent.Run(ctx, execagent.Options{
 		Config: &cfg, Kube: kube, Claims: claims, Flintlockd: fl, HostAddresses: hostAddrs,

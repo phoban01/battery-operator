@@ -232,8 +232,8 @@ func TestIdentityNamesItsHost(t *testing.T) {
 // noClaims is a ClaimLookup that finds nothing.
 type noClaims struct{}
 
-func (noClaims) ClaimsForVM(context.Context, string) ([]execagent.Claim, error) { return nil, nil }
-func (noClaims) BoundOnHost(context.Context, string) ([]execagent.Claim, error) { return nil, nil }
+func (noClaims) Claim(context.Context, string, string) (*execagent.Claim, error) { return nil, nil }
+func (noClaims) BoundOnHost(context.Context, string) ([]execagent.Claim, error)  { return nil, nil }
 
 //= docs/requirements/05-exec-agent.md#identity
 //= type=test

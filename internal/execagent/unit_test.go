@@ -42,6 +42,7 @@ import (
 	kubefake "k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
 
+	batteryv1alpha1 "github.com/phoban01/battery-operator/api/v1alpha1"
 	"github.com/phoban01/battery-operator/internal/clock"
 	"github.com/phoban01/battery-operator/internal/fakeflintlock"
 	"github.com/phoban01/battery-operator/internal/hostcheck"
@@ -49,7 +50,9 @@ import (
 
 // Names the tests share.
 const (
-	testCaller    = "caller"
+	testHolder    = "holder"
+	testClaimName = "claim"
+	testCaller    = "system:serviceaccount:" + testNamespace + ":" + testHolder
 	testNamespace = "unit"
 	testVersion   = "test"
 	testCommand   = "run"
@@ -59,42 +62,15 @@ const (
 // loopback is the one Host address these tests run on.
 var loopback = []net.IP{net.IPv4(127, 0, 0, 1)}
 
-// TestAuthorize checks every condition of the provisional claim check on
-// its own, and that a claim which records nothing about a condition fails
-// it. #16 replaces the check.
-func TestAuthorize(t *testing.T) {
-	t.Parallel()
-	now := time.Date(2026, 9, 22, 12, 0, 0, 0, time.UTC)
-	good := Claim{Namespace: "ns", Name: "c", Phase: ClaimBound, VMUID: "vm", HostNode: testHost, ExpiresAt: now.Add(time.Minute), Creator: testCaller}
-	if err := Authorize(good, testCaller, "vm", testHost, now); err != nil {
-		t.Fatalf("a good claim: %v", err)
-	}
-	for name, mutate := range map[string]func(*Claim){
-		"pending":            func(c *Claim) { c.Phase = ClaimPending },
-		"expired phase":      func(c *Claim) { c.Phase = ClaimExpired },
-		"released":           func(c *Claim) { c.Phase = ClaimReleased },
-		"no phase":           func(c *Claim) { c.Phase = "" },
-		"another microvm":    func(c *Claim) { c.VMUID = "other" },
-		"no microvm":         func(c *Claim) { c.VMUID = "" },
-		"another host":       func(c *Claim) { c.HostNode = "other" },
-		"no host":            func(c *Claim) { c.HostNode = "" },
-		"lease ran out":      func(c *Claim) { c.ExpiresAt = now },
-		"no expiry recorded": func(c *Claim) { c.ExpiresAt = time.Time{} },
-		"another creator":    func(c *Claim) { c.Creator = "stranger" },
-		"no creator":         func(c *Claim) { c.Creator = "" },
-	} {
-		c := good
-		mutate(&c)
-		if err := Authorize(c, testCaller, "vm", testHost, now); !errors.Is(err, errNotAuthorized) {
-			t.Errorf("%s: Authorize = %v, want a refusal", name, err)
-		}
-	}
-}
-
-// authenticated answers every TokenReview as the caller's identity.
+// authenticated answers every TokenReview as the Holder's token, with the
+// id of testClaimToken.
 func authenticated() (*authenticationv1.TokenReview, error) {
 	return &authenticationv1.TokenReview{Status: authenticationv1.TokenReviewStatus{
-		Authenticated: true, User: authenticationv1.UserInfo{Username: testCaller},
+		Authenticated: true, Audiences: []string{DefaultTokenAudience},
+		User: authenticationv1.UserInfo{
+			Username: testCaller,
+			Extra:    map[string]authenticationv1.ExtraValue{credentialIDExtra: {"JTI=" + testJTI}},
+		},
 	}}, nil
 }
 
@@ -104,12 +80,25 @@ type stubClaims struct {
 	err    error
 }
 
-func (s *stubClaims) ClaimsForVM(context.Context, string) ([]Claim, error) { return s.claims, s.err }
+func (s *stubClaims) Claim(_ context.Context, namespace, name string) (*Claim, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	for _, c := range s.claims {
+		if c.Namespace == namespace && c.Name == name {
+			return &c, nil
+		}
+	}
+	return nil, nil
+}
 func (s *stubClaims) BoundOnHost(context.Context, string) ([]Claim, error) { return s.claims, s.err }
 
-// boundClaim is a claim that authorizes "caller" on uid.
+// boundClaim is a claim that authorizes testClaimToken on uid.
 func boundClaim(uid string) Claim {
-	return Claim{Phase: ClaimBound, VMUID: uid, HostNode: testHost, ExpiresAt: time.Now().Add(time.Hour), Creator: testCaller}
+	return Claim{
+		Namespace: testNamespace, Name: testClaimName, ServiceAccountName: testHolder,
+		Phase: batteryv1alpha1.MicroVMClaimBound, VMUID: uid, HostNode: testHost, ExpiresAt: time.Now().Add(time.Hour),
+	}
 }
 
 // serveFake serves a fake flintlockd over mutual TLS on loopback until the
@@ -168,7 +157,9 @@ func unitAgent(t *testing.T, review func() (*authenticationv1.TokenReview, error
 	}
 	s := &server{
 		hostNode: testHost, fl: fl, claims: claims, clk: clock.Real{}, log: logr.Discard(),
-		authn:       &authenticator{reviews: kube.AuthenticationV1().TokenReviews(), timeout: time.Second},
+		authn: &authenticator{
+			reviews: kube.AuthenticationV1().TokenReviews(), audiences: []string{DefaultTokenAudience}, timeout: time.Second,
+		},
 		openTimeout: time.Second, callTimeout: time.Second,
 	}
 	srv := grpc.NewServer(grpc.Creds(credentials.NewTLS(cert.tlsConfig())),
@@ -195,7 +186,7 @@ func unitAgent(t *testing.T, review func() (*authenticationv1.TokenReview, error
 
 // withToken is a context carrying a bearer token.
 func withToken(ctx context.Context) context.Context {
-	return metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer token")
+	return metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+testClaimToken)
 }
 
 // runExec execs testCommand as a caller with a token and returns the status the
