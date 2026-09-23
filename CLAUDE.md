@@ -45,6 +45,11 @@ README there has the rules; the short version:
 - Each owned ID is cited in the implementation (`//=` and `//#` lines) and in
   a test (the same, plus a `//= type=test` line). YAML under `config/` uses
   `#=` and `#/`.
+- Keep a blank line between a citation and the doc comment of the `func` or
+  type below it. Otherwise `gofmt` rewrites `//=` to `// =`, and duvet ignores
+  the citation without an error.
+- duvet reads only files git knows about: `git add` new files before
+  checking locally.
 - CI's coverage gate fails the PR unless every ID on its `Owns:` line has
   both. `type=implication` does not count.
 - `make duvet` refreshes `.duvet/snapshot.txt`. Don't commit that change

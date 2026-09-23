@@ -75,6 +75,8 @@ Implementation:
 //= docs/requirements/02-claims.md#release
 //# When a claim that has no lease is deleted, the Claim Controller SHALL
 //# remove its finalizer without calling battery.
+
+// releasePending lets a claim that never bound go.
 func (r *ClaimReconciler) releasePending(ctx context.Context, c *v1alpha1.MicroVMClaim) error {
 ```
 
@@ -86,8 +88,17 @@ code they test and are matched by the same source pattern:
 //= type=test
 //# When a claim that has no lease is deleted, the Claim Controller SHALL
 //# remove its finalizer without calling battery.
+
+// TestDeletingAPendingClaimDoesNotCallBattery covers CL-021.
 func TestDeletingAPendingClaimDoesNotCallBattery(t *testing.T) {
 ```
+
+**Keep a blank line between the citation and the declaration's doc comment.**
+A citation directly above a `func` or type becomes its doc comment, and
+`gofmt` (which `make test` runs) rewrites `//=` and `//#` there to `// =` and
+`// #`. duvet then ignores them without an error, and the coverage gate
+reports the citation as missing. Citations on the first lines inside a
+function body are safe too.
 
 YAML under `config/` cites requirements the same way, with `#=` and `#/` in
 place of `//=` and `//#`.
@@ -121,6 +132,9 @@ make duvet                         # writes .duvet/reports/report.html and refre
 make coverage-gate IDS="CL-001"    # the gate CI runs, for chosen IDs
 make duvet-ci                      # fails if the snapshot differs from the committed one
 ```
+
+duvet reads only the files git knows about, so `git add` a new file before
+checking its citations locally.
 
 Extracted requirements land in `.duvet/requirements/` and are regenerated on
 every run; they are never edited by hand. Renaming a section leaves a stale
