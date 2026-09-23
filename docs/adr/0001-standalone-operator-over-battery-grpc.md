@@ -1,6 +1,6 @@
 # 0001. A standalone operator in front of an unmodified battery
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-09-23
 - **Discussion:** [liquidmetal-dev/battery#46](https://github.com/liquidmetal-dev/battery/issues/46)
 
