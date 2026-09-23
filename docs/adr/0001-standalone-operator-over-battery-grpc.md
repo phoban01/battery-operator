@@ -52,7 +52,7 @@ cannot finish its cluster fleet until the real resources exist.
 
 ## Decision
 
-1. **The operator is a standalone project**, `fang-inc/battery-operator`,
+1. **The operator is a standalone project**, `phoban01/battery-operator`,
    licensed Apache-2.0 as battery and flintlock are. It is offered to
    liquidmetal-dev for adoption once it works.
 2. **The operator is a client of battery's gRPC API, and battery is not
