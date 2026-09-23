@@ -62,8 +62,8 @@ func waitReady(t *testing.T, h *execagenttest.Host, want bool, reason string) {
 
 // TestReadiness walks one Host through the reasons to be not ready and
 // back: a Host Image unit's reason, whose own words the message carries,
-// and flintlockd not answering; and a second Host whose flintlockd has exec
-// disabled.
+// KVM unavailable, the thin pool missing, and flintlockd not answering;
+// and a second Host whose flintlockd has exec disabled.
 func TestReadiness(t *testing.T) {
 	t.Parallel()
 	needEnv(t)
@@ -86,6 +86,25 @@ func TestReadiness(t *testing.T) {
 	}
 	waitReady(t, h, true, execagent.ReasonReady)
 
+	if err := os.Rename(filepath.Join(h.KVMSysfsDir, "dev"), filepath.Join(h.KVMSysfsDir, "gone")); err != nil {
+		t.Fatal(err)
+	}
+	waitReady(t, h, false, execagent.ReasonKVMUnavailable)
+	if err := os.Rename(filepath.Join(h.KVMSysfsDir, "gone"), filepath.Join(h.KVMSysfsDir, "dev")); err != nil {
+		t.Fatal(err)
+	}
+	waitReady(t, h, true, execagent.ReasonReady)
+
+	pool, gone := filepath.Join(h.SysBlockDir, "dm-0"), filepath.Join(h.SysBlockDir, "removed")
+	if err := os.Rename(pool, gone); err != nil {
+		t.Fatal(err)
+	}
+	waitReady(t, h, false, execagent.ReasonThinPoolMissing)
+	if err := os.Rename(gone, pool); err != nil {
+		t.Fatal(err)
+	}
+	waitReady(t, h, true, execagent.ReasonReady)
+
 	h.Fake.SetFaults(fakeflintlock.Faults{Unresponsive: true})
 	waitReady(t, h, false, execagent.ReasonFlintlockdNotReady)
 	h.Fake.SetFaults(fakeflintlock.Faults{})
@@ -104,9 +123,16 @@ func TestReadiness(t *testing.T) {
 //# `battery.liquidmetal-x.dev/exec-agent-message`, and its own address in
 //# `battery.liquidmetal-x.dev/exec-agent-address`.
 
-// TestNodeReport checks the four annotations of the Node report by their
-// literal keys, and that the address is the one the agent serves on: the
-// Host's internal address from its Node, and the agent's port.
+//= docs/requirements/05-exec-agent.md#host-checks
+//= type=test
+//# The Exec Agent SHALL publish in its Node report the address
+//# at which battery reaches the Host's `flintlockd`, as the annotation
+//# `battery.liquidmetal-x.dev/flintlockd-address`.
+
+// TestNodeReport checks the five annotations of the Node report by their
+// literal keys, that the address is the one the agent serves on: the
+// Host's internal address from its Node, and the agent's port; and that
+// the flintlockd address is the Host's flintlockd endpoint.
 func TestNodeReport(t *testing.T) {
 	t.Parallel()
 	needEnv(t)
@@ -116,7 +142,8 @@ func TestNodeReport(t *testing.T) {
 		return a["battery.liquidmetal-x.dev/exec-agent-ready"] == "true" &&
 			a["battery.liquidmetal-x.dev/exec-agent-reason"] == "Ready" &&
 			a["battery.liquidmetal-x.dev/exec-agent-message"] != "" &&
-			a["battery.liquidmetal-x.dev/exec-agent-address"] == h.Address
+			a["battery.liquidmetal-x.dev/exec-agent-address"] == h.Address &&
+			a["battery.liquidmetal-x.dev/flintlockd-address"] == h.Fake.Addr()
 	})
 	if host, _, _ := strings.Cut(h.Address, ":"); host != execagenttest.HostAddress {
 		t.Errorf("the agent serves on %s, want the Node's internal address %s", h.Address, execagenttest.HostAddress)

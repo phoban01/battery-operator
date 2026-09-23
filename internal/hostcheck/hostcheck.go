@@ -16,7 +16,8 @@ limitations under the License.
 
 // Package hostcheck holds the checks the Exec Agent makes of the Host it
 // runs on: that a flintlockd endpoint is an address of this Host
-// (docs/requirements/05-exec-agent.md#serving), and what the Host Image
+// (docs/requirements/05-exec-agent.md#serving), the Host prerequisites of
+// docs/host-prerequisites.md, and what the Host Image
 // reports through the not ready reason contract
 // (docs/requirements/05-exec-agent.md#host-checks).
 package hostcheck

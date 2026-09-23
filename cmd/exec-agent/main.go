@@ -66,6 +66,14 @@ func main() {
 		"The deadline of every unary call to flintlockd and every TokenReview.")
 	flag.StringVar(&cfg.NotReadyDir, "not-ready-dir", hostcheck.DefaultNotReadyDir,
 		"The directory the Host Image writes its not ready reasons to.")
+	flag.StringVar(&cfg.KVMDevice, "kvm-device", hostcheck.DefaultKVMDevice,
+		"The path of the Host's KVM device node, which has to be a character device.")
+	flag.StringVar(&cfg.KVMSysfsDir, "kvm-sysfs-dir", hostcheck.DefaultKVMSysfsDir,
+		"Where sysfs lists the KVM device, which has to be there.")
+	flag.StringVar(&cfg.ThinPool, "thin-pool", hostcheck.DefaultThinPool,
+		"The device-mapper name of containerd's thin pool, containerd's devmapper pool_name.")
+	flag.StringVar(&cfg.SysBlockDir, "sys-block-dir", hostcheck.DefaultSysBlockDir,
+		"sysfs's directory of block devices, where the thin pool is looked for.")
 	flag.DurationVar(&cfg.DrainTimeout, "drain-timeout", execagent.DefaultDrainTimeout,
 		"How long Bound claims hold a drain of the Host's Node open.")
 	flag.StringVar(&cfg.Guard.Namespace, "guard-namespace", os.Getenv("POD_NAMESPACE"),

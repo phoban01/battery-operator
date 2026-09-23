@@ -15,6 +15,14 @@
 # which have to be readable by the image's user, 65532.
 # #31 has the agent request its flintlockd certificates itself through
 # CertificateSigningRequests (ADR 0003) and keep its client key in memory.
+#
+# Host prerequisites (docs/host-prerequisites.md): the agent checks that the
+# Host has a KVM device (EA-031), listed in sysfs at /sys/class/misc/kvm and
+# with /dev/kvm a character device, without opening it. It sees the Host's
+# /dev read-only at /host/dev, a directory rather than a hostPath of type
+# CharDevice, so that a Host without KVM still runs the agent, which reports
+# why. It finds containerd's thin pool (EA-032) in sysfs too. Every
+# container has the Host's sysfs read-only, so sysfs needs no mount.
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
@@ -61,6 +69,9 @@ spec:
             - --tls-cert-file=/etc/battery/exec-agent/tls.crt
             - --tls-key-file=/etc/battery/exec-agent/tls.key
             - --port=10270
+            - --kvm-device=/host/dev/kvm
+            # containerd's devmapper pool_name on the Host.
+            - --thin-pool=flintlock-thinpool
           env:
             # The Host's Node, whose Node report the agent keeps (EA-034)
             # and whose name its identity has to carry (EA-050).
@@ -103,6 +114,10 @@ spec:
             - name: not-ready
               mountPath: /run/flr/not-ready.d
               readOnly: true
+            # EA-031: the Host's devices, for /dev/kvm.
+            - name: host-dev
+              mountPath: /host/dev
+              readOnly: true
       volumes:
         - name: certificates
           hostPath:
@@ -112,3 +127,7 @@ spec:
           hostPath:
             path: /run/flr/not-ready.d
             type: DirectoryOrCreate
+        - name: host-dev
+          hostPath:
+            path: /dev
+            type: Directory

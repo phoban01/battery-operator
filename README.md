@@ -12,7 +12,8 @@ declared and a MicroVM is claimed the way anything else in a cluster is:
 - **`MicroVMClaim`**: one client's hold on one warm MicroVM from a Pool.
 
 A per-Host **Exec Agent** lets the holder of a claim, and only the holder,
-run commands in its MicroVM.
+run commands in its MicroVM. What a Node needs before it can be a Host, and
+how the Exec Agent checks it, is in [Host prerequisites](docs/host-prerequisites.md).
 
 The design was discussed in
 [liquidmetal-dev/battery#46](https://github.com/liquidmetal-dev/battery/issues/46).
