@@ -1,0 +1,114 @@
+# The Exec Agent (cmd/exec-agent) on every Host.
+#
+# It runs in the Host's network namespace, so that it serves its exec API on
+# the Host's internal address (EA-002) and reaches its Host's flintlockd on
+# an address of the Host (EA-001).
+#
+# Which Nodes are Hosts: the DaemonSet runs on Nodes labelled
+# battery.liquidmetal-x.dev/host=true, which the cluster's operator sets on
+# every Node that meets the Host prerequisites. The Inventory Controller
+# then admits a Node only once its Node report says it is ready (IN-001).
+#
+# Certificates, until #31: the agent reads its client certificate for
+# flintlockd, its key, flintlockd's serving CA, and its own serving
+# certificate and key from files on the Host, under /etc/battery/exec-agent,
+# which have to be readable by the image's user, 65532.
+# #31 has the agent request its flintlockd certificates itself through
+# CertificateSigningRequests (ADR 0003) and keep its client key in memory.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: battery-operator-exec-agent
+  namespace: battery-operator-system
+  labels:
+    app.kubernetes.io/name: battery-operator
+    app.kubernetes.io/component: exec-agent
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: battery-operator
+      app.kubernetes.io/component: exec-agent
+  updateStrategy:
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: battery-operator
+        app.kubernetes.io/component: exec-agent
+    spec:
+      serviceAccountName: battery-operator-exec-agent
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      #= docs/requirements/05-exec-agent.md#serving
+      #/ The Manifests SHALL run the Exec Agent on every Node labelled
+      #/ `battery.liquidmetal-x.dev/host=true`, and on no other Node.
+      nodeSelector:
+        battery.liquidmetal-x.dev/host: "true"
+      tolerations:
+        # A Host may be tainted to keep ordinary workloads off it; the agent
+        # has to run there regardless.
+        - operator: Exists
+      containers:
+        - name: exec-agent
+          image: controller:latest
+          command: ["/exec-agent"]
+          args:
+            - --flintlockd=$(HOST_IP):9090
+            - --flintlockd-cert-file=/etc/battery/exec-agent/flintlockd-client.crt
+            - --flintlockd-key-file=/etc/battery/exec-agent/flintlockd-client.key
+            - --flintlockd-ca-file=/etc/battery/exec-agent/flintlockd-ca.crt
+            - --tls-cert-file=/etc/battery/exec-agent/tls.crt
+            - --tls-key-file=/etc/battery/exec-agent/tls.key
+            - --port=10270
+          env:
+            # The Host's Node, whose Node report the agent keeps (EA-034)
+            # and whose name its identity has to carry (EA-050).
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            # The Host's address, where its flintlockd serves.
+            - name: HOST_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+            # The drain guard's namespace (EA-040).
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          ports:
+            - name: exec-api
+              containerPort: 10270
+              protocol: TCP
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+          volumeMounts:
+            - name: certificates
+              mountPath: /etc/battery/exec-agent
+              readOnly: true
+            # EA-033: the Host Image's units write their not ready reasons
+            # here; the agent only reads them.
+            - name: not-ready
+              mountPath: /run/flr/not-ready.d
+              readOnly: true
+      volumes:
+        - name: certificates
+          hostPath:
+            path: /etc/battery/exec-agent
+            type: Directory
+        - name: not-ready
+          hostPath:
+            path: /run/flr/not-ready.d
+            type: DirectoryOrCreate

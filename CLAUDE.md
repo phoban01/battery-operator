@@ -115,7 +115,7 @@ Where the issues put new things:
 | `api/v1alpha1/` | `Pool`, `MicroVMClaim` types | #5, #6 |
 | `internal/controller/` | Controllers | #9, #13, #19, #30 |
 | `internal/clock/`, `internal/fakebattery/`, `internal/fakeflintlock/` | Clock and fakes | #7 |
-| `cmd/exec-agent/`, `deploy/agent/` | Exec Agent binary and its manifests | #15 |
+| `cmd/exec-agent/`, `internal/execagent/`, `internal/hostcheck/`, `config/exec-agent/` | Exec Agent binary, package, Host checks and its manifests | #15 |
 | `pkg/claimclient/` (proposed) | Client Library | #22 |
 
 ## Kubebuilder
