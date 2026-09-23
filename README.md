@@ -19,8 +19,9 @@ The design was discussed in
 This project starts outside battery so it can be proven without disturbing
 battery itself, with the aim of being adopted by liquidmetal-dev if it works.
 
-**Status:** design. Nothing is built yet; start with the
-[architecture decision records](docs/adr/).
+**Status:** design. Nothing is built yet. Start with the
+[architecture decision records](docs/adr/), then the
+[requirements](docs/requirements/), which every change is traced to.
 
 ## License
 

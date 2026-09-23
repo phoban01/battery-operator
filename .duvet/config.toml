@@ -1,0 +1,73 @@
+# duvet configuration: see docs/requirements/README.md
+# Schema reference: https://awslabs.github.io/duvet/config.html
+'$schema' = "https://awslabs.github.io/duvet/config/v0.4.0.json"
+
+# All Go sources. Test files are matched by these same patterns, so tests
+# mark themselves with an explicit `//= type=test` line (a second [[source]]
+# with `type = "test"` would scan _test.go files twice, once as
+# implementation).
+[[source]]
+pattern = "api/**/*.go"
+
+[[source]]
+pattern = "cmd/**/*.go"
+
+[[source]]
+pattern = "internal/**/*.go"
+
+[[source]]
+pattern = "pkg/**/*.go"
+
+# The Manifests (06-deployment.md, 05-exec-agent.md#identity) are YAML and
+# cite requirements with `#=` and `#/`.
+[[source]]
+pattern = "config/**/*.yaml"
+comment-style = { meta = "#=", content = "#/" }
+
+[[specification]]
+source = "docs/requirements/01-resources.md"
+format = "markdown"
+
+[[specification]]
+source = "docs/requirements/02-claims.md"
+format = "markdown"
+
+[[specification]]
+source = "docs/requirements/03-pools.md"
+format = "markdown"
+
+[[specification]]
+source = "docs/requirements/04-inventory.md"
+format = "markdown"
+
+[[specification]]
+source = "docs/requirements/05-exec-agent.md"
+format = "markdown"
+
+[[specification]]
+source = "docs/requirements/06-deployment.md"
+format = "markdown"
+
+[[specification]]
+source = "docs/requirements/07-client.md"
+format = "markdown"
+
+[[specification]]
+source = "docs/requirements/08-test-doubles.md"
+format = "markdown"
+
+[report.html]
+enabled = true
+path = ".duvet/reports/report.html"
+blob-link = "${{ DUVET_BLOB_LINK || 'https://github.com/phoban01/battery-operator/blob/main' }}"
+issue-link = "${{ DUVET_ISSUE_LINK || 'https://github.com/phoban01/battery-operator/issues' }}"
+
+[report.json]
+enabled = true
+path = ".duvet/reports/report.json"
+
+# The snapshot is committed at milestones only. `duvet report --ci true`
+# fails when coverage changes without the snapshot being regenerated.
+[report.snapshot]
+enabled = true
+path = ".duvet/snapshot.txt"

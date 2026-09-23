@@ -1,0 +1,308 @@
+SPECIFICATION: [The resources](docs/requirements/01-resources.md)
+  SECTION: [API group](#api-group)
+    TEXT[!MUST]: - **RS-001** The CRDs SHALL define `Pool` and `MicroVMClaim` as namespaced
+    TEXT[!MUST]:   resources in the API group `battery.liquidmetal-x.dev` at version
+    TEXT[!MUST]:   `v1alpha1`.
+    TEXT[!MUST]: - **RS-002** The CRDs SHALL define no `MicroVM` resource.
+
+  SECTION: [Pool](#pool)
+    TEXT[!MUST]: - **RS-010** The `Pool` resource SHALL carry in its `spec` one field for
+    TEXT[!MUST]:   each of the `PoolSpec` fields `microvm_template`, `size`,
+    TEXT[!MUST]:   `replenishment_strategy`, `create_commands`, `pre_lease_commands`,
+    TEXT[!MUST]:   `hook_failure_policy`, `heartbeat_interval` and
+    TEXT[!MUST]:   `heartbeat_expiry_threshold` of battery v0.1.0.
+    TEXT[!MUST]: - **RS-011** The `Pool` resource SHALL select the Hosts its MicroVMs may run
+    TEXT[!MUST]:   on with a Node label selector in `spec.placement.nodeSelector`, in place of
+    TEXT[!MUST]:   battery's `flintlock_hosts`.
+    TEXT[!MUST]: - **RS-012** The CRDs SHALL reject a `Pool` whose `spec.size` is negative or
+    TEXT[!MUST]:   whose enumerated fields hold a value that battery v0.1.0 does not define.
+    TEXT[!MUST]: - **RS-013** The `Pool` resource SHALL have a status subresource that carries
+    TEXT[!MUST]:   `observedGeneration`, the counts of available, leased, provisioning and
+    TEXT[!MUST]:   quarantined MicroVMs, and the conditions `Ready` and `Exhausted`.
+
+  SECTION: [MicroVMClaim](#microvmclaim)
+    TEXT[!MUST]: - **RS-020** The `MicroVMClaim` resource SHALL carry `spec.poolRef.name`,
+    TEXT[!MUST]:   which names a `Pool` in the claim's own namespace.
+    TEXT[!MUST]: - **RS-021** The `MicroVMClaim` resource SHALL carry
+    TEXT[!MUST]:   `spec.serviceAccountName`, which names the ServiceAccount in the claim's
+    TEXT[!MUST]:   namespace that may use the claimed MicroVM.
+    TEXT[!MUST]: - **RS-022** The CRDs SHALL reject an update that changes a claim's
+    TEXT[!MUST]:   `spec.serviceAccountName` or `spec.poolRef`.
+    TEXT[!MUST]: - **RS-023** The `MicroVMClaim` resource SHALL carry `spec.renewTime`, which
+    TEXT[!MUST]:   the Holder sets to renew the claim's Lease.
+    TEXT[!MUST]: - **RS-024** The `MicroVMClaim` resource SHALL have a status subresource that
+    TEXT[!MUST]:   carries the phase, one of `Pending`, `Bound`, `Expired` and `Released`,
+    TEXT[!MUST]:   the lease id battery chose, the MicroVM's uid, the Host's node name, the
+    TEXT[!MUST]:   Exec Agent's address, the time the claim was bound, the time its Lease
+    TEXT[!MUST]:   expires, and the condition `Bound`.
+
+SPECIFICATION: [The Claim Controller](docs/requirements/02-claims.md)
+  SECTION: [Binding](#binding)
+    TEXT[!MUST]: - **CL-001** When a claim that has no lease id in its status is
+    TEXT[!MUST]:   reconciled, the Claim Controller SHALL add the finalizer
+    TEXT[!MUST]:   `battery.liquidmetal-x.dev/release` to the claim before it calls battery's
+    TEXT[!MUST]:   `ClaimVM` for the claim's Pool.
+    TEXT[!MUST]: - **CL-002** When battery's `ClaimVM` succeeds for a claim, the Claim
+    TEXT[!MUST]:   Controller SHALL write the lease id, the MicroVM's uid, the Host's name as
+    TEXT[!MUST]:   the node name and the time of binding to the claim's status, set the phase
+    TEXT[!MUST]:   to `Bound` and set the condition `Bound` true, before it makes any other
+    TEXT[!MUST]:   call to battery for that claim.
+    TEXT[!MUST]: - **CL-003** If battery's `ClaimVM` fails because the Pool has no warm
+    TEXT[!MUST]:   MicroVM, then the Claim Controller SHALL keep the claim in the phase
+    TEXT[!MUST]:   `Pending` with the condition `Bound` false and the reason `PoolExhausted`,
+    TEXT[!MUST]:   and SHALL retry with backoff.
+    TEXT[!MUST]: - **CL-004** If the claim's Pool does not exist, then the Claim Controller
+    TEXT[!MUST]:   SHALL keep the claim in the phase `Pending` with the condition `Bound`
+    TEXT[!MUST]:   false and the reason `PoolNotFound`, and SHALL retry with backoff.
+    TEXT[!MUST]: - **CL-005** When a claim is Bound, the Claim Controller SHALL set the claim's
+    TEXT[!MUST]:   Exec Agent address from the Node report of the claim's Host.
+    TEXT[!MUST]: - **CL-006** If the Node report of a Bound claim's Host carries no Exec Agent
+    TEXT[!MUST]:   address, then the Claim Controller SHALL keep the claim Bound and set the
+    TEXT[!MUST]:   condition `AgentAvailable` false with the reason `NoAgentAddress`.
+
+  SECTION: [Renewal](#renewal)
+    TEXT[!MUST]: - **CL-010** When the `spec.renewTime` of a Bound claim changes, the Claim
+    TEXT[!MUST]:   Controller SHALL call battery's `Heartbeat` for the claim's Lease and write
+    TEXT[!MUST]:   the expiry time battery returns to the claim's status.
+    TEXT[!MUST]: - **CL-011** The Claim Controller SHALL take a claim's Lease expiry time only
+    TEXT[!MUST]:   from battery's answer to `Heartbeat` or `ClaimVM`, and SHALL NOT compute it.
+    TEXT[!MUST]: - **CL-012** If battery reports a claim's Lease as unknown or expired, then
+    TEXT[!MUST]:   the Claim Controller SHALL set the claim's phase to `Expired` and its
+    TEXT[!MUST]:   condition `Bound` false with the reason `LeaseExpired`.
+
+  SECTION: [Release](#release)
+    TEXT[!MUST]: - **CL-020** When a claim that has a lease id is deleted, the Claim
+    TEXT[!MUST]:   Controller SHALL call battery's `ReleaseVM` for the Lease, and SHALL remove
+    TEXT[!MUST]:   the finalizer only once battery has released the Lease or reported it
+    TEXT[!MUST]:   unknown.
+    TEXT[!MUST]: - **CL-021** When a claim that has no lease id is deleted, the Claim
+    TEXT[!MUST]:   Controller SHALL remove its finalizer without calling battery.
+
+  SECTION: [Recovery](#recovery)
+    TEXT[!MUST]: - **CL-030** When the Claim Controller starts, and when its connection to
+    TEXT[!MUST]:   battery is restored, the Claim Controller SHALL reconcile every Bound claim against
+    TEXT[!MUST]:   battery's Leases.
+    TEXT[!MUST]: - **CL-031** The Claim Controller SHALL NOT release a Lease that battery
+    TEXT[!MUST]:   holds and no claim records.
+
+SPECIFICATION: [The Pool Controller](docs/requirements/03-pools.md)
+  SECTION: [Declaration](#declaration)
+    TEXT[!MUST]: - **PO-001** When a Pool exists that battery does not hold, the Pool
+    TEXT[!MUST]:   Controller SHALL create it in battery with `CreatePool`, under the Pool's
+    TEXT[!MUST]:   namespace and name.
+    TEXT[!MUST]: - **PO-002** When a Pool's `metadata.generation` differs from its
+    TEXT[!MUST]:   `status.observedGeneration`, the Pool Controller SHALL send the Pool's spec
+    TEXT[!MUST]:   to battery with `UpdatePool` and then set `status.observedGeneration` to
+    TEXT[!MUST]:   that generation.
+    TEXT[!MUST]: - **PO-003** The Pool Controller SHALL add a finalizer to each Pool, and when
+    TEXT[!MUST]:   the Pool is deleted SHALL call `DeletePool` and remove the finalizer only
+    TEXT[!MUST]:   once battery has deleted the Pool or reported it unknown.
+    TEXT[!MUST]: - **PO-004** If battery refuses a Pool's spec, then the Pool Controller SHALL
+    TEXT[!MUST]:   set the Pool's condition `Ready` false with the reason `Rejected` and
+    TEXT[!MUST]:   battery's message.
+
+  SECTION: [Placement](#placement)
+    TEXT[!MUST]: - **PO-010** The Pool Controller SHALL set a Pool's `flintlock_hosts` in
+    TEXT[!MUST]:   battery to the names of the Hosts whose Nodes match the Pool's
+    TEXT[!MUST]:   `spec.placement.nodeSelector`.
+    TEXT[!MUST]: - **PO-011** When the set of Hosts a Pool's selector matches changes, the
+    TEXT[!MUST]:   Pool Controller SHALL update the Pool in battery with `UpdatePool`.
+    TEXT[!MUST]: - **PO-012** While a Pool's selector matches no Host, the Pool Controller
+    TEXT[!MUST]:   SHALL set the Pool's condition `Ready` false with the reason
+    TEXT[!MUST]:   `NoEligibleHost`.
+
+  SECTION: [Status](#pool-status)
+    TEXT[!MUST]: - **PO-020** The Pool Controller SHALL take a Pool's counts of available,
+    TEXT[!MUST]:   leased, provisioning and quarantined MicroVMs from battery's `PoolStatus`
+    TEXT[!MUST]:   for the Pool and from nothing else.
+    TEXT[!MUST]: - **PO-021** The Pool Controller SHALL set a Pool's condition `Exhausted`
+    TEXT[!MUST]:   true while battery reports no available MicroVM in a Pool whose size is
+    TEXT[!MUST]:   greater than zero, and false otherwise.
+    TEXT[!MUST]: - **PO-022** The Pool Controller SHALL set a Pool's condition `Ready` true
+    TEXT[!MUST]:   while battery holds the Pool, its selector matches a Host, and the sum of
+    TEXT[!MUST]:   its available, leased and provisioning MicroVMs is at least its size.
+    TEXT[!MUST]: - **PO-023** When battery's `Events` stream reports an event for a Pool, the
+    TEXT[!MUST]:   Pool Controller SHALL refresh that Pool's status.
+    TEXT[!MUST]: - **PO-024** While the Pool Controller's subscription to battery's `Events`
+    TEXT[!MUST]:   stream is not connected, the Pool Controller SHALL refresh every Pool's
+    TEXT[!MUST]:   status at the configured resync interval.
+
+SPECIFICATION: [The Inventory Controller](docs/requirements/04-inventory.md)
+  SECTION: [Admission](#admission)
+    TEXT[!MUST]: - **IN-001** The Inventory Controller SHALL treat a Node as a Host only while
+    TEXT[!MUST]:   the Node's Node report says the Host is ready and the Node is schedulable.
+    TEXT[!MUST]: - **IN-002** When a Node that is a Host is cordoned or deleted, or its Node
+    TEXT[!MUST]:   report says the Host is not ready, the Inventory Controller SHALL remove
+    TEXT[!MUST]:   the Host from battery's Hosts.
+    TEXT[!MUST]: - **IN-003** The Inventory Controller SHALL give battery each Host under the
+    TEXT[!MUST]:   Node's name, at the address where the Host's `flintlockd` serves battery,
+    TEXT[!MUST]:   as the Host's Node report gives it.
+
+  SECTION: [Applying the list](#applying)
+    TEXT[!MUST]: - **IN-010** When the set of Hosts changes, the Inventory Controller SHALL
+    TEXT[!MUST]:   write the new list to battery's configuration and restart battery.
+    TEXT[!MUST]: - **IN-011** The Inventory Controller SHALL act on a change in whether a Node
+    TEXT[!MUST]:   is a Host only after the change has held for the configured settle time.
+    TEXT[!MUST]: - **IN-012** The Inventory Controller SHALL apply every change that has
+    TEXT[!MUST]:   settled within one restart window in a single restart of battery.
+
+SPECIFICATION: [The Exec Agent](docs/requirements/05-exec-agent.md)
+  SECTION: [Serving](#serving)
+    TEXT[!MUST]: - **EA-001** The Exec Agent SHALL reach `flintlockd` only through a local
+    TEXT[!MUST]:   endpoint, a unix socket or a loopback address, and SHALL refuse to start
+    TEXT[!MUST]:   with any other `flintlockd` endpoint.
+    TEXT[!MUST]: - **EA-002** The Exec Agent SHALL serve its exec API over TLS on the Host's
+    TEXT[!MUST]:   internal address, with a serving certificate that names that address.
+    TEXT[!MUST]: - **EA-003** The Exec Agent's exec API SHALL be flintlock's
+    TEXT[!MUST]:   `microvmexec.services.api.v1alpha1` service, together with the
+    TEXT[!MUST]:   `ServerInfo` and `GetMicroVM` calls of its `microvm.services.api.v1alpha1`
+    TEXT[!MUST]:   service.
+
+  SECTION: [Authorization](#authorization)
+    TEXT[!MUST]: - **EA-010** The Exec Agent SHALL authenticate every request with a
+    TEXT[!MUST]:   TokenReview of the bearer token it carries, requesting the Exec Agent's
+    TEXT[!MUST]:   audience, and SHALL refuse a request that does not authenticate.
+    TEXT[!MUST]: - **EA-011** The Exec Agent SHALL run a command in a MicroVM only when the
+    TEXT[!MUST]:   request's token belongs to the Holder of a claim whose namespace and
+    TEXT[!MUST]:   `spec.serviceAccountName` it names.
+    TEXT[!MUST]: - **EA-012** The Exec Agent SHALL run a command in a MicroVM only when the
+    TEXT[!MUST]:   request's token is bound to that claim's Secret `<claim name>-exec`, by
+    TEXT[!MUST]:   both the Secret's name and its uid.
+    TEXT[!MUST]: - **EA-013** The Exec Agent SHALL run a command in a MicroVM only when that
+    TEXT[!MUST]:   claim is Bound, its Lease has not expired, and it names that MicroVM's uid
+    TEXT[!MUST]:   and this Host.
+    TEXT[!MUST]: - **EA-014** If the TokenReview or the claim lookup of a request cannot be
+    TEXT[!MUST]:   completed, then the Exec Agent SHALL refuse the request.
+
+  SECTION: [Relay](#relay)
+    TEXT[!MUST]: - **EA-020** The Exec Agent SHALL relay a request's streams to
+    TEXT[!MUST]:   `MicroVMExec.ExecCommand` on the local `flintlockd`, and SHALL end every
+    TEXT[!MUST]:   response with an exit status frame, sent only after `flintlockd` has
+    TEXT[!MUST]:   reported the command's exit.
+    TEXT[!MUST]: - **EA-021** If `flintlockd` has not answered for the requested MicroVM and
+    TEXT[!MUST]:   accepted the request's exec stream within the configured deadline, then
+    TEXT[!MUST]:   the Exec Agent SHALL end the response as a stream failure.
+
+  SECTION: [Host checks](#host-checks)
+    TEXT[!MUST]: - **EA-030** The Exec Agent SHALL report its Host not ready while the local
+    TEXT[!MUST]:   `flintlockd` does not answer `ServerInfo` with the exec service enabled.
+    TEXT[!MUST]: - **EA-031** The Exec Agent SHALL report its Host not ready while `/dev/kvm`
+    TEXT[!MUST]:   cannot be opened.
+    TEXT[!MUST]: - **EA-032** The Exec Agent SHALL report its Host not ready while
+    TEXT[!MUST]:   containerd's thin pool, as the configuration names it, is not present.
+    TEXT[!MUST]: - **EA-033** The Exec Agent SHALL report its Host not ready while any file
+    TEXT[!MUST]:   in the not ready reason directory names a reason, and SHALL report that
+    TEXT[!MUST]:   reason.
+    TEXT[!MUST]: - **EA-034** The Exec Agent SHALL publish its Node report on its Host's Node
+    TEXT[!MUST]:   as the annotation `battery.liquidmetal-x.dev/exec-agent-ready` set to
+    TEXT[!MUST]:   `true` or `false`, with the reason and message of the last check in
+    TEXT[!MUST]:   `battery.liquidmetal-x.dev/exec-agent-reason` and
+    TEXT[!MUST]:   `battery.liquidmetal-x.dev/exec-agent-message`, and its own address in
+    TEXT[!MUST]:   `battery.liquidmetal-x.dev/exec-agent-address`.
+    TEXT[!MUST]: - **EA-035** The Exec Agent SHALL publish in its Node report the address
+    TEXT[!MUST]:   at which battery reaches the Host's `flintlockd`.
+
+  SECTION: [Drain](#drain)
+    TEXT[!MUST]: - **EA-040** While claims are Bound on its Host, the Exec Agent SHALL hold an
+    TEXT[!MUST]:   eviction-based drain of the Host's Node open, and SHALL let the drain
+    TEXT[!MUST]:   complete when none remain or when the configured drain timeout elapses.
+
+  SECTION: [Identity](#identity)
+    TEXT[!MUST]: - **EA-050** When the Exec Agent starts, the Exec Agent SHALL confirm that its identity
+    TEXT[!MUST]:   names its own Host, and SHALL refuse to start otherwise.
+    TEXT[!MUST]: - **EA-051** The Manifests SHALL include a ValidatingAdmissionPolicy that
+    TEXT[!MUST]:   lets an Exec Agent's identity change only the annotations of its own
+    TEXT[!MUST]:   Host's Node under the prefix `battery.liquidmetal-x.dev/`, and nothing
+    TEXT[!MUST]:   else of any Node.
+
+SPECIFICATION: [Deployment](docs/requirements/06-deployment.md)
+  SECTION: [battery as a sidecar](#battery-sidecar)
+    TEXT[!MUST]: - **DP-001** The Manifests SHALL run battery as a container in the
+    TEXT[!MUST]:   Operator's pod, listening on a loopback address only.
+    TEXT[!MUST]: - **DP-002** The Manifests SHALL run the Operator's pod as a single replica
+    TEXT[!MUST]:   that is replaced with the `Recreate` strategy.
+    TEXT[!MUST]: - **DP-003** The Manifests SHALL keep battery's database on a persistent
+    TEXT[!MUST]:   volume.
+    TEXT[!MUST]: - **DP-004** The Manifests SHALL supply battery's configuration, its Hosts
+    TEXT[!MUST]:   included, from an object the Operator may write.
+    TEXT[!MUST]: - **DP-005** The Operator SHALL restart battery through a single mechanism
+    TEXT[!MUST]:   that the Inventory Controller invokes, and SHALL wait until battery answers
+    TEXT[!MUST]:   again before any controller calls it.
+
+  SECTION: [The battery connection](#battery-connection)
+    TEXT[!MUST]: - **DP-010** The Operator SHALL call battery over gRPC on the loopback
+    TEXT[!MUST]:   address of DP-001, with a deadline on every unary call.
+    TEXT[!MUST]: - **DP-011** The Operator SHALL map battery's gRPC status codes to errors
+    TEXT[!MUST]:   that distinguish a missing object, an exhausted Pool and an unavailable
+    TEXT[!MUST]:   battery.
+    TEXT[!MUST]: - **DP-012** While battery is unavailable, the Operator SHALL report itself
+    TEXT[!MUST]:   not ready on its readiness endpoint.
+
+  SECTION: [Access](#access)
+    TEXT[!MUST]: - **DP-020** The Manifests SHALL grant write access to the status
+    TEXT[!MUST]:   subresources of `Pool` and `MicroVMClaim` to the Operator's identity and
+    TEXT[!MUST]:   to no other identity they create.
+    TEXT[!MUST]: - **DP-021** The Manifests SHALL grant the Operator's identity no access to
+    TEXT[!MUST]:   Secrets outside its own namespace.
+
+SPECIFICATION: [The Client Library](docs/requirements/07-client.md)
+  SECTION: [Claiming](#claiming)
+    TEXT[!MUST]: - **CC-001** The Client Library SHALL create a claim with the Pool and
+    TEXT[!MUST]:   Holder the Consumer names, and then an empty Secret `<claim name>-exec`
+    TEXT[!MUST]:   whose owner reference is the claim.
+    TEXT[!MUST]: - **CC-002** The Client Library SHALL request each claim token with
+    TEXT[!MUST]:   `TokenRequest` for the Holder, bound to the claim's Secret by name and uid,
+    TEXT[!MUST]:   with the Exec Agent's audience.
+    TEXT[!MUST]: - **CC-003** The Client Library SHALL return a claim to the Consumer only once
+    TEXT[!MUST]:   the claim's phase is `Bound`, together with the MicroVM's uid, the Host's
+    TEXT[!MUST]:   node name and the Exec Agent's address from the claim's status.
+    TEXT[!MUST]: - **CC-004** While a claim waits with the reason `PoolExhausted`, the Client
+    TEXT[!MUST]:   Library SHALL report the Pool as exhausted to the Consumer.
+    TEXT[!MUST]: - **CC-005** When the Consumer stops waiting for a claim to bind, the Client
+    TEXT[!MUST]:   Library SHALL delete the claim.
+
+  SECTION: [Holding](#holding)
+    TEXT[!MUST]: - **CC-010** While the Consumer holds a Bound claim, the Client Library SHALL
+    TEXT[!MUST]:   set the claim's `spec.renewTime` at the Pool's heartbeat interval.
+    TEXT[!MUST]: - **CC-011** While the Consumer holds a Bound claim, the Client Library SHALL
+    TEXT[!MUST]:   request a new claim token before the current one expires.
+    TEXT[!MUST]: - **CC-012** If a held claim's phase becomes `Expired`, or the claim is
+    TEXT[!MUST]:   deleted by anyone but the Client Library, then the Client Library SHALL
+    TEXT[!MUST]:   report the Lease as lost to the Consumer.
+
+  SECTION: [Using and releasing](#using)
+    TEXT[!MUST]: - **CC-020** The Client Library SHALL connect to the Exec Agent at the
+    TEXT[!MUST]:   address in the claim's status, verifying its serving certificate against
+    TEXT[!MUST]:   the certificate authority the Consumer configures, and SHALL send the
+    TEXT[!MUST]:   current claim token as the bearer token of every request.
+    TEXT[!MUST]: - **CC-021** When the Consumer releases a claim, the Client Library SHALL
+    TEXT[!MUST]:   delete the claim.
+
+SPECIFICATION: [Test doubles](docs/requirements/08-test-doubles.md)
+  SECTION: [The fake battery](#fake-battery)
+    TEXT[!MUST]: - **TD-001** The fake battery SHALL serve battery v0.1.0's `PoolAdmin`,
+    TEXT[!MUST]:   `Lease` and `Events` services over gRPC with the generated server stubs.
+    TEXT[!MUST]: - **TD-002** The fake battery SHALL create, place and delete MicroVMs only
+    TEXT[!MUST]:   through the fake `flintlockd`.
+    TEXT[!MUST]: - **TD-003** The fake battery SHALL replenish Pools, expire Leases that are
+    TEXT[!MUST]:   not renewed within the Pool's expiry threshold, and answer `ClaimVM` on an
+    TEXT[!MUST]:   empty Pool with `RESOURCE_EXHAUSTED`, as battery v0.1.0 does.
+    TEXT[!MUST]: - **TD-004** The fake battery SHALL run on an injectable clock, so that a
+    TEXT[!MUST]:   test can expire a Lease without waiting.
+    TEXT[!MUST]: - **TD-005** The fake battery SHALL document every behaviour in which it
+    TEXT[!MUST]:   deliberately differs from battery v0.1.0.
+
+  SECTION: [The fake flintlockd](#fake-flintlockd)
+    TEXT[!MUST]: - **TD-010** The fake `flintlockd` SHALL serve flintlock's MicroVM and
+    TEXT[!MUST]:   `MicroVMExec` services over gRPC, with MicroVMs that exist only in memory.
+    TEXT[!MUST]: - **TD-011** The fake `flintlockd` SHALL let a test script the output and
+    TEXT[!MUST]:   exit status of an exec, and cut a stream before its exit status.
+
+  SECTION: [Test environments](#test-environments)
+    TEXT[!MUST]: - **TD-020** The controllers SHALL be tested against envtest serving the
+    TEXT[!MUST]:   CRDs, and the fake battery.
+    TEXT[!MUST]: - **TD-021** The Exec Agent SHALL be tested against envtest serving the
+    TEXT[!MUST]:   CRDs, and the fake `flintlockd`.
+    TEXT[!MUST]: - **TD-022** The Client Library SHALL be tested through a whole claim's life
+    TEXT[!MUST]:   against envtest, the controllers, the fake battery, the Exec Agent and the
+    TEXT[!MUST]:   fake `flintlockd`.
