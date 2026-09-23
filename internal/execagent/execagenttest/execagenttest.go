@@ -415,9 +415,11 @@ type Host struct {
 	VMUID string
 	// NotReadyDir is the agent's not ready reason directory.
 	NotReadyDir string
-	// KVMDevice is the file the agent opens as the KVM device; removing it
-	// makes KVM unavailable (EA-031).
+	// KVMDevice is the KVM device node the agent checks, /dev/null here.
 	KVMDevice string
+	// KVMSysfsDir is the fake sysfs directory listing the KVM device;
+	// removing its dev file makes KVM unavailable (EA-031).
+	KVMSysfsDir string
 	// SysBlockDir is the agent's fake sysfs block directory, holding
 	// containerd's thin pool under its default name (EA-032).
 	SysBlockDir string
@@ -473,7 +475,7 @@ func (e *Env) NewHost(t testing.TB, opts HostOptions) *Host {
 	}
 	h.VMUID = vm.GetSpec().GetUid()
 	h.NotReadyDir = filepath.Join(t.TempDir(), "not-ready.d")
-	h.KVMDevice, h.SysBlockDir = FakeHostPrerequisites(t)
+	h.KVMDevice, h.KVMSysfsDir, h.SysBlockDir = FakeHostPrerequisites(t)
 
 	listener, err := net.Listen("tcp", net.JoinHostPort(HostAddress, "0"))
 	if err != nil {
@@ -491,15 +493,19 @@ func (e *Env) NewHost(t testing.TB, opts HostOptions) *Host {
 }
 
 // FakeHostPrerequisites makes stand-ins for the Host prerequisites the
-// agent checks on the Host itself, since there is no KVM here: a file that
-// opens in place of /dev/kvm, and a sysfs block directory whose one
+// agent checks on the Host itself, since there is no KVM here: /dev/null as
+// the KVM device node, since a test cannot make a character device; a sysfs
+// directory listing the KVM device; and a sysfs block directory whose one
 // device-mapper device, dm-0, is containerd's thin pool under its default
-// name. It returns the KVM device and the block directory.
-func FakeHostPrerequisites(t testing.TB) (kvmDevice, sysBlockDir string) {
+// name.
+func FakeHostPrerequisites(t testing.TB) (kvmDevice, kvmSysfsDir, sysBlockDir string) {
 	t.Helper()
 	dir := t.TempDir()
-	kvmDevice = filepath.Join(dir, "kvm")
-	if err := os.WriteFile(kvmDevice, nil, 0o600); err != nil {
+	kvmSysfsDir = filepath.Join(dir, "sys", "class", "misc", "kvm")
+	if err := os.MkdirAll(kvmSysfsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(kvmSysfsDir, "dev"), []byte("10:232\n"), 0o444); err != nil {
 		t.Fatal(err)
 	}
 	sysBlockDir = filepath.Join(dir, "sys", "block")
@@ -510,7 +516,7 @@ func FakeHostPrerequisites(t testing.TB) (kvmDevice, sysBlockDir string) {
 	if err := os.WriteFile(filepath.Join(dm, "name"), []byte(hostcheck.DefaultThinPool+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	return kvmDevice, sysBlockDir
+	return "/dev/null", kvmSysfsDir, sysBlockDir
 }
 
 // Log is what the Exec Agent has logged.
@@ -534,6 +540,7 @@ func (h *Host) Config() *execagent.Config {
 		CallTimeout:     5 * time.Second,
 		NotReadyDir:     h.NotReadyDir,
 		KVMDevice:       h.KVMDevice,
+		KVMSysfsDir:     h.KVMSysfsDir,
 		SysBlockDir:     h.SysBlockDir,
 		DrainTimeout:    h.opts.DrainTimeout,
 		Guard:           execagent.Guard{Namespace: AgentNamespace},

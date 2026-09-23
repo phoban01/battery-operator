@@ -24,26 +24,35 @@ import (
 	"testing"
 )
 
+// TestCheckKVM stands /dev/null in for the KVM device, since a test cannot
+// make a character device, and a directory with a dev file for sysfs.
 func TestCheckKVM(t *testing.T) {
 	t.Parallel()
+	const charDevice = "/dev/null"
 	dir := t.TempDir()
-	device := filepath.Join(dir, "kvm")
-	if err := CheckKVM(device); err == nil || !strings.Contains(err.Error(), "KVM is unavailable") {
-		t.Errorf("CheckKVM of an absent device = %v, want KVM unavailable", err)
-	}
-	if err := os.WriteFile(device, nil, 0o600); err != nil {
+	sysfs := filepath.Join(dir, "kvm")
+	absent := filepath.Join(dir, "absent")
+	regular := filepath.Join(dir, "regular")
+	if err := os.WriteFile(regular, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := CheckKVM(device); err != nil {
-		t.Errorf("CheckKVM of a device that opens = %v, want nil", err)
+	if err := os.MkdirAll(sysfs, 0o755); err != nil {
+		t.Fatal(err)
 	}
-	if os.Geteuid() != 0 {
-		if err := os.Chmod(device, 0o400); err != nil {
-			t.Fatal(err)
-		}
-		if err := CheckKVM(device); err == nil {
-			t.Error("CheckKVM of a device that opens only for reading = nil, want an error")
-		}
+	if err := CheckKVM(charDevice, sysfs); err == nil || !strings.Contains(err.Error(), "lists no KVM device") {
+		t.Errorf("CheckKVM with no KVM device in sysfs = %v, want KVM unavailable", err)
+	}
+	if err := os.WriteFile(filepath.Join(sysfs, "dev"), []byte("10:232\n"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckKVM(charDevice, sysfs); err != nil {
+		t.Errorf("CheckKVM with the device listed and its node a character device = %v, want nil", err)
+	}
+	if err := CheckKVM(absent, sysfs); err == nil || !strings.Contains(err.Error(), "KVM is unavailable") {
+		t.Errorf("CheckKVM with no device node = %v, want KVM unavailable", err)
+	}
+	if err := CheckKVM(regular, sysfs); err == nil || !strings.Contains(err.Error(), "not a character device") {
+		t.Errorf("CheckKVM with a regular file for the device node = %v, want not a character device", err)
 	}
 }
 

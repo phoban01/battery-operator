@@ -80,15 +80,16 @@ func checkReadiness(ctx context.Context, cfg *Config, fl *Flintlockd) readiness 
 	}
 
 	//= docs/requirements/05-exec-agent.md#host-checks
-	//# The Exec Agent SHALL report its Host not ready while `/dev/kvm`
-	//# cannot be opened.
-	if err := hostcheck.CheckKVM(cfg.KVMDevice); err != nil {
+	//# The Exec Agent SHALL report its Host not ready while the Host
+	//# has no KVM device.
+	if err := hostcheck.CheckKVM(cfg.KVMDevice, cfg.KVMSysfsDir); err != nil {
 		fail(ReasonKVMUnavailable, err.Error())
 	}
 
 	//= docs/requirements/05-exec-agent.md#host-checks
 	//# The Exec Agent SHALL report its Host not ready while
-	//# containerd's thin pool, as the configuration names it, is not present.
+	//# containerd's thin pool, under the name the Exec Agent's configuration
+	//# gives, is not present.
 	if err := hostcheck.CheckThinPool(cfg.SysBlockDir, cfg.ThinPool); err != nil {
 		fail(ReasonThinPoolMissing, err.Error())
 	}
@@ -113,7 +114,7 @@ func checkReadiness(ctx context.Context, cfg *Config, fl *Flintlockd) readiness 
 		}
 		return readiness{reason: reason, message: message}
 	}
-	return readiness{ready: true, reason: ReasonReady, message: "KVM opens, the thin pool " + cfg.ThinPool +
+	return readiness{ready: true, reason: ReasonReady, message: "the Host has a KVM device, the thin pool " + cfg.ThinPool +
 		" is present, flintlockd answers with exec enabled and the Host Image reports no reason to be not ready"}
 }
 
@@ -127,7 +128,8 @@ func checkReadiness(ctx context.Context, cfg *Config, fl *Flintlockd) readiness 
 
 //= docs/requirements/05-exec-agent.md#host-checks
 //# The Exec Agent SHALL publish in its Node report the address
-//# at which battery reaches the Host's `flintlockd`.
+//# at which battery reaches the Host's `flintlockd`, as the annotation
+//# `battery.liquidmetal-x.dev/flintlockd-address`.
 
 // nodeReport is the Node report the agent keeps on its Host's Node: the
 // Host's readiness, the address of the exec API, and the address of the

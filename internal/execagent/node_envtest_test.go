@@ -86,11 +86,11 @@ func TestReadiness(t *testing.T) {
 	}
 	waitReady(t, h, true, execagent.ReasonReady)
 
-	if err := os.Rename(h.KVMDevice, h.KVMDevice+".gone"); err != nil {
+	if err := os.Rename(filepath.Join(h.KVMSysfsDir, "dev"), filepath.Join(h.KVMSysfsDir, "gone")); err != nil {
 		t.Fatal(err)
 	}
 	waitReady(t, h, false, execagent.ReasonKVMUnavailable)
-	if err := os.Rename(h.KVMDevice+".gone", h.KVMDevice); err != nil {
+	if err := os.Rename(filepath.Join(h.KVMSysfsDir, "gone"), filepath.Join(h.KVMSysfsDir, "dev")); err != nil {
 		t.Fatal(err)
 	}
 	waitReady(t, h, true, execagent.ReasonReady)
@@ -126,7 +126,8 @@ func TestReadiness(t *testing.T) {
 //= docs/requirements/05-exec-agent.md#host-checks
 //= type=test
 //# The Exec Agent SHALL publish in its Node report the address
-//# at which battery reaches the Host's `flintlockd`.
+//# at which battery reaches the Host's `flintlockd`, as the annotation
+//# `battery.liquidmetal-x.dev/flintlockd-address`.
 
 // TestNodeReport checks the five annotations of the Node report by their
 // literal keys, that the address is the one the agent serves on: the

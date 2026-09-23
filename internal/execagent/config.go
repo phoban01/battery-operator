@@ -80,9 +80,12 @@ type Config struct {
 	// NotReadyDir is the directory the Host Image's units write not ready
 	// reasons to (EA-033).
 	NotReadyDir string
-	// KVMDevice is the path at which the agent opens the Host's KVM device
-	// (EA-031).
+	// KVMDevice is the path of the Host's KVM device node, which has to be a
+	// character device (EA-031).
 	KVMDevice string
+	// KVMSysfsDir is where sysfs lists the KVM device, which has to be there
+	// (EA-031).
+	KVMSysfsDir string
 	// ThinPool is the device-mapper name of containerd's thin pool, the
 	// pool_name of containerd's devmapper snapshotter (EA-032).
 	ThinPool string
@@ -135,6 +138,7 @@ type ClaimResourceConfig struct {
 func (c *Config) ApplyDefaults() {
 	setDefault(&c.NotReadyDir, hostcheck.DefaultNotReadyDir)
 	setDefault(&c.KVMDevice, hostcheck.DefaultKVMDevice)
+	setDefault(&c.KVMSysfsDir, hostcheck.DefaultKVMSysfsDir)
 	setDefault(&c.ThinPool, hostcheck.DefaultThinPool)
 	setDefault(&c.SysBlockDir, hostcheck.DefaultSysBlockDir)
 	setDefault(&c.Guard.Image, DefaultGuardImage)

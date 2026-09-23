@@ -67,7 +67,9 @@ func main() {
 	flag.StringVar(&cfg.NotReadyDir, "not-ready-dir", hostcheck.DefaultNotReadyDir,
 		"The directory the Host Image writes its not ready reasons to.")
 	flag.StringVar(&cfg.KVMDevice, "kvm-device", hostcheck.DefaultKVMDevice,
-		"The path of the Host's KVM device, which has to open for the Host to be ready.")
+		"The path of the Host's KVM device node, which has to be a character device.")
+	flag.StringVar(&cfg.KVMSysfsDir, "kvm-sysfs-dir", hostcheck.DefaultKVMSysfsDir,
+		"Where sysfs lists the KVM device, which has to be there.")
 	flag.StringVar(&cfg.ThinPool, "thin-pool", hostcheck.DefaultThinPool,
 		"The device-mapper name of containerd's thin pool, containerd's devmapper pool_name.")
 	flag.StringVar(&cfg.SysBlockDir, "sys-block-dir", hostcheck.DefaultSysBlockDir,

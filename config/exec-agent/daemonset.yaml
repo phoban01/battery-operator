@@ -16,16 +16,13 @@
 # #31 has the agent request its flintlockd certificates itself through
 # CertificateSigningRequests (ADR 0003) and keep its client key in memory.
 #
-# Host prerequisites (docs/host-prerequisites.md): the agent opens the
-# Host's /dev/kvm (EA-031) through the Host's /dev, mounted read-only at
-# /host/dev, so that an absent device is reported as such rather than
-# keeping the pod from starting, as a hostPath of type CharDevice would.
-# The container runtime's device rules refuse an unprivileged container
-# every device it was not given, however the device node gets there, so
-# the cluster has to give this container /dev/kvm, with a device plugin or
-# CDI; until it does, the agent reports KVMUnavailable, "operation not
-# permitted". The agent finds containerd's thin pool (EA-032) in sysfs,
-# which every container has read-only, so that needs no mount.
+# Host prerequisites (docs/host-prerequisites.md): the agent checks that the
+# Host has a KVM device (EA-031), listed in sysfs at /sys/class/misc/kvm and
+# with /dev/kvm a character device, without opening it. It sees the Host's
+# /dev read-only at /host/dev, a directory rather than a hostPath of type
+# CharDevice, so that a Host without KVM still runs the agent, which reports
+# why. It finds containerd's thin pool (EA-032) in sysfs too. Every
+# container has the Host's sysfs read-only, so sysfs needs no mount.
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:

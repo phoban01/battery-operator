@@ -28,26 +28,30 @@ import (
 	"github.com/phoban01/battery-operator/internal/hostcheck"
 )
 
-// fakePrerequisites makes stand-ins for KVM and the thin pool, as
-// execagenttest.FakeHostPrerequisites does for the envtest Hosts: a file
-// that opens in place of /dev/kvm, and a sysfs block directory whose one
-// device-mapper device is the thin pool under its default name.
-func fakePrerequisites(t *testing.T) (kvmDevice, sysBlockDir string) {
+// fakePrerequisites points cfg at stand-ins for KVM and the thin pool, as
+// execagenttest.FakeHostPrerequisites does for the envtest Hosts: /dev/null
+// as the KVM device node, since a test cannot make a character device, a
+// sysfs directory listing the KVM device, and a sysfs block directory whose
+// one device-mapper device is the thin pool under its default name.
+func fakePrerequisites(t *testing.T, cfg *Config) {
 	t.Helper()
 	dir := t.TempDir()
-	kvmDevice = filepath.Join(dir, "kvm")
-	if err := os.WriteFile(kvmDevice, nil, 0o600); err != nil {
+	cfg.KVMDevice = "/dev/null"
+	cfg.KVMSysfsDir = filepath.Join(dir, "kvm")
+	if err := os.MkdirAll(cfg.KVMSysfsDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	sysBlockDir = filepath.Join(dir, "block")
-	dm := filepath.Join(sysBlockDir, "dm-0", "dm")
+	if err := os.WriteFile(filepath.Join(cfg.KVMSysfsDir, "dev"), []byte("10:232\n"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	cfg.SysBlockDir = filepath.Join(dir, "block")
+	dm := filepath.Join(cfg.SysBlockDir, "dm-0", "dm")
 	if err := os.MkdirAll(dm, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(dm, "name"), []byte(hostcheck.DefaultThinPool+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	return kvmDevice, sysBlockDir
 }
 
 //= docs/requirements/05-exec-agent.md#host-checks
@@ -57,20 +61,21 @@ func fakePrerequisites(t *testing.T) (kvmDevice, sysBlockDir string) {
 
 //= docs/requirements/05-exec-agent.md#host-checks
 //= type=test
-//# The Exec Agent SHALL report its Host not ready while `/dev/kvm`
-//# cannot be opened.
+//# The Exec Agent SHALL report its Host not ready while the Host
+//# has no KVM device.
 
 //= docs/requirements/05-exec-agent.md#host-checks
 //= type=test
 //# The Exec Agent SHALL report its Host not ready while
-//# containerd's thin pool, as the configuration names it, is not present.
+//# containerd's thin pool, under the name the Exec Agent's configuration
+//# gives, is not present.
 
 // TestHostPrerequisites checks readiness with every Host prerequisite
 // present, which is ready, and with each one missing in turn, which is not
-// ready with that prerequisite's own reason: the KVM device absent or not
-// openable, the thin pool absent or configured under another name,
-// flintlockd not answering ServerInfo, and flintlockd answering with exec
-// disabled.
+// ready with that prerequisite's own reason: the KVM device not listed in
+// sysfs, its node absent or not a character device, the thin pool absent
+// or configured under another name, flintlockd not answering ServerInfo,
+// and flintlockd answering with exec disabled.
 func TestHostPrerequisites(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -80,19 +85,24 @@ func TestHostPrerequisites(t *testing.T) {
 		reason string
 		says   string // what the message has to say
 	}{
-		{name: "all present", exec: true, reason: ReasonReady, says: "KVM opens"},
+		{name: "all present", exec: true, reason: ReasonReady, says: "the Host has a KVM device"},
 		{
-			name: "KVM absent", exec: true, reason: ReasonKVMUnavailable, says: "KVM is unavailable",
+			name: "KVM not in sysfs", exec: true, reason: ReasonKVMUnavailable, says: "lists no KVM device",
 			spoil: func(t *testing.T, cfg *Config, _ *fakeflintlock.Server) {
-				if err := os.Remove(cfg.KVMDevice); err != nil {
+				if err := os.Remove(filepath.Join(cfg.KVMSysfsDir, "dev")); err != nil {
 					t.Fatal(err)
 				}
 			},
 		},
 		{
-			name: "KVM does not open", exec: true, reason: ReasonKVMUnavailable, says: "KVM is unavailable",
+			name: "KVM device node absent", exec: true, reason: ReasonKVMUnavailable, says: "KVM is unavailable",
 			spoil: func(t *testing.T, cfg *Config, _ *fakeflintlock.Server) {
-				// A directory never opens for writing, whoever runs the test.
+				cfg.KVMDevice = filepath.Join(t.TempDir(), "kvm")
+			},
+		},
+		{
+			name: "KVM device node not a character device", exec: true, reason: ReasonKVMUnavailable, says: "not a character device",
+			spoil: func(t *testing.T, cfg *Config, _ *fakeflintlock.Server) {
 				cfg.KVMDevice = t.TempDir()
 			},
 		},
@@ -131,7 +141,7 @@ func TestHostPrerequisites(t *testing.T) {
 			cfg := validConfig()
 			cfg.NotReadyDir = filepath.Join(t.TempDir(), "absent")
 			cfg.CallTimeout = time.Second
-			cfg.KVMDevice, cfg.SysBlockDir = fakePrerequisites(t)
+			fakePrerequisites(t, cfg)
 			if tc.spoil != nil {
 				tc.spoil(t, cfg, fake)
 			}
@@ -148,16 +158,17 @@ func TestHostPrerequisites(t *testing.T) {
 func TestPrerequisiteDefaults(t *testing.T) {
 	t.Parallel()
 	cfg := validConfig()
-	if cfg.KVMDevice != "/dev/kvm" || cfg.ThinPool != "flintlock-thinpool" || cfg.SysBlockDir != "/sys/block" {
-		t.Errorf("defaults: KVM device %q, thin pool %q, sysfs block directory %q; want /dev/kvm, flintlock-thinpool, /sys/block",
-			cfg.KVMDevice, cfg.ThinPool, cfg.SysBlockDir)
+	if cfg.KVMDevice != "/dev/kvm" || cfg.KVMSysfsDir != "/sys/class/misc/kvm" || cfg.ThinPool != "flintlock-thinpool" || cfg.SysBlockDir != "/sys/block" {
+		t.Errorf("defaults: KVM device %q, KVM sysfs %q, thin pool %q, sysfs block directory %q; want /dev/kvm, /sys/class/misc/kvm, flintlock-thinpool, /sys/block",
+			cfg.KVMDevice, cfg.KVMSysfsDir, cfg.ThinPool, cfg.SysBlockDir)
 	}
 }
 
 //= docs/requirements/05-exec-agent.md#host-checks
 //= type=test
 //# The Exec Agent SHALL publish in its Node report the address
-//# at which battery reaches the Host's `flintlockd`.
+//# at which battery reaches the Host's `flintlockd`, as the annotation
+//# `battery.liquidmetal-x.dev/flintlockd-address`.
 
 // TestNodeReportCarriesFlintlockdAddress checks the Node report's
 // flintlockd address by its literal key. node_envtest_test.go's

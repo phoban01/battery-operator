@@ -28,6 +28,9 @@ import (
 const (
 	// DefaultKVMDevice is the KVM device on the Host.
 	DefaultKVMDevice = "/dev/kvm"
+	// DefaultKVMSysfsDir is where the kernel lists the KVM device in sysfs
+	// once the kvm module has registered it.
+	DefaultKVMSysfsDir = "/sys/class/misc/kvm"
 	// DefaultThinPool is the device-mapper name of containerd's thin pool,
 	// the pool_name of containerd's devmapper snapshotter. It is
 	// flintlock's default, and the name flintlock-runner's Host Image gives
@@ -38,16 +41,26 @@ const (
 	DefaultSysBlockDir = "/sys/block"
 )
 
-// CheckKVM opens the KVM device for reading and writing, as flintlockd's
-// hypervisor does, and closes it again. An error says why the device cannot
-// be opened: it is absent, its permissions refuse the caller, or the
-// container's device rules do.
-func CheckKVM(device string) error {
-	f, err := os.OpenFile(device, os.O_RDWR, 0)
+// CheckKVM reports whether the Host has a KVM device: the kernel lists one
+// in sysfs (`<sysfsDir>/dev`, present once the kvm module has registered
+// the device), and the Host's device node is a character device. It does
+// not open the device. flintlockd, on the Host, is what opens it, and an
+// unprivileged container could not, however the node is mounted into it.
+func CheckKVM(device, sysfsDir string) error {
+	if _, err := os.Stat(filepath.Join(sysfsDir, "dev")); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("KVM is unavailable: the kernel lists no KVM device in %s; is the kvm module loaded and virtualization enabled?", sysfsDir)
+		}
+		return fmt.Errorf("KVM is unavailable: %w", err)
+	}
+	info, err := os.Stat(device)
 	if err != nil {
 		return fmt.Errorf("KVM is unavailable: %w", err)
 	}
-	return f.Close()
+	if info.Mode()&os.ModeCharDevice == 0 {
+		return fmt.Errorf("KVM is unavailable: %s is not a character device", device)
+	}
+	return nil
 }
 
 // CheckThinPool reports whether a device-mapper device named pool exists,

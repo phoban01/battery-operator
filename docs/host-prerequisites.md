@@ -16,7 +16,7 @@ the glossary's *Host prerequisites* is the short form.
 | Prerequisite | Why | Checked by | Reason when missing |
 |---|---|---|---|
 | `flintlockd` with its exec API enabled, on the Host's internal address, with mutual TLS | battery creates MicroVMs through it, and the Exec Agent relays exec to it | `ServerInfo` over mutual TLS (EA-030) | `FlintlockdNotReady`, or `ExecDisabled` |
-| KVM: `/dev/kvm` that opens for reading and writing | `flintlockd`'s hypervisor runs every MicroVM on it | opening the device (EA-031) | `KVMUnavailable` |
+| KVM: a KVM device, `/dev/kvm` | `flintlockd`'s hypervisor runs every MicroVM on it | the device in sysfs and `/dev/kvm` a character device, not opened (EA-031) | `KVMUnavailable` |
 | containerd's thin pool | `flintlockd` puts every MicroVM's volumes on containerd's devmapper snapshotter | looking the pool up in sysfs (EA-032) | `ThinPoolMissing` |
 | The label `battery.liquidmetal-x.dev/host=true` | the Exec Agent runs only on labelled Nodes (EA-004) | the DaemonSet's node selector | no Exec Agent, so no Node report |
 
@@ -45,28 +45,30 @@ certificates the Exec Agent requests itself
 
 ### KVM
 
-`/dev/kvm` exists and opens for reading and writing, as it has to for
-`flintlockd`'s hypervisor. On bare metal that means virtualization is
-enabled in the firmware and the `kvm_intel` or `kvm_amd` module is loaded;
-on a virtual machine, nested virtualization.
+The Host has a KVM device, `/dev/kvm`, which `flintlockd`'s hypervisor
+opens. On bare metal that means virtualization is enabled in the firmware
+and the `kvm_intel` or `kvm_amd` module is loaded; on a virtual machine, it
+means nested virtualization.
 
-The Exec Agent runs as user 65532 without privileges, so for it to open the
-device:
+The Exec Agent checks two things, and passes only when both hold:
 
-- the device's mode has to let it: systemd's default udev rules make
-  `/dev/kvm` mode `0666`; a Host with `0660` needs the `kvm` group added to
-  the Exec Agent's pod as a supplemental group;
-- the container runtime has to give the container the device. An
-  unprivileged container may open only the devices it was given, whatever
-  is mounted into it, so the cluster gives the Exec Agent `/dev/kvm` with a
-  device plugin or a CDI device, as a patch to
-  `config/exec-agent/daemonset.yaml`. Without it the agent reports
-  `KVMUnavailable` with `operation not permitted`.
+- the kernel lists the device in sysfs: `/sys/class/misc/kvm/dev` exists,
+  which it does once the kvm module has registered the device;
+- the Host's `/dev/kvm` is a character device.
+
+The Exec Agent does not open the device. It runs unprivileged, and an
+unprivileged container may open only the devices the container runtime gave
+it. `flintlockd`, running on the Host, is what opens `/dev/kvm`. Whether the
+device works for `flintlockd` shows in EA-030: a `flintlockd` that cannot
+run MicroVMs is for the Host Image to report, through `ServerInfo` or the
+not ready reason directory.
 
 The DaemonSet mounts the Host's `/dev` read-only at `/host/dev` and passes
 `--kvm-device=/host/dev/kvm`. It mounts the directory rather than the
 device so that a Host without KVM still runs the agent, which then reports
-why the Host is not ready.
+why the Host is not ready. Every container has the Host's sysfs read-only,
+so `/sys/class/misc/kvm` needs no mount; `--kvm-sysfs-dir` exists for
+tests.
 
 ### containerd's thin pool
 
