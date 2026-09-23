@@ -1,0 +1,42 @@
+{
+  "$schema": "https://raw.githubusercontent.com/jetify-com/devbox/0.16.0/.schema/devbox.schema.json",
+  "packages": {
+    "go": "1.26.5",
+    "golangci-lint": "2.13.1",
+    "kubernetes-controller-tools": "0.21.0",
+    "kubebuilder": "4.15.0",
+    "setup-envtest": "0.22.3",
+    "kustomize": "5.8.1",
+    "kubectl": "latest",
+    "kind": "latest",
+    "jq": "latest",
+    "gnumake": "latest",
+    "cargo": "latest",
+    "rustc": "latest",
+    "pkg-config": "latest",
+    "openssl": {
+      "version": "latest",
+      "outputs": ["out", "dev"]
+    }
+  },
+  "env": {
+    "GOTOOLCHAIN": "local",
+    "DUVET_VERSION": "0.4.3"
+  },
+  "shell": {
+    "init_hook": [
+      "export GOPATH=\"$DEVBOX_PROJECT_ROOT/.gopath\"",
+      "export GOBIN=\"$GOPATH/bin\"",
+      "export CARGO_HOME=\"$DEVBOX_PROJECT_ROOT/.devbox/cargo\"",
+      "export PATH=\"$GOBIN:$CARGO_HOME/bin:$PATH\"",
+      "if [ \"$(cat \"$CARGO_HOME/.duvet-version\" 2>/dev/null)\" != \"$DUVET_VERSION\" ]; then echo \"building duvet $DUVET_VERSION (first run only)...\" >&2; cargo install duvet --version \"$DUVET_VERSION\" --locked --quiet && echo \"$DUVET_VERSION\" > \"$CARGO_HOME/.duvet-version\"; fi"
+    ],
+    "scripts": {
+      "build": "make build",
+      "test": "make test",
+      "lint": "make lint",
+      "duvet": "make duvet",
+      "coverage-gate": "hack/duvet-coverage.sh \"$@\""
+    }
+  }
+}

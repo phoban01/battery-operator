@@ -23,6 +23,25 @@ battery itself, with the aim of being adopted by liquidmetal-dev if it works.
 [architecture decision records](docs/adr/), then the
 [requirements](docs/requirements/), which every change is traced to.
 
+## Development
+
+Everything runs in a [devbox](https://www.jetify.com/devbox) shell, which
+pins Go and every tool this project uses:
+
+```sh
+devbox shell            # or: devbox run <script>
+```
+
+Inside it:
+
+- `GOPATH` is `.gopath/` in the checkout, with its `bin` on `PATH`, and
+  `GOTOOLCHAIN=local`, so the pinned Go is the one that runs.
+- duvet, which traces requirements to code, is built into `.devbox/cargo`
+  on the first shell entry. That takes a few minutes, once.
+- `devbox run build`, `test`, `lint` and `duvet` run the make targets, and
+  `devbox run coverage-gate CL-001 CL-002` runs the requirements gate for
+  those IDs.
+
 ## License
 
 Apache License 2.0, as battery and flintlock are. See [LICENSE](LICENSE).
