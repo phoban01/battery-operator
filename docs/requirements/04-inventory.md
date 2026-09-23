@@ -14,8 +14,11 @@ the list means rewriting its configuration and restarting it
   report says the Host is not ready, the Inventory Controller SHALL remove
   the Host from battery's Hosts.
 - **IN-003** The Inventory Controller SHALL give battery each Host under the
-  Node's name, at the address where the Host's `flintlockd` serves battery,
-  as the Host's Node report gives it.
+  Node's name, at the `flintlockd` address the Host's Node report gives.
+- **IN-004** The Inventory Controller SHALL configure battery to reach every
+  Host's `flintlockd` over TLS, verifying the serving certificate against
+  the configured certificate authority and presenting the Operator's client
+  certificate for `flintlockd`.
 
 A Host joins only after its own Exec Agent has checked it (decision 10), so
 the Inventory Controller never admits a Node that could not run MicroVMs.
@@ -40,20 +43,11 @@ reload in battery would remove the restarts; it is one of the upstream asks.
 How the Operator restarts battery is decided with the Manifests
 (`06-deployment.md#battery-sidecar`).
 
-## Open question: how battery reaches `flintlockd` {#flintlockd-reachability}
+## How battery reaches `flintlockd` {#flintlockd-reachability}
 
-battery creates and deletes MicroVMs by calling `flintlockd` on each Host,
-so it has to reach every Host's `flintlockd` over the network. flintlock-runner's
-Host Image does the opposite on purpose: it lets `flintlockd` listen only on
-a local endpoint and exposes it on no address reachable from outside the
-Host (its HI-042 and HI-044), and only the Exec Agent reaches it. IN-003
-is written without deciding which of these gives:
-
-- the Host exposes `flintlockd` on its internal address with mutual TLS, and
-  admits only the Operator's client certificate; or
-- the Exec Agent also relays battery's MicroVM lifecycle calls to the local
-  `flintlockd`, for the Operator's identity only, and the Host's address in
-  battery is the Exec Agent's.
-
-The second keeps `flintlockd` local, but needs battery's `flintlockd`
-client to authenticate to the Exec Agent in a way the agent can check.
+battery creates and deletes MicroVMs by calling `flintlockd` on each Host.
+Each Host's `flintlockd` serves on the Host's internal address with mutual
+TLS, and battery reaches it directly with the Operator's client certificate
+([ADR 0002](../adr/0002-battery-reaches-flintlockd-over-mtls.md)). IN-004
+is what keeps that connection authenticated both ways: battery v0.1.0 can
+also be configured without TLS, and the Inventory Controller never does so.

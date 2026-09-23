@@ -13,7 +13,10 @@ How the Operator runs, how it reaches battery, and what the Manifests deploy
   volume.
 - **DP-004** The Manifests SHALL supply battery's configuration, its Hosts
   included, from an object the Operator may write.
-- **DP-005** The Operator SHALL restart battery through a single mechanism
+- **DP-005** The Manifests SHALL give battery, from a Secret, a client
+  certificate and key for `flintlockd` and the certificate authority that
+  verifies the Hosts' `flintlockd` serving certificates.
+- **DP-006** The Operator SHALL restart battery through a single mechanism
   that the Inventory Controller invokes, and SHALL wait until battery answers
   again before any controller calls it.
 
@@ -28,7 +31,7 @@ replica, and losing its database would orphan MicroVMs on the Hosts
 (DP-002, DP-003). The Operator runs one replica with it, which couples the
 Operator's lifecycle to battery's.
 
-DP-005 leaves the mechanism open: the Operator can signal battery through a
+DP-006 leaves the mechanism open: the Operator can signal battery through a
 shared process namespace, or battery can be restarted by the kubelet when
 its configuration changes. Whichever is chosen is written down where it is
 built.

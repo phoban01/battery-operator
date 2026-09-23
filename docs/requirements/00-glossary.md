@@ -55,8 +55,12 @@ use. It contains no requirements.
 - **Node report**: the annotations the Exec Agent writes on its Host's Node:
   whether the Host is ready, why not, and where the Exec Agent listens.
 - **Host prerequisites**: what a Node has to provide before it can be a
-  Host: a local `flintlockd` with its exec API enabled, KVM, and
-  containerd's thin pool. This project ships no Host Image; flintlock-runner
-  has one that meets them.
+  Host: `flintlockd` with its exec API enabled, serving on the Host's
+  internal address with mutual TLS against the `flintlockd` client CA; KVM;
+  and containerd's thin pool. This project ships no Host Image.
+  flintlock-runner has one, which has to change to serve `flintlockd` this
+  way (ADR 0002).
+- **`flintlockd` client CA**: the certificate authority whose certificates
+  `flintlockd` admits. It signs only for battery and for Exec Agents.
 - **Consumer**: a program that claims MicroVMs through the Client Library,
   flintlock-runner being the first.

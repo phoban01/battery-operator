@@ -9,15 +9,21 @@ there map to the ones here in the order they appear.
 
 ## Serving {#serving}
 
-- **EA-001** The Exec Agent SHALL reach `flintlockd` only through a local
-  endpoint, a unix socket or a loopback address, and SHALL refuse to start
-  with any other `flintlockd` endpoint.
+- **EA-001** The Exec Agent SHALL reach only its own Host's `flintlockd`,
+  over TLS with its client certificate for `flintlockd`, and SHALL refuse to
+  start with a `flintlockd` endpoint that is not an address of its own Host.
 - **EA-002** The Exec Agent SHALL serve its exec API over TLS on the Host's
   internal address, with a serving certificate that names that address.
 - **EA-003** The Exec Agent's exec API SHALL be flintlock's
   `microvmexec.services.api.v1alpha1` service, together with the
   `ServerInfo` and `GetMicroVM` calls of its `microvm.services.api.v1alpha1`
   service.
+
+`flintlockd` has one endpoint, which battery also reaches, so it serves on
+the Host's internal address with client certificate validation, and the
+Exec Agent connects to it as battery does
+([ADR 0002](../adr/0002-battery-reaches-flintlockd-over-mtls.md),
+consequence 1).
 
 EA-003 means a consumer that already speaks to `flintlockd`'s exec API
 speaks to the Exec Agent unchanged, with a bearer token added.
@@ -98,8 +104,8 @@ Host itself, since this project ships no Host Image (decision 9). EA-033 is
 flintlock-runner's not ready reason contract, which lets a Host Image report
 reasons of its own, such as a Host Service that has not started. The Node
 report is the contract the Inventory Controller (IN-001) and the Claim
-Controller (CL-005) read. EA-035 depends on the open question in
-`04-inventory.md#flintlockd-reachability`.
+Controller (CL-005) read. EA-035 gives the Inventory Controller the address
+battery reaches `flintlockd` at (IN-003).
 
 ## Drain {#drain}
 
@@ -115,6 +121,10 @@ Controller (CL-005) read. EA-035 depends on the open question in
   lets an Exec Agent's identity change only the annotations of its own
   Host's Node under the prefix `battery.liquidmetal-x.dev/`, and nothing
   else of any Node.
+- **EA-052** The Manifests SHALL give each Exec Agent, from a Secret, a
+  client certificate and key for `flintlockd` signed by the `flintlockd`
+  client CA, and the certificate authority that verifies its Host's
+  `flintlockd` serving certificate.
 
 EA-051 is what makes a Node report trustworthy: an agent can speak only for
 its own Host, so a compromised Host cannot mark another Host ready or point

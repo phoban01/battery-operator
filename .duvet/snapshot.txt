@@ -135,8 +135,11 @@ SPECIFICATION: [The Inventory Controller](docs/requirements/04-inventory.md)
     TEXT[!MUST]:   report says the Host is not ready, the Inventory Controller SHALL remove
     TEXT[!MUST]:   the Host from battery's Hosts.
     TEXT[!MUST]: - **IN-003** The Inventory Controller SHALL give battery each Host under the
-    TEXT[!MUST]:   Node's name, at the address where the Host's `flintlockd` serves battery,
-    TEXT[!MUST]:   as the Host's Node report gives it.
+    TEXT[!MUST]:   Node's name, at the `flintlockd` address the Host's Node report gives.
+    TEXT[!MUST]: - **IN-004** The Inventory Controller SHALL configure battery to reach every
+    TEXT[!MUST]:   Host's `flintlockd` over TLS, verifying the serving certificate against
+    TEXT[!MUST]:   the configured certificate authority and presenting the Operator's client
+    TEXT[!MUST]:   certificate for `flintlockd`.
 
   SECTION: [Applying the list](#applying)
     TEXT[!MUST]: - **IN-010** When the set of Hosts changes, the Inventory Controller SHALL
@@ -148,9 +151,9 @@ SPECIFICATION: [The Inventory Controller](docs/requirements/04-inventory.md)
 
 SPECIFICATION: [The Exec Agent](docs/requirements/05-exec-agent.md)
   SECTION: [Serving](#serving)
-    TEXT[!MUST]: - **EA-001** The Exec Agent SHALL reach `flintlockd` only through a local
-    TEXT[!MUST]:   endpoint, a unix socket or a loopback address, and SHALL refuse to start
-    TEXT[!MUST]:   with any other `flintlockd` endpoint.
+    TEXT[!MUST]: - **EA-001** The Exec Agent SHALL reach only its own Host's `flintlockd`,
+    TEXT[!MUST]:   over TLS with its client certificate for `flintlockd`, and SHALL refuse to
+    TEXT[!MUST]:   start with a `flintlockd` endpoint that is not an address of its own Host.
     TEXT[!MUST]: - **EA-002** The Exec Agent SHALL serve its exec API over TLS on the Host's
     TEXT[!MUST]:   internal address, with a serving certificate that names that address.
     TEXT[!MUST]: - **EA-003** The Exec Agent's exec API SHALL be flintlock's
@@ -214,6 +217,10 @@ SPECIFICATION: [The Exec Agent](docs/requirements/05-exec-agent.md)
     TEXT[!MUST]:   lets an Exec Agent's identity change only the annotations of its own
     TEXT[!MUST]:   Host's Node under the prefix `battery.liquidmetal-x.dev/`, and nothing
     TEXT[!MUST]:   else of any Node.
+    TEXT[!MUST]: - **EA-052** The Manifests SHALL give each Exec Agent, from a Secret, a
+    TEXT[!MUST]:   client certificate and key for `flintlockd` signed by the `flintlockd`
+    TEXT[!MUST]:   client CA, and the certificate authority that verifies its Host's
+    TEXT[!MUST]:   `flintlockd` serving certificate.
 
 SPECIFICATION: [Deployment](docs/requirements/06-deployment.md)
   SECTION: [battery as a sidecar](#battery-sidecar)
@@ -225,7 +232,10 @@ SPECIFICATION: [Deployment](docs/requirements/06-deployment.md)
     TEXT[!MUST]:   volume.
     TEXT[!MUST]: - **DP-004** The Manifests SHALL supply battery's configuration, its Hosts
     TEXT[!MUST]:   included, from an object the Operator may write.
-    TEXT[!MUST]: - **DP-005** The Operator SHALL restart battery through a single mechanism
+    TEXT[!MUST]: - **DP-005** The Manifests SHALL give battery, from a Secret, a client
+    TEXT[!MUST]:   certificate and key for `flintlockd` and the certificate authority that
+    TEXT[!MUST]:   verifies the Hosts' `flintlockd` serving certificates.
+    TEXT[!MUST]: - **DP-006** The Operator SHALL restart battery through a single mechanism
     TEXT[!MUST]:   that the Inventory Controller invokes, and SHALL wait until battery answers
     TEXT[!MUST]:   again before any controller calls it.
 
