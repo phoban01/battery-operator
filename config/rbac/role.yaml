@@ -28,6 +28,7 @@ rules:
 - apiGroups:
   - certificates.k8s.io
   resourceNames:
+  - battery.liquidmetal-x.dev/exec-agent-serving
   - battery.liquidmetal-x.dev/flintlockd-client
   - battery.liquidmetal-x.dev/flintlockd-serving
   resources:

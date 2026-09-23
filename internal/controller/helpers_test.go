@@ -123,6 +123,17 @@ func servingRequest(node, ip string) request {
 	}
 }
 
+// execAgentServingRequest is a correct request for the serving certificate
+// of the Exec Agent on node, whose address is ip.
+func execAgentServingRequest(node, ip string) request {
+	return request{
+		signer: hostcert.ExecAgentServingSigner,
+		uris:   []string{hostcert.ExecAgentID(trustDomain, node)},
+		ips:    []string{ip},
+		usages: servingUsages,
+	}
+}
+
 // clientRequest is a correct client request for the Exec Agent on node.
 func clientRequest(node string) request {
 	return request{
@@ -138,7 +149,11 @@ func clientRequest(node string) request {
 func createCSR(user, node string, r request) string {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	Expect(err).NotTo(HaveOccurred())
-	tmpl := &x509.CertificateRequest{Subject: pkix.Name{CommonName: "test"}, DNSNames: r.dnsNames}
+	// The subject asks for more than the Operator issues (CT-007).
+	tmpl := &x509.CertificateRequest{
+		Subject:  pkix.Name{CommonName: "admin", Organization: []string{"system:masters"}},
+		DNSNames: r.dnsNames,
+	}
 	for _, u := range r.uris {
 		parsed, err := url.Parse(u)
 		Expect(err).NotTo(HaveOccurred())
@@ -209,14 +224,16 @@ func waitForCertificate(name string) *x509.Certificate {
 	return cert
 }
 
-// createNode creates a Node with the internal address ip.
-func createNode(name, ip string) {
+// createNode creates a Node with the internal addresses ips.
+func createNode(name string, ips ...string) {
 	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: name}}
 	Expect(k8sClient.Create(ctx, node)).To(Succeed())
 	node.Status.Addresses = []corev1.NodeAddress{
 		{Type: corev1.NodeHostName, Address: name},
 		{Type: corev1.NodeExternalIP, Address: "203.0.113.1"},
-		{Type: corev1.NodeInternalIP, Address: ip},
+	}
+	for _, ip := range ips {
+		node.Status.Addresses = append(node.Status.Addresses, corev1.NodeAddress{Type: corev1.NodeInternalIP, Address: ip})
 	}
 	Expect(k8sClient.Status().Update(ctx, node)).To(Succeed())
 }

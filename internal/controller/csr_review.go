@@ -49,6 +49,8 @@ const (
 	// ReasonSubjectAltNames: the request's subject alternative names are not
 	// exactly the ones its signer and Node call for.
 	ReasonSubjectAltNames = "SubjectAltNamesMismatch"
+	// ReasonSigner: the signer name is not one of the Operator's.
+	ReasonSigner = "UnknownSignerName"
 )
 
 // denial is why a request is denied.
@@ -61,27 +63,44 @@ func denyf(reason, format string, args ...any) *denial {
 	return &denial{reason: reason, message: fmt.Sprintf(format, args...)}
 }
 
-// signerUsages are the key usages each signer name issues with.
-var signerUsages = map[string][]certificatesv1.KeyUsage{
-	hostcert.ServingSigner: {certificatesv1.UsageDigitalSignature, certificatesv1.UsageKeyEncipherment, certificatesv1.UsageServerAuth},
-	hostcert.ClientSigner:  {certificatesv1.UsageDigitalSignature, certificatesv1.UsageKeyEncipherment, certificatesv1.UsageClientAuth},
+var (
+	serverUsages = []certificatesv1.KeyUsage{
+		certificatesv1.UsageDigitalSignature, certificatesv1.UsageKeyEncipherment, certificatesv1.UsageServerAuth,
+	}
+	clientAuthUsages = []certificatesv1.KeyUsage{
+		certificatesv1.UsageDigitalSignature, certificatesv1.UsageKeyEncipherment, certificatesv1.UsageClientAuth,
+	}
+	// signerUsages are the key usages each signer name issues with.
+	signerUsages = map[string][]certificatesv1.KeyUsage{
+		hostcert.ServingSigner:          serverUsages,
+		hostcert.ExecAgentServingSigner: serverUsages,
+		hostcert.ClientSigner:           clientAuthUsages,
+	}
+)
+
+// reviewed is a request that passed every check.
+type reviewed struct {
+	// req is the parsed PKCS#10 request.
+	req *x509.CertificateRequest
+	// node is the requester's Node name.
+	node string
 }
 
-// review decides whether csr is approved. It returns nil when every check
-// passes, and otherwise why the request is denied. An error means the
-// review could not be made and has to be retried.
-func (r *CertificateSigningRequestReconciler) review(ctx context.Context, csr *certificatesv1.CertificateSigningRequest) (*denial, error) {
+// review runs every check of the request's signer name. It returns the
+// reviewed request when every check passes, and otherwise why the request
+// fails. An error means the review could not be made and has to be retried.
+func (r *CertificateSigningRequestReconciler) review(ctx context.Context, csr *certificatesv1.CertificateSigningRequest) (*reviewed, *denial, error) {
 	//= docs/requirements/09-certificates.md#approval
-	//# If a request for either signer name fails any check, then the
-	//# Operator SHALL deny it with a reason that names the check.
+	//# If a request for any of the three signer names fails any check,
+	//# then the Operator SHALL deny it with a reason that names the check.
 	//
 	//= docs/requirements/09-certificates.md#approval
 	//# The Operator SHALL approve a
 	//# `battery.liquidmetal-x.dev/flintlockd-serving` request only when the
 	//# requester is the Exec Agent's ServiceAccount, the requester's
 	//# `authentication.kubernetes.io/node-name` names an existing Node, and the
-	//# request's subject alternative names are exactly that Node's internal
-	//# address and `spiffe://<trust domain>/flintlock/host/<node name>`.
+	//# request's subject alternative names are exactly one of that Node's
+	//# internal addresses and `spiffe://<trust domain>/flintlock/host/<node name>`.
 	//
 	//= docs/requirements/09-certificates.md#approval
 	//# The Operator SHALL approve a
@@ -90,38 +109,70 @@ func (r *CertificateSigningRequestReconciler) review(ctx context.Context, csr *c
 	//# subject alternative name is
 	//# `spiffe://<trust domain>/flintlock/client/exec-agent/<node name>` for the
 	//# Node in the requester's `authentication.kubernetes.io/node-name`.
+	//
+	//= docs/requirements/09-certificates.md#approval
+	//# The Operator SHALL approve a
+	//# `battery.liquidmetal-x.dev/exec-agent-serving` request only when the
+	//# requester is the Exec Agent's ServiceAccount, the requester's
+	//# `authentication.kubernetes.io/node-name` names an existing Node, and the
+	//# request's subject alternative names are exactly one of that Node's
+	//# internal addresses and
+	//# `spiffe://<trust domain>/flintlock/client/exec-agent/<node name>`.
 	if want := r.Config.execAgentUsername(); csr.Spec.Username != want {
-		return denyf(ReasonRequester, "The requester %q is not the Exec Agent's ServiceAccount %q", csr.Spec.Username, want), nil
+		return nil, denyf(ReasonRequester, "The requester %q is not the Exec Agent's ServiceAccount %q", csr.Spec.Username, want), nil
 	}
 	nodes := csr.Spec.Extra[hostcert.NodeNameExtra]
 	if len(nodes) != 1 || nodes[0] == "" {
-		return denyf(ReasonNodeName, "The requester's %s names no single Node", hostcert.NodeNameExtra), nil
+		return nil, denyf(ReasonNodeName, "The requester's %s names no single Node", hostcert.NodeNameExtra), nil
 	}
 	nodeName := nodes[0]
 
 	req, err := parseRequest(csr.Spec.Request)
 	if err != nil {
-		return denyf(ReasonInvalidRequest, "%v", err), nil
+		return nil, denyf(ReasonInvalidRequest, "%v", err), nil
 	}
 
 	//= docs/requirements/09-certificates.md#approval
 	//# The Operator SHALL approve a request only when its key usages
-	//# are digital signature and key encipherment with server auth for
-	//# `flintlockd-serving`, or with client auth for `flintlockd-client`.
+	//# are digital signature and key encipherment, with server auth for
+	//# `flintlockd-serving` and `exec-agent-serving`, or with client auth for
+	//# `flintlockd-client`.
 	if want := signerUsages[csr.Spec.SignerName]; !sameUsages(csr.Spec.Usages, want) {
-		return denyf(ReasonKeyUsages, "The key usages %v are not %v", csr.Spec.Usages, want), nil
+		return nil, denyf(ReasonKeyUsages, "The key usages %v are not %v", csr.Spec.Usages, want), nil
 	}
 
-	if csr.Spec.SignerName == hostcert.ClientSigner {
-		return checkSANs(req, hostcert.ExecAgentID(r.Config.TrustDomain, nodeName), nil), nil
-	}
-
-	node := &corev1.Node{}
-	if err := r.APIReader.Get(ctx, client.ObjectKey{Name: nodeName}, node); err != nil {
-		if apierrors.IsNotFound(err) {
-			return denyf(ReasonNodeNotFound, "The requester's Node %q does not exist", nodeName), nil
+	var d *denial
+	switch csr.Spec.SignerName {
+	case hostcert.ClientSigner:
+		d = checkSANs(req, hostcert.ExecAgentID(r.Config.TrustDomain, nodeName), nil)
+	case hostcert.ServingSigner, hostcert.ExecAgentServingSigner:
+		addrs, nd, err := r.internalAddresses(ctx, nodeName)
+		if err != nil || nd != nil {
+			return nil, nd, err
 		}
-		return nil, fmt.Errorf("reading Node %s: %w", nodeName, err)
+		uri := hostcert.HostID(r.Config.TrustDomain, nodeName)
+		if csr.Spec.SignerName == hostcert.ExecAgentServingSigner {
+			uri = hostcert.ExecAgentID(r.Config.TrustDomain, nodeName)
+		}
+		d = checkSANs(req, uri, addrs)
+	default:
+		d = denyf(ReasonSigner, "The signer name %q is not the Operator's", csr.Spec.SignerName)
+	}
+	if d != nil {
+		return nil, d, nil
+	}
+	return &reviewed{req: req, node: nodeName}, nil, nil
+}
+
+// internalAddresses returns the internal addresses of the Node name, or why
+// a request for it fails when it does not exist or has none.
+func (r *CertificateSigningRequestReconciler) internalAddresses(ctx context.Context, name string) ([]net.IP, *denial, error) {
+	node := &corev1.Node{}
+	if err := r.APIReader.Get(ctx, client.ObjectKey{Name: name}, node); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, denyf(ReasonNodeNotFound, "The requester's Node %q does not exist", name), nil
+		}
+		return nil, nil, fmt.Errorf("reading Node %s: %w", name, err)
 	}
 	var addrs []net.IP
 	for _, a := range node.Status.Addresses {
@@ -130,9 +181,9 @@ func (r *CertificateSigningRequestReconciler) review(ctx context.Context, csr *c
 		}
 	}
 	if len(addrs) == 0 {
-		return denyf(ReasonSubjectAltNames, "The Node %q has no internal address", nodeName), nil
+		return nil, denyf(ReasonSubjectAltNames, "The Node %q has no internal address", name), nil
 	}
-	return checkSANs(req, hostcert.HostID(r.Config.TrustDomain, nodeName), addrs), nil
+	return addrs, nil, nil
 }
 
 // checkSANs denies req unless its subject alternative names are exactly the

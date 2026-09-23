@@ -15,7 +15,8 @@ limitations under the License.
 */
 
 // Package hostcert names the per-Host certificates of ADR 0003: the signer
-// names their CertificateSigningRequests use, and the SPIFFE IDs they carry.
+// names their CertificateSigningRequests use, and the SPIFFE IDs they carry,
+// the Exec Agent's serving certificate of ADR 0004 included.
 // The Operator, which approves and signs them, and the Exec Agent, which
 // requests them, both use it.
 package hostcert
@@ -32,6 +33,9 @@ const (
 	// ClientSigner is the signer name of an Exec Agent's flintlockd client
 	// certificate.
 	ClientSigner = "battery.liquidmetal-x.dev/flintlockd-client"
+	// ExecAgentServingSigner is the signer name of an Exec Agent's serving
+	// certificate, for its exec API (ADR 0004).
+	ExecAgentServingSigner = "battery.liquidmetal-x.dev/exec-agent-serving"
 
 	// NodeNameExtra is the user info extra in which the API server records
 	// the Node of the pod a ServiceAccount token is bound to.

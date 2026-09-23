@@ -21,6 +21,7 @@ import (
 	"crypto"
 	"crypto/rand"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -77,9 +78,9 @@ func certificateDuration(csr *certificatesv1.CertificateSigningRequest, maxDurat
 
 // sign issues a certificate for req, valid from shortly before now for d or
 // until the CA expires, whichever is sooner, with usages, and returns it PEM
-// encoded. The certificate carries req's subject and subject alternative
-// names, which the review has checked, and none of req's other extensions.
-func (ca *signingCA) sign(req *x509.CertificateRequest, usages []certificatesv1.KeyUsage, now time.Time, d time.Duration) ([]byte, error) {
+// encoded. The certificate carries req's subject alternative names, which
+// the review has checked, the subject CN=node, and nothing else of req.
+func (ca *signingCA) sign(req *x509.CertificateRequest, node string, usages []certificatesv1.KeyUsage, now time.Time, d time.Duration) ([]byte, error) {
 	if !now.Before(ca.cert.NotAfter) {
 		return nil, fmt.Errorf("the CA expired at %s", ca.cert.NotAfter.Format(time.RFC3339))
 	}
@@ -105,9 +106,13 @@ func (ca *signingCA) sign(req *x509.CertificateRequest, usages []certificatesv1.
 		notBefore = ca.cert.NotBefore
 	}
 
+	//= docs/requirements/09-certificates.md#signing
+	//# The Operator SHALL set the subject of every certificate it
+	//# issues to a common name of the requester's Node name, ignoring the
+	//# subject the request asks for.
 	tmpl := &x509.Certificate{
 		SerialNumber:          serial,
-		Subject:               req.Subject,
+		Subject:               pkix.Name{CommonName: node},
 		NotBefore:             notBefore,
 		NotAfter:              notAfter,
 		KeyUsage:              keyUsage,

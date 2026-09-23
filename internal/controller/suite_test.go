@@ -60,6 +60,8 @@ const (
 	trustDomain = "example.test"
 	// maxDuration is the configured maximum certificate duration.
 	maxDuration = 24 * time.Hour
+	// leaderElectionID names the manager's Lease.
+	leaderElectionID = "battery-operator-test"
 )
 
 var (
@@ -114,7 +116,7 @@ var _ = BeforeSuite(func() {
 
 	By("creating the Operator's namespace, its RBAC and the CA Secrets")
 	Expect(k8sClient.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: operatorNamespace}})).To(Succeed())
-	applyOperatorRBAC()
+	applyOperatorRBAC("role.yaml", "leader_election_role.yaml")
 	allowCreatingCSRs()
 	servingCA = newTestCA("serving CA", time.Now().Add(2*time.Hour))
 	clientCA = newTestCA("flintlockd client CA", time.Now().Add(10*365*24*time.Hour))
@@ -127,6 +129,11 @@ var _ = BeforeSuite(func() {
 	mgr, err := ctrl.NewManager(operatorCfg, ctrl.Options{
 		Scheme:  scheme.Scheme,
 		Metrics: metricsserver.Options{BindAddress: "0"},
+		// Leader election runs as in the Manifests, with the leader-election
+		// Role: the controllers start only once the manager holds the Lease.
+		LeaderElection:          true,
+		LeaderElectionNamespace: operatorNamespace,
+		LeaderElectionID:        leaderElectionID,
 	})
 	Expect(err).NotTo(HaveOccurred())
 	signerConfig := SignerConfig{
@@ -159,38 +166,41 @@ var _ = AfterSuite(func() {
 	}, time.Minute, time.Second).Should(Succeed())
 })
 
-// applyOperatorRBAC creates the ClusterRole and the namespaced Role that
-// controller-gen generated into config/rbac/role.yaml, and binds both to the
-// Operator's identity, so that the manager runs with exactly that RBAC.
-func applyOperatorRBAC() {
-	data, err := os.ReadFile(filepath.Join("..", "..", "config", "rbac", "role.yaml"))
-	Expect(err).NotTo(HaveOccurred())
-	for doc := range bytes.SplitSeq(data, []byte("\n---\n")) {
-		if len(bytes.TrimSpace(bytes.TrimPrefix(doc, []byte("---")))) == 0 {
-			continue
-		}
-		u := &unstructured.Unstructured{}
-		Expect(yaml.Unmarshal(doc, &u.Object)).To(Succeed())
-		ref := rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: u.GetKind(), Name: u.GetName()}
-		subjects := []rbacv1.Subject{{Kind: rbacv1.UserKind, APIGroup: rbacv1.GroupName, Name: operatorUser}}
-		switch u.GetKind() {
-		case "ClusterRole":
-			Expect(k8sClient.Create(ctx, u)).To(Succeed())
-			Expect(k8sClient.Create(ctx, &rbacv1.ClusterRoleBinding{
-				ObjectMeta: metav1.ObjectMeta{Name: u.GetName()},
-				RoleRef:    ref,
-				Subjects:   subjects,
-			})).To(Succeed())
-		case "Role":
-			u.SetNamespace(operatorNamespace)
-			Expect(k8sClient.Create(ctx, u)).To(Succeed())
-			Expect(k8sClient.Create(ctx, &rbacv1.RoleBinding{
-				ObjectMeta: metav1.ObjectMeta{Namespace: operatorNamespace, Name: u.GetName()},
-				RoleRef:    ref,
-				Subjects:   subjects,
-			})).To(Succeed())
-		default:
-			Fail("unexpected kind in role.yaml: " + u.GetKind())
+// applyOperatorRBAC creates the ClusterRoles and Roles in the named files of
+// config/rbac, and binds each to the Operator's identity, so that the manager
+// runs with exactly that RBAC: role.yaml, which controller-gen generates from
+// the markers, and the leader-election Role.
+func applyOperatorRBAC(files ...string) {
+	subjects := []rbacv1.Subject{{Kind: rbacv1.UserKind, APIGroup: rbacv1.GroupName, Name: operatorUser}}
+	for _, file := range files {
+		data, err := os.ReadFile(filepath.Join("..", "..", "config", "rbac", file))
+		Expect(err).NotTo(HaveOccurred())
+		for doc := range bytes.SplitSeq(data, []byte("\n---\n")) {
+			u := &unstructured.Unstructured{}
+			Expect(yaml.Unmarshal(doc, &u.Object)).To(Succeed())
+			if len(u.Object) == 0 {
+				continue
+			}
+			ref := rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: u.GetKind(), Name: u.GetName()}
+			switch u.GetKind() {
+			case "ClusterRole":
+				Expect(k8sClient.Create(ctx, u)).To(Succeed())
+				Expect(k8sClient.Create(ctx, &rbacv1.ClusterRoleBinding{
+					ObjectMeta: metav1.ObjectMeta{Name: u.GetName()},
+					RoleRef:    ref,
+					Subjects:   subjects,
+				})).To(Succeed())
+			case "Role":
+				u.SetNamespace(operatorNamespace)
+				Expect(k8sClient.Create(ctx, u)).To(Succeed())
+				Expect(k8sClient.Create(ctx, &rbacv1.RoleBinding{
+					ObjectMeta: metav1.ObjectMeta{Namespace: operatorNamespace, Name: u.GetName()},
+					RoleRef:    ref,
+					Subjects:   subjects,
+				})).To(Succeed())
+			default:
+				Fail("unexpected kind in " + file + ": " + u.GetKind())
+			}
 		}
 	}
 }
