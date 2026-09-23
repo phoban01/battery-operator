@@ -70,8 +70,9 @@ cannot finish its cluster fleet until the real resources exist.
    - **The MicroVMClaim controller** turns a new claim into `ClaimVM`, a
      changed `spec.renewTime` into `Heartbeat`, and deletion into
      `ReleaseVM` under a finalizer.
-   - **The Inventory controller** decides which Nodes are flintlock Hosts
-     and tells battery (see [Consequences](#consequences)).
+   - **The Inventory controller** decides which Nodes are flintlock Hosts,
+     from the Exec Agents' checks (decision 10), and tells battery (see
+     [Consequences](#consequences)).
    - **The Exec Agent** runs on every Host and lets a claim's holder, and
      only its holder, run commands in that claim's MicroVM.
 5. **Code the operator needs moves here from flintlock-runner**, as listed
@@ -94,6 +95,19 @@ cannot finish its cluster fleet until the real resources exist.
    are coupled: the operator runs one replica too, and restarting battery
    restarts a container in the operator's pod. A separate Deployment stays
    possible later, behind mutual TLS.
+8. **Clients create the per-claim token's Secret**, as the proposal has
+   it. The operator never writes Secrets into client namespaces, so it
+   needs no Secret permissions outside its own namespace.
+9. **The Host Image stays in flintlock-runner.** Its bootc image mixes
+   generic prerequisites (flintlockd, the containerd thin pool, KVM) with CI
+   Host Services (buildkitd, a Go proxy, a registry mirror). This project
+   does not ship a Host Image. It states the prerequisites a Host must meet,
+   and checks them (decision 10).
+10. **A Host joins the inventory only after its Exec Agent has checked
+    it.** The Exec Agent scans its Host for the prerequisites and reports
+    the result on its Node. The Inventory controller adds a Node to
+    battery's Hosts only while that report says the Host meets them, and
+    removes it when it stops saying so.
 
 ## Consequences
 
@@ -157,16 +171,7 @@ and the first two are worth raising upstream.
 
 ## Open questions
 
-1. **Who creates the per-claim token's Secret?** The proposal has the
-   client create it. The operator could create it on bind instead, which
-   would put the convention in one place. The operator would then need to
-   create Secrets in every client namespace.
-2. **The Host Image.** flintlock-runner's bootc Host Image mixes generic
-   prerequisites (flintlockd, the containerd thin pool, KVM) with CI Host
-   Services (buildkitd, a Go proxy, a registry mirror). Leaning: it stays in
-   flintlock-runner for now, and this project documents the prerequisites a
-   Host must meet.
-3. **Upstream asks.** Raise a Host registration RPC or configuration reload
+1. **Upstream asks.** Raise a Host registration RPC or configuration reload
    (consequence 1) and an idempotent `ClaimVM` (consequence 2) with battery.
    Neither blocks `v1alpha1`.
 
@@ -175,7 +180,7 @@ and the first two are worth raising upstream.
 | From flintlock-runner | Becomes | Notes |
 |---|---|---|
 | `internal/agent` | the Exec Agent | The provisional claim lookup (`dynclaims.go`, the test resource `claims.test.flintlock-runner.dev`) is replaced by `MicroVMClaim`. The creator-annotation check becomes the four checks in the proposal: token audience, `spec.serviceAccountName`, the token's binding to the claim's Secret, and a Bound, unexpired claim for this VM on this Host. Host Service annotations are CI's and are split out. |
-| `internal/hostcheck` | Exec Agent readiness | As is. |
+| `internal/hostcheck` | the Exec Agent's prerequisite scan | Grows into the check that gates a Host's entry to the inventory (decision 10). |
 | `internal/clock` | shared | As is. |
 | `internal/flintlock/fake` | Exec Agent tests | A fake flintlockd. |
 | `internal/poolmgr/fake`, and the connection, TLS and keepalive parts of `internal/poolmgr` | the controllers' battery client and its tests | A fake battery. |
@@ -183,7 +188,7 @@ and the first two are worth raising upstream.
 | `deploy/agent` | the Exec Agent's manifests | |
 
 **Staying in flintlock-runner:** the executor and scheduler, the GitLab
-protocol, the Host Services, the bootc Host Image for now, and the
+protocol, the Host Services, the bootc Host Image, and the
 `agent-exec` transport. The transport will use a small client package from
 this project, which creates a claim and its token, waits for `Bound`,
 renews, and dials the Exec Agent. That package is what flintlock-runner
