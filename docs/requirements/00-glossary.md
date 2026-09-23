@@ -29,8 +29,15 @@ use. It contains no requirements.
   renew it, reach the Exec Agent and release the claim.
 - **fake battery**: an in-process gRPC server on battery's protos that
   stands in for battery in tests.
-- **fake `flintlockd`**: an in-process gRPC server on flintlock's protos that
-  stands in for `flintlockd` and its MicroVMs in tests.
+- **fake `flintlockd`**: a gRPC server on flintlock's protos that stands in
+  for `flintlockd` and its MicroVMs: in process in the unit tests, and as
+  each Host's `flintlockd` in the e2e suite.
+- **unit tests**: the Go tests run by `make test`, which use fakes and no
+  Kubernetes API server.
+- **e2e suite**: the end-to-end tests in `test/e2e/`, written with
+  [sigs.k8s.io/e2e-framework](https://github.com/kubernetes-sigs/e2e-framework),
+  which create a kind cluster, deploy the Manifests into it and test the
+  system as a user would.
 
 ## Other terms {#terms}
 

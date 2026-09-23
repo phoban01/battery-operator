@@ -141,10 +141,6 @@ func ModuleRoot() string {
 	return filepath.Join(filepath.Dir(file), "..", "..", "..")
 }
 
-//= docs/requirements/08-test-doubles.md#test-environments
-//# The Exec Agent SHALL be tested against envtest serving the
-//# CRDs, and the fake `flintlockd`.
-
 // Start starts kube-apiserver and etcd with this project's CRDs
 // installed, config/exec-agent/rbac.yaml and
 // config/exec-agent/admission-policy.yaml applied unchanged, and the

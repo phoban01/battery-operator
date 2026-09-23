@@ -34,10 +34,30 @@ flintlock-runner, where `10-test-doubles.md` specifies them.
 
 ## Test environments {#test-environments}
 
-- **TD-020** The controllers SHALL be tested against envtest serving the
-  CRDs, and the fake battery.
-- **TD-021** The Exec Agent SHALL be tested against envtest serving the
-  CRDs, and the fake `flintlockd`.
-- **TD-022** The Client Library SHALL be tested through a whole claim's life
-  against envtest, the controllers, the fake battery, the Exec Agent and the
-  fake `flintlockd`.
+- **TD-020** (withdrawn)
+- **TD-021** (withdrawn)
+- **TD-022** (withdrawn)
+- **TD-023** The unit tests SHALL test each subreconciler, and the rest of
+  the logic of the controllers and the Exec Agent, against the fake battery,
+  the fake `flintlockd` and a fake Kubernetes client, without a Kubernetes
+  API server.
+- **TD-024** The e2e suite SHALL run the Operator with battery's `poolmgrd`
+  as its sidecar, the Exec Agent, and the fake `flintlockd` as each Host's
+  `flintlockd`, in a kind cluster, from the Manifests.
+- **TD-025** The e2e suite SHALL test the behaviour that depends on the
+  Kubernetes API server, including CRD validation, admission policies,
+  TokenReview, TokenRequest and `CertificateSigningRequest`s, in the kind
+  cluster.
+- **TD-026** The e2e suite SHALL take a Client Library claim through its
+  whole life: bind, run a command through the Exec Agent, renew, and
+  release.
+- **TD-027** The unit tests and the e2e suite SHALL use envtest only where
+  neither a fake nor the kind cluster can exercise a behaviour, and SHALL
+  say why beside that use.
+
+The tests are in two layers ([ADR 0006](../adr/0006-unit-tests-and-kind-e2e.md)).
+Logic is unit-tested with fakes, which the scope and subreconciler structure
+of CLAUDE.md makes possible, and anything that needs a real API server is
+tested end to end in kind, with the real battery. TD-020 to TD-022 required
+envtest and are withdrawn; the envtest suites that remain are to be moved
+onto the two layers.

@@ -32,11 +32,6 @@ import (
 	"github.com/phoban01/battery-operator/internal/execagent/execagenttest"
 )
 
-//= docs/requirements/08-test-doubles.md#test-environments
-//= type=test
-//# The Exec Agent SHALL be tested against envtest serving the
-//# CRDs, and the fake `flintlockd`.
-
 //= docs/requirements/05-exec-agent.md#authorization
 //= type=test
 //# The Exec Agent SHALL authenticate every request with a

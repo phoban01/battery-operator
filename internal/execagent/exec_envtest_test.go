@@ -41,11 +41,6 @@ import (
 //# response with an exit status frame, sent only after `flintlockd` has
 //# reported the command's exit.
 
-//= docs/requirements/08-test-doubles.md#test-environments
-//= type=test
-//# The Exec Agent SHALL be tested against envtest serving the
-//# CRDs, and the fake `flintlockd`.
-
 // TestExecRelaysACommand runs a command through the agent whose standard
 // input is far larger than one chunk, with a working directory and an
 // environment. flintlockd sees the ExecStart as the caller sent it and the

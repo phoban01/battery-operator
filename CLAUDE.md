@@ -89,13 +89,24 @@ README there has the rules; the short version:
 
 ## Tests
 
-- There is no KVM and no battery daemon in development.
-- Controllers are tested with envtest (`make test`) and the fake battery;
-  the Exec Agent with envtest and the fake `flintlockd`. The fakes arrive
-  with #7 and #15. See
-  [08-test-doubles.md](docs/requirements/08-test-doubles.md).
-- `make test-e2e` needs a throwaway kind cluster; it is not part of the
-  normal loop.
+Two layers ([ADR 0006](docs/adr/0006-unit-tests-and-kind-e2e.md),
+`08-test-doubles.md#test-environments`):
+
+- **Unit tests** (`make test`): subreconcilers and other logic, against the
+  fake battery (`internal/fakebattery`), the fake `flintlockd`
+  (`internal/fakeflintlock`) and controller-runtime's fake client. No API
+  server.
+- **The e2e suite** (`test/e2e`), written with
+  [sigs.k8s.io/e2e-framework](https://github.com/kubernetes-sigs/e2e-framework),
+  not Ginkgo: a kind cluster running the Manifests, with battery's real
+  `poolmgrd` as the Operator's sidecar and the fake `flintlockd` on each
+  Host. Anything that needs an API server is tested here: CRD validation,
+  admission policies, TokenReview, CSRs, RBAC as shipped.
+- **Avoid envtest.** Use it only where neither layer can exercise a
+  behaviour, and say why beside the use (TD-027). Some envtest suites
+  remain from earlier waves; they are being moved.
+- There is no KVM and no battery daemon in development; the fakes and kind
+  stand in.
 
 ## Hard constraints
 
@@ -184,8 +195,9 @@ are small, testable on their own, and composable across controllers (#58).
 - **Controller:** builds the scope, runs the chain in order, patches once,
   and declares its watches and `+kubebuilder:rbac` markers. Nothing else.
 - **Tests:** unit-test each subreconciler against a scope with fakes (the
-  fake battery, a fake client); no envtest is needed for the logic. envtest
-  covers the controller's wiring and what the API server enforces.
+  fake battery, a fake client); no API server is needed for the logic. The
+  e2e suite covers the controller's wiring and what the API server
+  enforces.
 - **Citations** go on the subreconciler that implements the requirement,
   and on its test.
 
