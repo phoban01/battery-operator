@@ -17,15 +17,17 @@
   },
   "env": {
     "GOTOOLCHAIN": "local",
-    "DUVET_VERSION": "0.4.3"
+    "DUVET_VERSION": "0.4.3",
+    "DAGGER_VERSION": "0.21.9"
   },
   "shell": {
     "init_hook": [
       "export GOPATH=\"$DEVBOX_PROJECT_ROOT/.gopath\"",
       "export GOBIN=\"$GOPATH/bin\"",
       "export CARGO_HOME=\"$DEVBOX_PROJECT_ROOT/.devbox/cargo\"",
-      "export PATH=\"$GOBIN:$CARGO_HOME/bin:$PATH\"",
-      "if [ \"$(cat \"$CARGO_HOME/.duvet-version\" 2>/dev/null)\" != \"$DUVET_VERSION\" ]; then echo \"building duvet $DUVET_VERSION (first run only)...\" >&2; cargo install duvet --version \"$DUVET_VERSION\" --locked --quiet && echo \"$DUVET_VERSION\" > \"$CARGO_HOME/.duvet-version\"; fi"
+      "export PATH=\"$DEVBOX_PROJECT_ROOT/.devbox/bin:$GOBIN:$CARGO_HOME/bin:$PATH\"",
+      "if [ \"$(cat \"$CARGO_HOME/.duvet-version\" 2>/dev/null)\" != \"$DUVET_VERSION\" ]; then echo \"building duvet $DUVET_VERSION (first run only)...\" >&2; cargo install duvet --version \"$DUVET_VERSION\" --locked --quiet && echo \"$DUVET_VERSION\" > \"$CARGO_HOME/.duvet-version\"; fi",
+      "\"$DEVBOX_PROJECT_ROOT/hack/install-dagger.sh\" \"$DEVBOX_PROJECT_ROOT/.devbox/bin\""
     ],
     "scripts": {
       "build": "make build",
