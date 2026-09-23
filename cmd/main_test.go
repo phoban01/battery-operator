@@ -58,3 +58,24 @@ func TestManagerRefusesToStartWithoutATrustDomain(t *testing.T) {
 		t.Errorf("the manager did not say why it refused to start; output:\n%s", out)
 	}
 }
+
+func TestManagerRefusesABatteryAddressOffLoopback(t *testing.T) {
+	//= docs/requirements/06-deployment.md#battery-connection
+	//= type=test
+	//# The Operator SHALL call battery over gRPC on the loopback
+	//# address of DP-001, with a deadline on every unary call.
+	cmd := exec.Command(os.Args[0])
+	cmd.Env = append(os.Environ(),
+		runMainEnv+"=1",
+		runMainEnv+"_ARGS=--namespace=battery-operator-system --trust-domain=example.org --battery-address=10.0.0.7:50051",
+		"KUBECONFIG=/nonexistent",
+	)
+	out, err := cmd.CombinedOutput()
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || exit.ExitCode() != 1 {
+		t.Fatalf("the manager exited with %v, want exit status 1; output:\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "not a loopback address") {
+		t.Errorf("the manager did not say why it refused to start; output:\n%s", out)
+	}
+}

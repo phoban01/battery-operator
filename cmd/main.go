@@ -37,6 +37,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	batteryv1alpha1 "github.com/phoban01/battery-operator/api/v1alpha1"
+	"github.com/phoban01/battery-operator/internal/battery"
 	"github.com/phoban01/battery-operator/internal/controller"
 	// +kubebuilder:scaffold:imports
 )
@@ -65,6 +66,7 @@ func main() {
 	var enableHTTP2 bool
 	var tlsOpts []func(*tls.Config)
 	var signerConfig controller.SignerConfig
+	var batteryConfig battery.Config
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
@@ -83,6 +85,7 @@ func main() {
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
 	signerConfig.BindFlags(flag.CommandLine)
+	batteryConfig.BindFlags(flag.CommandLine)
 	opts := zap.Options{
 		Development: true,
 	}
@@ -98,6 +101,15 @@ func main() {
 		setupLog.Error(err, "Refused to start with an invalid certificate signer configuration")
 		os.Exit(1)
 	}
+
+	// The connection is lazy: battery may still be starting, and the
+	// readiness check reports it until battery answers.
+	batteryConn, err := battery.Dial(batteryConfig)
+	if err != nil {
+		setupLog.Error(err, "Refused to start with an invalid battery connection configuration")
+		os.Exit(1)
+	}
+	defer func() { _ = batteryConn.Close() }()
 
 	// if the enable-http2 flag is false (the default), http/2 should be disabled
 	// due to its vulnerabilities. More specifically, disabling http/2 will
@@ -207,6 +219,13 @@ func main() {
 	}
 	if err := mgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {
 		setupLog.Error(err, "Failed to set up ready check")
+		os.Exit(1)
+	}
+	//= docs/requirements/06-deployment.md#battery-connection
+	//# While battery is unavailable, the Operator SHALL report itself
+	//# not ready on its readiness endpoint.
+	if err := mgr.AddReadyzCheck("battery", batteryConn.Check); err != nil {
+		setupLog.Error(err, "Failed to set up the battery ready check")
 		os.Exit(1)
 	}
 
