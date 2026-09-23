@@ -1,0 +1,3 @@
+# devbox: project-local GOPATH and the tools built into the project
+/.gopath/
+/.devbox/
