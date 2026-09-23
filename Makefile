@@ -168,16 +168,18 @@ undeploy: kustomize ## Undeploy controller from the K8s cluster specified in ~/.
 
 DUVET ?= duvet
 
-.PHONY: duvet duvet-ci duvet-open coverage-gate
+.PHONY: duvet duvet-ci duvet-open coverage-gate duvet-models duvet-models-write
 
-## duvet: extract requirements, build the HTML/JSON report and refresh the snapshot
+## duvet: extract requirements, build the HTML/JSON reports and refresh the snapshot
 # --ci false is explicit: duvet turns the snapshot check on by itself when CI
 # is set in the environment, which would make this target reject every PR
 # that adds a citation. The snapshot is checked only by duvet-ci, at
-# milestones.
+# milestones. The second report is the models' (.duvet/models.toml), and the
+# target fails if README's list of modelled requirements is out of date.
 duvet:
 	rm -rf .duvet/requirements
 	$(DUVET) report --ci false
+	DUVET=$(DUVET) hack/duvet-models.sh --check
 
 ## duvet-ci: same as duvet, but fail if .duvet/snapshot.txt would change (milestones only)
 duvet-ci:
@@ -192,6 +194,24 @@ duvet-open: duvet
 coverage-gate:
 	@if [ -z "$(IDS)" ]; then echo 'usage: make coverage-gate IDS="CL-001 CL-002"' >&2; exit 2; fi
 	DUVET=$(DUVET) hack/duvet-coverage.sh $(IDS)
+
+## duvet-models: list every requirement as implemented, tested and modelled
+duvet-models: duvet
+	SKIP_REPORT=1 hack/duvet-models.sh --status
+
+## duvet-models-write: rewrite the list of modelled requirements in docs/requirements/README.md
+duvet-models-write:
+	DUVET=$(DUVET) hack/duvet-models.sh --write
+
+##@ Models
+
+QUINT ?= quint
+
+.PHONY: quint
+
+## quint: typecheck, test and simulate the Quint models in specs/quint, checking their invariants
+quint:
+	QUINT=$(QUINT) hack/quint.sh
 
 ##@ Dependencies
 

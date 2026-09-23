@@ -56,17 +56,36 @@ README there has the rules; the short version:
   unless the PR is a milestone that says `Snapshot: milestone` on its own
   line. Restore it with `git checkout origin/main -- .duvet/snapshot.txt`.
 - Check your IDs locally: `make coverage-gate IDS="CL-001 CL-002"`.
+- The Quint models under `specs/quint/` cite requirements with model
+  citations: `//@=` and `//@#`, and no `type=` line. They show a
+  requirement as *modelled* and never count for the coverage gate, so a
+  modelled ID still needs its Go implementation and test citations. Never
+  use `type=test` or `type=implication` for a model. `make duvet` fails if
+  the list of modelled requirements in `docs/requirements/README.md` is out
+  of date; `make duvet-models-write` rewrites it.
+
+## Models
+
+- `specs/quint/` holds [Quint](https://quint-lang.org) models of the
+  Operator's systems, one module per system, with the shared types in
+  `types.qnt`. Its README says what each model covers.
+- `make quint` (CI: `dagger call quint`) typechecks and tests them, and
+  simulates them against their invariants.
+- A PR that changes a behaviour a model covers changes the model too.
+- If a model disagrees with the requirements or the code, file an issue.
+  Don't change the model to hide the disagreement.
 
 ## Tooling
 
 - Work inside devbox: `devbox shell`, or `devbox run -- <cmd>`. It pins Go,
-  kubebuilder, kubectl, kind and duvet.
+  kubebuilder, kubectl, kind, duvet and quint.
 - `GOPATH` is the project-local `.gopath/`, and `GOTOOLCHAIN=local`.
 - Kubebuilder's Makefile pins controller-gen, setup-envtest, golangci-lint
   and kustomize, and installs them into `bin/` on first use.
-- Main targets: `make build`, `make test`, `make lint`, `make duvet`.
+- Main targets: `make build`, `make test`, `make lint`, `make duvet`,
+  `make quint`.
 - CI is a Dagger module (`.dagger/`): run the same checks locally with
-  `devbox run -- dagger call <lint|test|build|check-generated|requirements>`.
+  `devbox run -- dagger call <lint|test|build|check-generated|requirements|quint>`.
 
 ## Tests
 
@@ -105,8 +124,9 @@ Now:
 | `config/` | Kustomize Manifests, from kubebuilder |
 | `test/e2e/`, `test/utils/` | kubebuilder's e2e tests, against kind |
 | `docs/adr/` | Architecture decision records |
-| `docs/requirements/` | EARS requirements, `.duvet/` their config and snapshot |
-| `hack/` | Boilerplate header, `duvet-coverage.sh` |
+| `docs/requirements/` | EARS requirements, `.duvet/` their configs (code, and models) and snapshot |
+| `hack/` | Boilerplate header, `duvet-coverage.sh`, `duvet-models.sh`, `quint.sh` |
+| `specs/quint/` | Quint models and their shared types |
 
 Where the issues put new things:
 

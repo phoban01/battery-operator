@@ -1,4 +1,5 @@
-// CI for battery-operator: lint, test, build, generated files, requirements and images
+// CI for battery-operator: lint, test, build, generated files, requirements,
+// images and the Quint models
 //
 // The checks run the repository's own make targets in a container with the
 // Go that go.mod pins, so CI and a local `dagger call` use the same Makefile
@@ -15,6 +16,7 @@
 //	dagger call check-generated
 //	dagger call requirements --owns=none
 //	dagger call duvet-report export --path=.duvet/reports
+//	dagger call quint
 //	dagger call images export --path=dist/images
 //	dagger call operator-image export-image --name=battery-operator:dev
 //	dagger call publish --repository=ttl.sh/battery-operator-dev --tags=1h
@@ -50,6 +52,11 @@ const (
 	nonroot = "65532:65532"
 	// duvetVersion matches DUVET_VERSION in devbox.json.
 	duvetVersion = "0.4.3"
+	// quintVersion matches quint in devbox.json, and quintEvaluatorVersion is
+	// the Rust evaluator that quint release uses for `quint run`.
+	quintVersion          = "0.32.0"
+	quintEvaluatorVersion = "0.6.0"
+	quintHome             = "/opt/quint"
 
 	src = "/src"
 
@@ -176,6 +183,49 @@ func (m *BatteryOperator) Requirements(
 		WithExec(append([]string{"hack/duvet-coverage.sh"}, ids...)).
 		Stdout(ctx)
 }
+
+// Quint typechecks, tests and simulates the Quint models in specs/quint
+// through `make quint`, checking every model's invariants.
+func (m *BatteryOperator) Quint(ctx context.Context) (string, error) {
+	return dag.Container().
+		From(goImage).
+		WithExec([]string{"sh", "-ec", installQuint}).
+		WithEnvVariable("QUINT_HOME", quintHome).
+		WithDirectory(src, m.Source).
+		WithWorkdir(src).
+		WithExec([]string{"make", "quint"}).
+		Stdout(ctx)
+}
+
+// installQuint installs quint's release binary and the Rust evaluator that
+// `quint run` uses, both checked against their release checksums. quint
+// would otherwise download the evaluator itself, unchecked, on first use;
+// it looks for it under $QUINT_HOME.
+var installQuint = fmt.Sprintf(`
+case "$(dpkg --print-architecture)" in
+  amd64) arch=amd64; triple=x86_64-unknown-linux-gnu; quint_sum=%[3]s; eval_sum=%[4]s ;;
+  arm64) arch=arm64; triple=aarch64-unknown-linux-gnu; quint_sum=%[5]s; eval_sum=%[6]s ;;
+  *) echo "no quint release for $(dpkg --print-architecture)" >&2; exit 1 ;;
+esac
+base=https://github.com/informalsystems/quint/releases/download
+curl -fsSLo /usr/local/bin/quint "$base/v%[1]s/quint-linux-$arch"
+echo "$quint_sum  /usr/local/bin/quint" | sha256sum -c -
+chmod +x /usr/local/bin/quint
+curl -fsSLo /tmp/evaluator.tar.gz "$base/evaluator/v%[2]s/quint_evaluator-$triple.tar.gz"
+echo "$eval_sum  /tmp/evaluator.tar.gz" | sha256sum -c -
+mkdir -p %[7]s/rust-evaluator-v%[2]s
+tar -xzf /tmp/evaluator.tar.gz -C %[7]s/rust-evaluator-v%[2]s
+rm /tmp/evaluator.tar.gz
+`,
+	quintVersion, quintEvaluatorVersion,
+	// sha256 of quint-linux-amd64 and quint_evaluator-x86_64-unknown-linux-gnu.tar.gz
+	"939b64095b706017f2f202c6f99c860c40be7c31bddc2b98557316e50f42cd7f",
+	"61755a09d5052d93a4e75e840059edfd0d3674aeda164b9d2464be3d6e21b1c2",
+	// sha256 of quint-linux-arm64 and quint_evaluator-aarch64-unknown-linux-gnu.tar.gz
+	"5b23e6f7e6f6b9c870c5ea7d38675e8fc709f4578bcf4a236918414157267a35",
+	"07e5ec9c756feba0db59987c9f90456dacfecf75f64f111b791b66c770a293d2",
+	quintHome,
+)
 
 // OperatorImage builds the Operator's image, which runs /manager, for one
 // platform.
