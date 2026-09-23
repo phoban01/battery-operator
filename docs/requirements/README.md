@@ -110,6 +110,65 @@ implication does not count as a citation for the coverage gate. The quoted
 text after `//#` has to be a contiguous substring of the section; whitespace
 differences are tolerated.
 
+## Model citations
+
+The Quint models in [specs/quint/](../../specs/quint/README.md) cite the
+requirements they model. A model citation is its own annotation type:
+it shows a requirement as *modelled*, and it never counts as an
+implementation citation or a test citation. Go tests stay required
+whatever a model checks.
+
+A model citation uses `//@=` and `//@#` in place of `//=` and `//#`, and
+takes no `type=` line:
+
+```quint
+//@= docs/requirements/02-claims.md#release
+//@# When a claim that has a lease id is deleted, the Claim
+//@# Controller SHALL call battery's `ReleaseVM` for the Lease, and SHALL remove
+//@# the finalizer only once battery has released the Lease or reported it
+//@# unknown.
+def canRelease(c: ClaimName): bool = and {
+```
+
+Put it on the step or invariant that models the requirement. The quote
+follows the same rules as any other citation.
+
+duvet 0.4.3 has a fixed set of annotation types (`citation`, `test`,
+`implication`, `exception`, `todo`) and no custom ones, so the model type
+is built from a second duvet configuration:
+
+- [.duvet/models.toml](../../.duvet/models.toml) scans only
+  `specs/**/*.qnt`, for the `//@=` prefix, and writes its own report,
+  `.duvet/reports/models.json` and `models.html`.
+- `.duvet/config.toml` never scans the models, and the coverage gate reads
+  only its report. So a model citation can't satisfy the gate, and it
+  doesn't show in the main report or the snapshot.
+- [hack/duvet-models.sh](../../hack/duvet-models.sh) fails on a model
+  citation that has a `type=` line. It also prints each requirement as
+  implemented, tested and modelled (`make duvet-models`), and keeps the
+  list below in step with the models.
+
+`make duvet` runs both configurations, and fails if the list below is out
+of date. `make duvet-models-write` rewrites it. `type=test` and
+`type=implication` are never used for models.
+
+### Modelled requirements
+
+<!-- BEGIN modelled: written by hack/duvet-models.sh --write; do not edit -->
+| ID | Model |
+|----|-------|
+| CL-001 | `specs/quint/claims.qnt` |
+| CL-002 | `specs/quint/claims.qnt` |
+| CL-003 | `specs/quint/claims.qnt` |
+| CL-010 | `specs/quint/claims.qnt` |
+| CL-011 | `specs/quint/claims.qnt` |
+| CL-012 | `specs/quint/claims.qnt` |
+| CL-020 | `specs/quint/claims.qnt` |
+| CL-021 | `specs/quint/claims.qnt` |
+| CL-030 | `specs/quint/claims.qnt` |
+| CL-031 | `specs/quint/claims.qnt` |
+<!-- END modelled -->
+
 ## The coverage gate
 
 Every PR says which requirements it implements, on a line of its own in the

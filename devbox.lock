@@ -637,6 +637,54 @@
         }
       }
     },
+    "quint@0.32.0": {
+      "last_modified": "2026-08-27T07:16:00Z",
+      "resolved": "github:NixOS/nixpkgs/c27cdad491a991b11ed731760aa2ef8db0cb0410#quint",
+      "source": "devbox-search",
+      "version": "0.32.0",
+      "systems": {
+        "aarch64-darwin": {
+          "outputs": [
+            {
+              "name": "out",
+              "path": "/nix/store/cma2isc46lrmfp65s0jg8z57gjvpzn6f-quint-0.32.0",
+              "default": true
+            }
+          ],
+          "store_path": "/nix/store/cma2isc46lrmfp65s0jg8z57gjvpzn6f-quint-0.32.0"
+        },
+        "aarch64-linux": {
+          "outputs": [
+            {
+              "name": "out",
+              "path": "/nix/store/1c2j7hz74lrnx5p66j5mzv45b4wcahcv-quint-0.32.0",
+              "default": true
+            }
+          ],
+          "store_path": "/nix/store/1c2j7hz74lrnx5p66j5mzv45b4wcahcv-quint-0.32.0"
+        },
+        "x86_64-darwin": {
+          "outputs": [
+            {
+              "name": "out",
+              "path": "/nix/store/na3qgjrspkjyrgixvc4zc0ccsk37nrlw-quint-0.32.0",
+              "default": true
+            }
+          ],
+          "store_path": "/nix/store/na3qgjrspkjyrgixvc4zc0ccsk37nrlw-quint-0.32.0"
+        },
+        "x86_64-linux": {
+          "outputs": [
+            {
+              "name": "out",
+              "path": "/nix/store/s90yin0j1q75gr8iyr11qxqzbjdssv25-quint-0.32.0",
+              "default": true
+            }
+          ],
+          "store_path": "/nix/store/s90yin0j1q75gr8iyr11qxqzbjdssv25-quint-0.32.0"
+        }
+      }
+    },
     "rustc@latest": {
       "last_modified": "2026-08-27T07:16:00Z",
       "plugin_version": "0.0.1",

@@ -77,6 +77,19 @@ jobs:
           version: ${{ env.DAGGER_VERSION }}
           call: check-generated
 
+  # The Quint models (specs/quint). Not a required check; the maintainer
+  # makes it one in the branch protection when ready.
+  quint:
+    name: quint
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: dagger/dagger-for-github@27b130bf0f79a7f6fbbbe0fbca6760dc9bb40a77 # v8.4.1
+        with:
+          version: ${{ env.DAGGER_VERSION }}
+          call: quint
+
   requirements:
     name: requirements
     runs-on: ubuntu-latest
@@ -119,6 +132,8 @@ jobs:
           path: |
             .duvet/reports/report.html
             .duvet/reports/report.json
+            .duvet/reports/models.html
+            .duvet/reports/models.json
           if-no-files-found: error
       - name: coverage gate over the IDs the PR owns
         if: github.event_name == 'pull_request'

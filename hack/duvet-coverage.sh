@@ -11,10 +11,15 @@
 # listing every identifier that lacks an implementation citation or a test
 # citation. Set DUVET to point at a duvet binary, and SKIP_REPORT=1 to reuse
 # an existing report.json.
+#
+# Model citations (docs/requirements/README.md, "Model citations") never
+# count: the gate reads report.json only. When .duvet/reports/models.json
+# exists, an ID the Quint models cite is marked "modelled" in the output.
 set -euo pipefail
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 report="$root/.duvet/reports/report.json"
+models="$root/.duvet/reports/models.json"
 : "${DUVET:=duvet}"
 
 if [ "$#" -eq 0 ]; then
@@ -29,6 +34,8 @@ if [ "${SKIP_REPORT:-0}" != 1 ]; then
     echo "duvet report failed" >&2
     exit 2
   fi
+  # Only for the "modelled" marks; make duvet is what checks the models report.
+  (cd "$root" && "$DUVET" report --config-path .duvet/models.toml --ci false >/dev/null 2>&1) || rm -f "$models"
 fi
 [ -f "$report" ] || { echo "missing $report" >&2; exit 2; }
 
@@ -62,6 +69,18 @@ for arg in "$@"; do
   done
 done
 
+# IDs the models cite, from the models report; never part of the verdict.
+modelled=""
+if [ -f "$models" ]; then
+  modelled=$(jq -r '
+    . as $r
+    | .annotations | to_entries[]
+    | select(.value.type == "SPEC")
+    | select(($r.statuses[.key | tostring].citation // 0) > 0)
+    | .value.comment // "" | capture("^- \\*\\*(?<id>[A-Z]+-[0-9]+)\\*\\*") | .id' "$models")
+fi
+mark() { grep -qxF "$1" <<<"$modelled" && echo " (modelled)" || true; }
+
 failed=0
 for id in "${ids[@]}"; do
   idx=$(lookup "$id")
@@ -78,10 +97,10 @@ for id in "${ids[@]}"; do
   if [ "${#missing[@]}" -gt 0 ]; then
     note=""
     [ "$todo" -gt 0 ] && note=" (only a todo annotation)"
-    echo "FAIL $id: missing $(IFS="+"; echo "${missing[*]}" | sed "s/+/ and /")$note" >&2
+    echo "FAIL $id: missing $(IFS="+"; echo "${missing[*]}" | sed "s/+/ and /")$note$(mark "$id")" >&2
     failed=1
   else
-    echo "ok   $id"
+    echo "ok   $id$(mark "$id")"
   fi
 done
 
