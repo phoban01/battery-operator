@@ -104,7 +104,7 @@ func TestEveryEventTypeIsEmittedAtItsTransition(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ClaimVM: %v", err)
 	}
-	collect(poolmgrv1.EventType_VM_CLAIMED)
+	secondClaimed := eventOfType(t, collect(poolmgrv1.EventType_VM_CLAIMED), poolmgrv1.EventType_VM_CLAIMED)
 	h.advance(25 * time.Second)
 	expiring := eventOfType(t, collect(poolmgrv1.EventType_VM_EXPIRING_SOON), poolmgrv1.EventType_VM_EXPIRING_SOON)
 	if expiring.VMUID != second.VMUID {
@@ -117,6 +117,14 @@ func TestEveryEventTypeIsEmittedAtItsTransition(t *testing.T) {
 	expired := eventOfType(t, collect(poolmgrv1.EventType_VM_DELETED_DUE_TO_EXPIRY), poolmgrv1.EventType_VM_DELETED_DUE_TO_EXPIRY)
 	if expired.VMUID != second.VMUID {
 		t.Fatalf("VM_DELETED_DUE_TO_EXPIRY names %q, want the expired microvm %q", expired.VMUID, second.VMUID)
+	}
+
+	// The next claim needs the MicroVM that replaced the second claim's to be
+	// available. Its VM_AVAILABLE may already have arrived while the test
+	// waited for the expiry, or it may still be provisioning; claiming before
+	// it arrives finds the Pool empty (#50).
+	if !hasEventAfter(all, poolmgrv1.EventType_VM_AVAILABLE, secondClaimed.ID) {
+		collect(poolmgrv1.EventType_VM_AVAILABLE)
 	}
 
 	// A create hook that fails on the MicroVM the next claim replaces: it
@@ -229,4 +237,15 @@ func TestSubscribeFilterAndReplay(t *testing.T) {
 	if e.Type != poolmgrv1.EventType_VM_CLAIMED || e.VMUID != claim.VMUID {
 		t.Fatalf("next filtered event = %s for %q, want VM_CLAIMED for %q", e.Type, e.VMUID, claim.VMUID)
 	}
+}
+
+// hasEventAfter reports whether events holds one of type typ delivered after
+// the event with id.
+func hasEventAfter(events []*event, typ poolmgrv1.EventType, id int64) bool {
+	for _, e := range events {
+		if e.Type == typ && e.ID > id {
+			return true
+		}
+	}
+	return false
 }
