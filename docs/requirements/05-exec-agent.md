@@ -18,6 +18,8 @@ there map to the ones here in the order they appear.
   `microvmexec.services.api.v1alpha1` service, together with the
   `ServerInfo` and `GetMicroVM` calls of its `microvm.services.api.v1alpha1`
   service.
+- **EA-004** The Manifests SHALL run the Exec Agent on every Node labelled
+  `battery.liquidmetal-x.dev/host=true`, and on no other Node.
 
 `flintlockd` has one endpoint, which battery also reaches, so it serves on
 the Host's internal address with client certificate validation, and the
@@ -98,6 +100,8 @@ that answers nothing.
   `battery.liquidmetal-x.dev/exec-agent-address`.
 - **EA-035** The Exec Agent SHALL publish in its Node report the address
   at which battery reaches the Host's `flintlockd`.
+- **EA-036** The Exec Agent SHALL read not ready reasons from the directory
+  its configuration names.
 
 EA-030 to EA-032 are the Host prerequisites of the glossary, checked on the
 Host itself, since this project ships no Host Image (decision 9). EA-033 is
@@ -112,6 +116,8 @@ battery reaches `flintlockd` at (IN-003).
 - **EA-040** While claims are Bound on its Host, the Exec Agent SHALL hold an
   eviction-based drain of the Host's Node open, and SHALL let the drain
   complete when none remain or when the configured drain timeout elapses.
+- **EA-041** The Exec Agent SHALL hold a drain open only with a guard pod
+  and a PodDisruptionBudget of its own, both bound to its own Host's Node.
 
 ## Identity {#identity}
 
@@ -121,6 +127,9 @@ battery reaches `flintlockd` at (IN-003).
   lets an Exec Agent's identity change only the annotations of its own
   Host's Node under the prefix `battery.liquidmetal-x.dev/`, and nothing
   else of any Node.
+- **EA-053** The ValidatingAdmissionPolicy of EA-051 SHALL let an Exec
+  Agent's identity create and delete guard pods and PodDisruptionBudgets
+  only for its own Host's Node.
 
 EA-051 is what makes a Node report trustworthy: an agent can speak only for
 its own Host, so a compromised Host cannot mark another Host ready or point
@@ -153,8 +162,15 @@ claims at itself.
 - **EA-067** The Manifests SHALL grant the Exec Agent's identity permission
   to create and read `CertificateSigningRequest`s, and no other permission
   on them.
+- **EA-068** The Exec Agent SHALL obtain the serving certificate of its exec
+  API with a `CertificateSigningRequest` for the signer
+  `battery.liquidmetal-x.dev/exec-agent-serving`, for a key generated on the
+  Host, that names the Host's internal address and
+  `spiffe://<trust domain>/flintlock/client/exec-agent/<node name>`, and
+  nothing else.
 
-This is [ADR 0003](../adr/0003-host-certificates-through-kubernetes-csrs.md).
+This is [ADR 0003](../adr/0003-host-certificates-through-kubernetes-csrs.md)
+and, for EA-068, [ADR 0004](../adr/0004-exec-agent-serving-certificate.md).
 The Operator approves a request only when it names the requester's own Node
 (`09-certificates.md`), so EA-060 to EA-062 give each Host certificates for
 itself and no other. The Host Image starts `flintlockd` once the files of

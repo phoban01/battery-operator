@@ -398,6 +398,11 @@ type HookFailure struct {
 	Remaining int
 }
 
+//= docs/requirements/08-test-doubles.md#fake-battery
+//# The fake battery SHALL let a test make it unavailable for a
+//# period, delay its answers to `ClaimVM`, refuse heartbeats, fail a Pool's
+//# hooks, and drop its `Events` streams.
+
 // Faults are the fake's runtime fault switches. All zero is a healthy
 // battery. They are read per request and may change while the fake runs.
 type Faults struct {

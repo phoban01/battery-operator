@@ -276,6 +276,11 @@ func (s *Server) listen() (net.Listener, error) {
 	return lis, nil
 }
 
+//= docs/requirements/08-test-doubles.md#fake-flintlockd
+//# Where a test gives it a client certificate authority, the fake
+//# `flintlockd` SHALL serve over TLS and refuse a client whose certificate
+//# that authority did not sign.
+
 // serverCredentials builds Serve's transport credentials from Config.TLS:
 // plaintext when unset, otherwise the server certificate, and client
 // certificate verification when ClientCAFile is set too.

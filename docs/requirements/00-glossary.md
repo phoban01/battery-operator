@@ -38,6 +38,9 @@ use. It contains no requirements.
   ([liquidmetal-dev/battery](https://github.com/liquidmetal-dev/battery)),
   v0.1.0, run unchanged as a sidecar of the Operator. Its gRPC services are
   `PoolAdmin`, `Lease` and `Events`.
+- **local `flintlockd`**: the `flintlockd` on the Exec Agent's own Host,
+  which it reaches on one of that Host's addresses over mutual TLS
+  (ADR 0002).
 - **Host**: a Kubernetes Node that runs `flintlockd` and an Exec Agent and
   that the Inventory Controller has given to battery. The Host's name is the
   Node's name.
