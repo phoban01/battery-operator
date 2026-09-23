@@ -19,14 +19,15 @@ The design was discussed in
 This project starts outside battery so it can be proven without disturbing
 battery itself, with the aim of being adopted by liquidmetal-dev if it works.
 
-**Status:** design. Nothing is built yet. Start with the
+**Status:** design. The project is scaffolded with kubebuilder, with no
+APIs or controllers yet. Start with the
 [architecture decision records](docs/adr/), then the
 [requirements](docs/requirements/), which every change is traced to.
 
 ## Development
 
 Everything runs in a [devbox](https://www.jetify.com/devbox) shell, which
-pins Go and every tool this project uses:
+pins Go, kubebuilder and the other tools this project uses:
 
 ```sh
 devbox shell            # or: devbox run <script>
@@ -36,6 +37,9 @@ Inside it:
 
 - `GOPATH` is `.gopath/` in the checkout, with its `bin` on `PATH`, and
   `GOTOOLCHAIN=local`, so the pinned Go is the one that runs.
+- The Makefile pins controller-gen, setup-envtest, golangci-lint and
+  kustomize, as kubebuilder scaffolds it, and installs them into `bin/` on
+  first use.
 - duvet, which traces requirements to code, is built into `.devbox/cargo`
   on the first shell entry. That takes a few minutes, once.
 - `devbox run build`, `test`, `lint` and `duvet` run the make targets, and
