@@ -30,7 +30,8 @@ The design these requirements specify is recorded in
 Use exactly one of these shapes per requirement. The subject is always one of
 the system names defined in the glossary: the Operator, the CRDs, the Claim
 Controller, the Pool Controller, the Inventory Controller, the Exec Agent, the
-Manifests, the Client Library, the fake battery, the fake `flintlockd`.
+Manifests, the Client Library, the fake battery, the fake `flintlockd`, the
+unit tests, the e2e suite.
 
 | Pattern | Shape |
 |---------|-------|
