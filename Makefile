@@ -262,6 +262,10 @@ setup-envtest: envtest ## Download the binaries required for ENVTEST in the loca
 .PHONY: envtest
 envtest: $(ENVTEST) ## Download setup-envtest locally if necessary.
 $(ENVTEST): $(LOCALBIN)
+	@# Once the build has put controller-runtime in the module cache, go install
+	@# looks for setup-envtest in that module rather than in its own, and fails.
+	@# Downloading setup-envtest's module first avoids that.
+	go mod download sigs.k8s.io/controller-runtime/tools/setup-envtest@$(ENVTEST_VERSION)
 	$(call go-install-tool,$(ENVTEST),sigs.k8s.io/controller-runtime/tools/setup-envtest,$(ENVTEST_VERSION))
 
 .PHONY: golangci-lint
