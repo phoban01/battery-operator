@@ -1,0 +1,31 @@
+apiVersion: battery.liquidmetal-x.dev/v1alpha1
+kind: Pool
+metadata:
+  labels:
+    app.kubernetes.io/name: battery-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: pool-sample
+spec:
+  size: 4
+  template:
+    vcpu: 2
+    memoryInMb: 4096
+    kernel:
+      image: ghcr.io/example/kernel:6.6
+      filename: boot/vmlinux
+      cmdline:
+        console: ttyS0
+        reboot: k
+    rootVolume:
+      containerSource: ghcr.io/example/ubuntu:24.04
+  placement:
+    nodeSelector:
+      kubernetes.io/arch: amd64
+  replenishment:
+    type: ImmediateOnLease
+  hooks:
+    create: ["true"]
+    failurePolicy: DeleteAndReplace
+  lease:
+    heartbeatInterval: 10s
+    expiryThreshold: 30s

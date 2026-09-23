@@ -25,4 +25,7 @@ resources:
 - microvmclaim_admin_role.yaml
 - microvmclaim_editor_role.yaml
 - microvmclaim_viewer_role.yaml
+- pool_admin_role.yaml
+- pool_editor_role.yaml
+- pool_viewer_role.yaml
 
