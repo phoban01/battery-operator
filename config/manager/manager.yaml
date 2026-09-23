@@ -65,6 +65,10 @@ spec:
           - --health-probe-bind-address=:8081
           # The trust domain of the Hosts' certificates: set it to your own.
           - --trust-domain=cluster.local
+          # The Exec Agent's ServiceAccount, as config/exec-agent names it:
+          # only its requests are approved. kustomize's namePrefix does not
+          # reach flags, so the name is written out.
+          - --exec-agent-service-account=battery-operator-exec-agent
         env:
         - name: POD_NAMESPACE
           valueFrom:

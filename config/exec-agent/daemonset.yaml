@@ -9,12 +9,17 @@
 # every Node that meets the Host prerequisites. The Inventory Controller
 # then admits a Node only once its Node report says it is ready (IN-001).
 #
-# Certificates, until #31: the agent reads its client certificate for
-# flintlockd, its key, flintlockd's serving CA, and its own serving
-# certificate and key from files on the Host, under /etc/battery/exec-agent,
-# which have to be readable by the image's user, 65532.
-# #31 has the agent request its flintlockd certificates itself through
-# CertificateSigningRequests (ADR 0003) and keep its client key in memory.
+# Certificates (ADR 0003, ADR 0004): the agent requests its Host's
+# certificates itself, through CertificateSigningRequests the Operator
+# signs, with keys it generates on the Host. Its own client certificate and
+# serving certificate stay in memory. flintlockd's serving certificate, its
+# key and the client CA bundle go to /etc/battery/flintlockd on the Host
+# (tls.crt, tls.key, client-ca.crt; tls.crt is written last), where the
+# Host Image starts flintlockd once they exist and restarts it when they
+# change. The Host Image creates that directory, writable by the image's
+# user, 65532, and labelled so that the agent may write it and flintlockd
+# read it (ADR 0003, consequence 7). --trust-domain has to be the
+# Operator's.
 #
 # Host prerequisites (docs/host-prerequisites.md): the agent checks that the
 # Host has a KVM device (EA-031), listed in sysfs at /sys/class/misc/kvm and
@@ -63,15 +68,15 @@ spec:
           command: ["/exec-agent"]
           args:
             - --flintlockd=$(HOST_IP):9090
-            - --flintlockd-cert-file=/etc/battery/exec-agent/flintlockd-client.crt
-            - --flintlockd-key-file=/etc/battery/exec-agent/flintlockd-client.key
-            - --flintlockd-ca-file=/etc/battery/exec-agent/flintlockd-ca.crt
-            - --tls-cert-file=/etc/battery/exec-agent/tls.crt
-            - --tls-key-file=/etc/battery/exec-agent/tls.key
             - --port=10270
             - --kvm-device=/host/dev/kvm
             # containerd's devmapper pool_name on the Host.
             - --thin-pool=flintlock-thinpool
+            # The Operator's trust domain: set it to your own.
+            - --trust-domain=cluster.local
+            - --flintlockd-cert-dir=/etc/battery/flintlockd
+            # The Operator's CA bundle ConfigMap is in the agent's own
+            # namespace, $POD_NAMESPACE, under its default name.
           env:
             # The Host's Node, whose Node report the agent keeps (EA-034)
             # and whose name its identity has to carry (EA-050).
@@ -106,9 +111,9 @@ spec:
             limits:
               memory: 512Mi
           volumeMounts:
-            - name: certificates
-              mountPath: /etc/battery/exec-agent
-              readOnly: true
+            # EA-064: flintlockd's certificate, key and client CA bundle.
+            - name: flintlockd-certificates
+              mountPath: /etc/battery/flintlockd
             # EA-033: the Host Image's units write their not ready reasons
             # here; the agent only reads them.
             - name: not-ready
@@ -119,9 +124,9 @@ spec:
               mountPath: /host/dev
               readOnly: true
       volumes:
-        - name: certificates
+        - name: flintlockd-certificates
           hostPath:
-            path: /etc/battery/exec-agent
+            path: /etc/battery/flintlockd
             type: Directory
         - name: not-ready
           hostPath:

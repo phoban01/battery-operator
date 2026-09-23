@@ -40,6 +40,14 @@ const (
 	// NodeNameExtra is the user info extra in which the API server records
 	// the Node of the pod a ServiceAccount token is bound to.
 	NodeNameExtra = "authentication.kubernetes.io/node-name"
+
+	// CABundleConfigMap is the default name of the ConfigMap, in the
+	// Operator's namespace, in which the Operator publishes the CA
+	// certificates. ServingCAKey holds the serving CA's certificates, and
+	// ClientCAKey the flintlockd client CA's.
+	CABundleConfigMap = "flintlockd-ca"
+	ServingCAKey      = "serving-ca.crt"
+	ClientCAKey       = "client-ca.crt"
 )
 
 // trustDomainPattern is the SPIFFE trust domain name grammar: lowercase

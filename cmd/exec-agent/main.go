@@ -33,6 +33,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
 	"github.com/phoban01/battery-operator/internal/execagent"
+	"github.com/phoban01/battery-operator/internal/hostcert"
 	"github.com/phoban01/battery-operator/internal/hostcheck"
 )
 
@@ -46,17 +47,19 @@ func main() {
 		"The name of this Host's Node. Defaults to $NODE_NAME, which the DaemonSet sets from the downward API.")
 	flag.StringVar(&cfg.Flintlockd, "flintlockd", "",
 		"The endpoint of this Host's flintlockd, an IP address of this Host and a port.")
-	flag.StringVar(&cfg.FlintlockdTLS.CertFile, "flintlockd-cert-file", "",
-		"The client certificate the agent presents to flintlockd.")
-	flag.StringVar(&cfg.FlintlockdTLS.KeyFile, "flintlockd-key-file", "", "The key of --flintlockd-cert-file.")
-	flag.StringVar(&cfg.FlintlockdTLS.CAFile, "flintlockd-ca-file", "",
-		"The CA that signed flintlockd's serving certificate.")
 	flag.StringVar(&cfg.Address, "address", "",
 		"The address to serve the exec API on. Empty is the Host's internal address, read from its Node.")
 	flag.IntVar(&cfg.Port, "port", execagent.DefaultPort, "The port of the exec API.")
-	flag.StringVar(&cfg.TLS.CertFile, "tls-cert-file", "",
-		"The exec API's serving certificate, which has to name the address it is served on.")
-	flag.StringVar(&cfg.TLS.KeyFile, "tls-key-file", "", "The key of --tls-cert-file.")
+	flag.StringVar(&cfg.TrustDomain, "trust-domain", os.Getenv("TRUST_DOMAIN"),
+		"The SPIFFE trust domain of the Host's certificates, the Operator's. Defaults to $TRUST_DOMAIN. Required.")
+	flag.StringVar(&cfg.FlintlockdCertDir, "flintlockd-cert-dir", execagent.DefaultFlintlockdCertDir,
+		"The Host directory the agent writes flintlockd's serving certificate, its key and the client CA bundle to.")
+	flag.StringVar(&cfg.CABundle.Namespace, "ca-bundle-namespace", os.Getenv("POD_NAMESPACE"),
+		"The Operator's namespace, where it publishes its CA certificates. Defaults to $POD_NAMESPACE, the agent's own.")
+	flag.StringVar(&cfg.CABundle.Name, "ca-bundle-configmap", hostcert.CABundleConfigMap,
+		"The ConfigMap in which the Operator publishes its CA certificates.")
+	flag.DurationVar(&cfg.CertificateDuration, "certificate-duration", 0,
+		"The validity to ask for in each certificate request. Zero leaves it to the Operator.")
 	flag.StringVar(&audiences, "token-audiences", "",
 		"Comma-separated audiences a caller's token has to carry. Empty is "+execagent.DefaultTokenAudience+".")
 	flag.DurationVar(&cfg.ExecOpenTimeout, "exec-open-timeout", execagent.DefaultExecOpenTimeout,
@@ -119,7 +122,10 @@ func main() {
 
 	// Run refuses to start unless the agent's identity names its Host
 	// (EA-050).
-	fl, err := execagent.DialFlintlockd(cfg.Flintlockd, cfg.FlintlockdTLS, hostAddrs)
+	// Run obtains the certificates before it serves; the connection to
+	// flintlockd is made once they are there.
+	certs := execagent.NewCertificates(kube, &cfg, nil)
+	fl, err := execagent.DialFlintlockd(cfg.Flintlockd, certs, hostAddrs)
 	if err != nil {
 		fail(err, "Failed to connect to flintlockd", "endpoint", cfg.Flintlockd)
 	}
@@ -136,7 +142,7 @@ func main() {
 	}()
 
 	err = execagent.Run(ctx, execagent.Options{
-		Config: &cfg, Kube: kube, Claims: claims, Flintlockd: fl, HostAddresses: hostAddrs,
+		Config: &cfg, Kube: kube, Claims: claims, Flintlockd: fl, Certificates: certs, HostAddresses: hostAddrs,
 		Logger: log.WithName("exec-agent"),
 	})
 	if err != nil && ctx.Err() == nil {

@@ -133,7 +133,7 @@ func TestHostPrerequisites(t *testing.T) {
 			t.Parallel()
 			fake, certs, _ := serveFake(t, fakeflintlock.Config{Name: "h", ExecEnabled: tc.exec, Version: testVersion})
 			defer fake.SetFaults(fakeflintlock.Faults{})
-			fl, err := DialFlintlockd(fake.Addr(), clientTLS(certs), loopback)
+			fl, err := DialFlintlockd(fake.Addr(), staticCertificates(t, certs, certs), loopback)
 			if err != nil {
 				t.Fatal(err)
 			}

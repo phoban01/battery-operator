@@ -32,12 +32,14 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/source"
+
+	"github.com/phoban01/battery-operator/internal/hostcert"
 )
 
 // The keys of the CA bundle ConfigMap.
 const (
-	ServingCAKey = "serving-ca.crt"
-	ClientCAKey  = "client-ca.crt"
+	ServingCAKey = hostcert.ServingCAKey
+	ClientCAKey  = hostcert.ClientCAKey
 )
 
 // caBundleReconciler publishes the certificates of the serving CA and the
