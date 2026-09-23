@@ -65,8 +65,8 @@ README there has the rules; the short version:
 - Kubebuilder's Makefile pins controller-gen, setup-envtest, golangci-lint
   and kustomize, and installs them into `bin/` on first use.
 - Main targets: `make build`, `make test`, `make lint`, `make duvet`.
-- CI and images are becoming Dagger functions (#3, #33). Until #3 lands, CI
-  is the duvet workflow in `.github/workflows/requirements.yml`.
+- CI is a Dagger module (`.dagger/`): run the same checks locally with
+  `devbox run -- dagger call <lint|test|build|check-generated|requirements>`.
 
 ## Tests
 

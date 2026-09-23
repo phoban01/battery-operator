@@ -59,7 +59,7 @@ than later in a condition.
 - **RS-023** The `MicroVMClaim` resource SHALL carry `spec.renewTime`, which
   the Holder sets to renew the claim's Lease.
 - **RS-024** The `MicroVMClaim` resource SHALL have a status subresource that
-  carries the phase, one of `Pending`, `Bound`, `Expired` and `Released`,
+  carries the phase, one of `Pending`, `Bound` and `Expired`,
   the lease id battery chose, the MicroVM's uid, the Host's node name, the
   Exec Agent's address, the time the claim was bound, the time its Lease
   expires, and the condition `Bound`.
@@ -79,3 +79,6 @@ never collide.
 The proposal on battery#46 made the claim's name its lease id. battery v0.1.0
 chooses the lease id itself in `ClaimVM`, so the id is recorded in the
 status instead (ADR 0001, consequence 2).
+
+There is no `Released` phase. A released claim is deleted as soon as battery
+has released its Lease (CL-020), so no consumer would ever see it (#46).

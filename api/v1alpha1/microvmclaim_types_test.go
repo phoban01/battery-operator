@@ -204,7 +204,7 @@ func TestMicroVMClaimStatus(t *testing.T) {
 	//= docs/requirements/01-resources.md#microvmclaim
 	//= type=test
 	//# The `MicroVMClaim` resource SHALL have a status subresource that
-	//# carries the phase, one of `Pending`, `Bound`, `Expired` and `Released`,
+	//# carries the phase, one of `Pending`, `Bound` and `Expired`,
 	//# the lease id battery chose, the MicroVM's uid, the Host's node name, the
 	//# Exec Agent's address, the time the claim was bound, the time its Lease
 	//# expires, and the condition `Bound`.
@@ -257,7 +257,7 @@ func TestMicroVMClaimStatus(t *testing.T) {
 
 	// status is a subresource: a write to the main resource leaves it alone.
 	claim = getClaim(t, "status")
-	claim.Status.Phase = batteryv1alpha1.MicroVMClaimReleased
+	claim.Status.Phase = batteryv1alpha1.MicroVMClaimExpired
 	claim.Status.LeaseID = "someone-elses"
 	if err := k8sClient.Update(ctx, claim); err != nil {
 		t.Fatalf("updating claim: %v", err)
@@ -271,7 +271,6 @@ func TestMicroVMClaimStatus(t *testing.T) {
 		batteryv1alpha1.MicroVMClaimPending,
 		batteryv1alpha1.MicroVMClaimBound,
 		batteryv1alpha1.MicroVMClaimExpired,
-		batteryv1alpha1.MicroVMClaimReleased,
 	} {
 		claim = getClaim(t, "status")
 		claim.Status.Phase = phase
@@ -280,6 +279,6 @@ func TestMicroVMClaimStatus(t *testing.T) {
 		}
 	}
 	claim = getClaim(t, "status")
-	claim.Status.Phase = "Lost"
+	claim.Status.Phase = "Released"
 	wantInvalid(t, k8sClient.Status().Update(ctx, claim), "status.phase")
 }

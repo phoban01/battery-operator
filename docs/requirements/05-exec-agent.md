@@ -57,9 +57,14 @@ Secret, and a token bound to a deleted object no longer passes a
 TokenReview. The garbage collector takes a few seconds; EA-013 fails the
 moment the claim is released, so the token opens nothing in that gap.
 
-Whether TokenReview reports the bound object, or the Exec Agent has to read
-it from the token's own claims once the API server has vouched for the
-signature, is to be confirmed when EA-012 is built.
+TokenReview does not report the object a token is bound to: for a token
+bound to a Secret it reports only a credential id. So the Exec Agent reads
+the Secret's name and uid from the token's own claims, and only after
+TokenReview has accepted that exact token, whose subject has to be the
+reviewed user. The API server itself refuses a token whose Secret has been
+deleted or replaced, which is the uid check of EA-012, so the Exec Agent
+needs no access to Secrets. The API server caches a successful review for
+about ten seconds; EA-013 refuses a released claim in that window anyway.
 
 Consumers create the claim's Secret and request its token themselves
 (ADR 0001, decision 8); the Exec Agent only checks.
@@ -85,10 +90,11 @@ that answers nothing.
 
 - **EA-030** The Exec Agent SHALL report its Host not ready while the local
   `flintlockd` does not answer `ServerInfo` with the exec service enabled.
-- **EA-031** The Exec Agent SHALL report its Host not ready while `/dev/kvm`
-  cannot be opened.
+- **EA-031** The Exec Agent SHALL report its Host not ready while the Host
+  has no KVM device.
 - **EA-032** The Exec Agent SHALL report its Host not ready while
-  containerd's thin pool, as the configuration names it, is not present.
+  containerd's thin pool, under the name the Exec Agent's configuration
+  gives, is not present.
 - **EA-033** The Exec Agent SHALL report its Host not ready while any file
   in the not ready reason directory names a reason, and SHALL report that
   reason.
@@ -99,7 +105,8 @@ that answers nothing.
   `battery.liquidmetal-x.dev/exec-agent-message`, and its own address in
   `battery.liquidmetal-x.dev/exec-agent-address`.
 - **EA-035** The Exec Agent SHALL publish in its Node report the address
-  at which battery reaches the Host's `flintlockd`.
+  at which battery reaches the Host's `flintlockd`, as the annotation
+  `battery.liquidmetal-x.dev/flintlockd-address`.
 - **EA-036** The Exec Agent SHALL read not ready reasons from the directory
   its configuration names.
 
@@ -110,6 +117,11 @@ reasons of its own, such as a Host Service that has not started. The Node
 report is the contract the Inventory Controller (IN-001) and the Claim
 Controller (CL-005) read. EA-035 gives the Inventory Controller the address
 battery reaches `flintlockd` at (IN-003).
+
+EA-031 checks that the Host has a KVM device, from the Host's own `/dev` and
+`/sys/class/misc/kvm`, not that the Exec Agent can open it: the Exec Agent
+runs unprivileged, and it is `flintlockd`, running on the Host, that opens
+`/dev/kvm`. EA-030 tells whether `flintlockd` is well.
 
 ## Drain {#drain}
 

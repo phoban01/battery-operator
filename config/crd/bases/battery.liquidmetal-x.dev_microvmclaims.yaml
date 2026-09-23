@@ -207,7 +207,6 @@ spec:
                 - Pending
                 - Bound
                 - Expired
-                - Released
                 type: string
             type: object
         required:
