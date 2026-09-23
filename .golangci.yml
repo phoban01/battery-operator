@@ -37,7 +37,9 @@ linters:
               desc: Should be replaced with slices package
     revive:
       rules:
+        # duvet citations (docs/requirements/README.md) are "//=" and "//#" lines.
         - name: comment-spacings
+          arguments: ["=", "#"]
         - name: import-shadowing
     modernize:
       disable:
