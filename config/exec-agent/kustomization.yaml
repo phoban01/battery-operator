@@ -1,0 +1,20 @@
+# The Exec Agent (docs/requirements/05-exec-agent.md): its DaemonSet, its
+# ServiceAccount, its RBAC and its admission policy.
+#
+# Every name here is written out in full, battery-operator- prefix and
+# battery-operator-system namespace included, because the admission policy
+# names the agent's ServiceAccount in a CEL expression that kustomize's
+# namePrefix cannot reach. For the same reason config/default does not
+# include this directory: its namePrefix would rename the ServiceAccount
+# out from under the policy. Deploy it next to config/default with
+# `kubectl apply -k config/exec-agent`.
+#
+# rbac.yaml and admission-policy.yaml are the files internal/execagent's
+# tests load unchanged, so what is deployed is what was tested.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - service_account.yaml
+  - rbac.yaml
+  - admission-policy.yaml
+  - daemonset.yaml

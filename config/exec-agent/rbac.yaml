@@ -1,0 +1,81 @@
+# RBAC of the Exec Agent (cmd/exec-agent), which runs on every Host as the
+# DaemonSet in daemonset.yaml, as the ServiceAccount
+# battery-operator-exec-agent in battery-operator-system.
+#
+# This file is only what the Exec Agent is allowed to do, and the agent's
+# test suite (internal/execagent) runs it as this ServiceAccount with
+# exactly these rules, so a call the code makes and this file lacks fails a
+# test.
+#
+# RBAC cannot say "this Host's Node": one DaemonSet shares one
+# ServiceAccount. admission-policy.yaml beside this file narrows the Node and
+# pod rules to the agent's own Host in the API server (EA-051).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: battery-operator-exec-agent
+rules:
+  # Every exec request is authenticated with one. A review answers a
+  # question and changes nothing.
+  - apiGroups: ["authentication.k8s.io"]
+    resources: ["tokenreviews"]
+    verbs: ["create"]
+  # The claims every request is authorized against and the drain guard
+  # counts (EA-040), read and never written.
+  #
+  # PROVISIONAL: claims.test.battery.liquidmetal-x.dev/microvmclaims is the
+  # test definition of a claim resource
+  # (internal/execagent/testdata/crds/microvmclaims.yaml). #16 replaces it
+  # with this project's MicroVMClaim.
+  - apiGroups: ["claims.test.battery.liquidmetal-x.dev"]
+    resources: ["microvmclaims"]
+    verbs: ["get", "list", "watch"]
+  # The Host's own Node is read, and annotated with the Node report and
+  # when a drain started (EA-034, EA-040). The admission policy lets a patch
+  # change nothing else. Nodes are never created, deleted or listed, and
+  # their status is not written.
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "patch"]
+---
+# The drain guard pod and its PodDisruptionBudget (EA-040), in the Exec
+# Agent's own namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: battery-operator-exec-agent-guard
+  namespace: battery-operator-system
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "create", "delete"]
+  - apiGroups: ["policy"]
+    resources: ["poddisruptionbudgets"]
+    verbs: ["create", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: battery-operator-exec-agent
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: battery-operator-exec-agent
+subjects:
+  - kind: ServiceAccount
+    name: battery-operator-exec-agent
+    namespace: battery-operator-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: battery-operator-exec-agent-guard
+  namespace: battery-operator-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: battery-operator-exec-agent-guard
+subjects:
+  - kind: ServiceAccount
+    name: battery-operator-exec-agent
+    namespace: battery-operator-system
