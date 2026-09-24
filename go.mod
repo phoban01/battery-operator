@@ -4,6 +4,7 @@ go 1.26.5
 
 require (
 	github.com/go-logr/logr v1.4.4
+	github.com/google/go-cmp v0.7.0
 	github.com/liquidmetal-dev/battery v0.1.0
 	github.com/liquidmetal-dev/flintlock/api v0.0.0-20260907114747-12b8cade120d
 	github.com/onsi/ginkgo/v2 v2.27.4
@@ -51,7 +52,6 @@ require (
 	github.com/go-task/slim-sprig/v3 v3.0.0 // indirect
 	github.com/google/cel-go v0.26.0 // indirect
 	github.com/google/gnostic-models v0.7.0 // indirect
-	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/google/pprof v0.0.0-20250403155104-27863c87afa6 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.30.0 // indirect
