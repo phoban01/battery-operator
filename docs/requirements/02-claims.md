@@ -40,7 +40,7 @@ battery chooses the lease id, and `ClaimVM` carries only the Pool, so
 `ClaimVM` cannot be retried safely. If the Operator stops between battery's
 answer and the status write, the Lease is orphaned and the next reconcile
 claims a second MicroVM. CL-002 keeps that window as short as it can be. The
-orphan is bounded: nothing renews it, so its expiry passes the Pool's
+orphan is bounded: nothing renews it (CL-019), so its expiry passes the Pool's
 `heartbeat_expiry_threshold` after it was claimed, and battery's next sweep
 deletes it and its MicroVM (ADR 0001, consequence 2). While battery runs,
 the orphan is gone within that threshold plus one `sweep_interval` of being
@@ -102,6 +102,8 @@ takes the agent's address from the Node report instead.
 - **CL-018** While battery has not yet answered `ClaimVM` calls for other
   claims, the Claim Controller SHALL still reconcile a Bound claim that has
   a pending renewal.
+- **CL-019** The Claim Controller SHALL call battery's `Heartbeat` only for
+  a lease id that a claim's status records.
 
 Renewal is relayed (ADR 0001, consequence 3): how long a Lease survives now
 includes the time the Claim Controller takes to react to a changed
@@ -186,7 +188,7 @@ binding still re-reads the claim before its `ClaimVM` as before.
   then the Claim Controller SHALL keep the finalizer and retry `ReleaseVM`
   with backoff.
 
-A released MicroVM is deleted by battery and never reused.
+A released MicroVM is deleted by battery and never reused (BA-030, BA-006).
 
 battery v0.3.3 answers `ReleaseVM` with `UNAVAILABLE`, and keeps the Lease,
 while `flintlockd` has not confirmed the MicroVM's deletion
@@ -203,11 +205,21 @@ which CL-020 takes as released, and so does a retry after a crash between
   battery's Leases.
 - **CL-031** The Claim Controller SHALL NOT release a Lease that battery
   holds and no claim records.
+- **CL-032** While a claim is `Bound` and the Lease expiry time in its
+  status has not passed, the Claim Controller SHALL reconcile the claim
+  again once that time has passed.
 
 battery's database and the claims can disagree after the Operator or battery
 restarts, the latter on every change of Hosts (ADR 0001, consequence 1).
 CL-030 with CL-012 makes a claim whose Lease battery has lost show
-`Expired`. The opposite case, a Lease with no claim, is the orphan of
+`Expired`. Between restarts, CL-032 keeps a Bound claim from going quiet.
+battery deletes a Lease only after its expiry (BA-020), and the expiry in
+the claim's status is never later than battery's (CL-011), so the status
+of a claim whose Lease battery has deleted has no expiry or one that has
+passed, and CL-016 then asks battery. Once the Claim Controller has
+nothing left to do, every Bound claim's Lease is therefore one battery
+holds and has not run out, even when the `Events` stream missed the
+deletion (CL-013). The opposite case, a Lease with no claim, is the orphan of
 [Binding](#binding); CL-031 leaves it to expire rather than guessing that it
 is unwanted. battery v0.3.3's `ListLeases` gives CL-030 every Lease in one
 call.

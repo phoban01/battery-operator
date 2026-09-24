@@ -965,9 +965,23 @@ module claims {
   // ---------------------------------------------------------------------
   // Invariants. Each names the requirement or ADR consequence it checks.
 
-  // Glossary, "Lease": a Bound claim has exactly one Lease. battery never
-  // leases one MicroVM twice, and no two claims record the same Lease or
-  // the same MicroVM.
+  //@= docs/requirements/10-battery.md#claiming
+  //@# battery SHALL move a MicroVM out of the phase `AVAILABLE` in
+  //@# the same transaction in which `ClaimVM` selects it, so that two `ClaimVM`
+  //@# calls never lease the same MicroVM.
+  //
+  //@= docs/requirements/10-battery.md#claiming
+  //@# When `ClaimVM` succeeds, battery SHALL choose a new lease id
+  //
+  //@= docs/requirements/02-claims.md#binding
+  //@# The Claim Controller SHALL write to a claim's status only a
+  //@# lease id that battery returned in its answer to a `ClaimVM` call for that
+  //@# claim.
+  //
+  // A Bound claim has exactly one Lease (glossary, "Lease"). battery never
+  // leases one MicroVM twice (BA-005) and never reuses a lease id (BA-003),
+  // and a claim records only its own ClaimVM's answer (CL-008), so no two
+  // claims record the same Lease or the same MicroVM.
   val vmLeasedToAtMostOneClaim: bool = and {
     battery.leases.keys().forall(l1 => battery.leases.keys().forall(l2 =>
       l1 != l2 implies battery.leases.get(l1).vm != battery.leases.get(l2).vm)),
@@ -978,24 +992,46 @@ module claims {
       })),
   }
 
-  // 02-claims.md, Release: a released MicroVM is deleted by battery and
-  // never reused. Nothing handed out, released or expired is warm again,
-  // and no Lease names a retired MicroVM.
+  //@= docs/requirements/10-battery.md#claiming
+  //@# battery SHALL set a MicroVM's phase to `AVAILABLE` only when it
+  //@# finishes provisioning the MicroVM, so that a MicroVM that has been leased
+  //@# is never leased again.
+  //
+  // A released MicroVM is deleted by battery and never reused (02-claims.md,
+  // Release). Nothing handed out, released or expired is warm again, and
+  // no Lease names a retired MicroVM.
   val releasedVMNeverReused: bool = and {
     battery.warm.intersect(battery.handedOut) == Set(),
     battery.warm.intersect(battery.retired) == Set(),
     battery.leases.keys().forall(l => not(battery.retired.contains(battery.leases.get(l).vm))),
   }
 
-  // ADR 0001, consequence 2, and the prose under 02-claims.md, Binding: the
-  // crash-window orphan is bounded. Nothing renews an orphan, and while
-  // battery runs it is gone within the Pool's heartbeat_expiry_threshold of
-  // being claimed plus one sweep interval (BA-020), or within one sweep
-  // interval of battery starting again if it ran out while battery was
-  // down (BA-022). 02-claims.md, Binding, and the correction note under
-  // ADR 0001, consequence 2, state this bound (#86, #106). The ADR's text
-  // as first written promises the threshold alone, which is
-  // orphanGoneByExpiry below, and does not hold.
+  //@= docs/requirements/02-claims.md#renewal
+  //@# The Claim Controller SHALL call battery's `Heartbeat` only for
+  //@# a lease id that a claim's status records.
+  //
+  //@= docs/requirements/10-battery.md#claiming
+  //@# set the Lease's expiry to the time of the claim plus the Pool's
+  //@# `heartbeat_expiry_threshold`.
+  //
+  //@= docs/requirements/10-battery.md#expiry
+  //@# battery SHALL delete an expired Lease only in a sweep, which
+  //@# runs once every `sweep_interval` while battery runs, and which deletes
+  //@# every Lease whose expiry is at or before the time of the sweep.
+  //
+  //@= docs/requirements/10-battery.md#expiry
+  //@# battery SHALL run its first sweep one `sweep_interval` after it
+  //@# starts, not at start.
+  //
+  // The crash-window orphan of 02-claims.md, Binding, is bounded. Nothing
+  // renews an orphan (CL-019), so its expiry stays the Pool's
+  // heartbeat_expiry_threshold after it was claimed (BA-003). While battery
+  // runs it is gone within that threshold plus one sweep interval
+  // (BA-020), or within one sweep interval of battery starting again if it
+  // ran out while battery was down (BA-022). 02-claims.md, Binding, and
+  // the correction note under ADR 0001, consequence 2, state this bound
+  // (#86, #106). The ADR's text as first written promises the threshold
+  // alone, which is orphanGoneByExpiry below, and does not hold.
   val orphanLeaseBounded: bool =
     orphans.forall(l => and {
       battery.leases.get(l).expiresAt == battery.leases.get(l).claimedAt + EXPIRY,
@@ -1014,8 +1050,18 @@ module claims {
     CLAIMS.forall(c => live(c) implies (
       (isSome(obj(c).status.leaseId) or ctrl.mem.get(c) != Idle) implies obj(c).hasFinalizer))
 
-  // CL-011 and ADR 0001, consequence 3: the expiry a consumer reads is one
-  // battery gave, never later than the one battery will enforce.
+  //@= docs/requirements/02-claims.md#renewal
+  //@# The Claim Controller SHALL take a claim's Lease expiry time only
+  //@# from battery's answer to `Heartbeat` or `ListLeases`, and SHALL NOT
+  //@# compute it.
+  //
+  //@= docs/requirements/10-battery.md#heartbeat
+  //@# battery SHALL set the Lease's expiry to the time of the `Heartbeat` plus
+  //@# the Pool's `heartbeat_expiry_threshold`
+  //
+  // The expiry a consumer reads is one battery gave (CL-011), never later
+  // than the one battery will enforce, since a Heartbeat only moves it on
+  // (BA-010).
   val statusExpiryIsBatterys: bool =
     CLAIMS.forall(c => live(c) implies match obj(c).status.leaseId {
       | Some(l) => holds(l) implies
@@ -1074,11 +1120,17 @@ module claims {
   //@# pending renewal, the Claim Controller SHALL set the claim's phase to
   //@# `Expired`
   //
-  // ADR 0001, consequence 4: a Bound claim's Lease exists in battery, or
-  // the claim goes Expired. As a state invariant: once the controller has
+  //@= docs/requirements/02-claims.md#recovery
+  //@# While a claim is `Bound` and the Lease expiry time in its
+  //@# status has not passed, the Claim Controller SHALL reconcile the claim
+  //@# again once that time has passed.
+  //
+  // A Bound claim's Lease exists in battery, or the claim goes Expired
+  // (02-claims.md, Recovery). As a state invariant: once the controller has
   // nothing left to do, every Bound claim's Lease is one battery holds and
-  // has not run out. CL-013 makes it prompt, and CL-014 makes it hold when
-  // the Events stream drops the deletion (#45).
+  // has not run out. CL-032 keeps a Bound claim from going quiet, CL-013
+  // makes it prompt, and CL-014 makes it hold when the Events stream drops
+  // the deletion (#45).
   val idleMirrorsBattery: bool =
     controllerIdle implies
       CLAIMS.forall(c => (live(c) and obj(c).status.phase == Bound) implies

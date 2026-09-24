@@ -88,16 +88,16 @@ Invariants, all in `safety`:
 
 | Invariant | Checks |
 |-----------|--------|
-| `vmLeasedToAtMostOneClaim` | a MicroVM is leased to at most one claim (glossary, Lease) |
-| `releasedVMNeverReused` | a released or expired MicroVM is never handed out again (02-claims.md, Release) |
-| `orphanLeaseBounded` | an orphan, from a crash or a `ClaimVM` answer lost in transit, is never renewed, and is gone within the expiry threshold plus one sweep interval, or one sweep interval after battery starts (ADR 0001, consequence 2; BA-020, BA-022) |
+| `vmLeasedToAtMostOneClaim` | a MicroVM is leased to at most one claim (BA-005, BA-003, CL-008) |
+| `releasedVMNeverReused` | a released or expired MicroVM is never handed out again (BA-006) |
+| `orphanLeaseBounded` | an orphan, from a crash or a `ClaimVM` answer lost in transit, is never renewed (CL-019), and is gone within the expiry threshold plus one sweep interval, or one sweep interval after battery starts (BA-003, BA-020, BA-022) |
 | `finalizerRemovedOnlyAfterRelease` | a claim is gone only after battery has released its Lease (CL-020) |
 | `leaseOnlyUnderFinalizer` | a Lease is claimed and recorded only under the finalizer (CL-001) |
-| `statusExpiryIsBatterys` | a claim's `leaseExpiresAt` is never later than battery's (CL-011; ADR 0001, consequence 3) |
+| `statusExpiryIsBatterys` | a claim's `leaseExpiresAt` is never later than battery's (CL-011, BA-010) |
 | `onlyRecordedLeasesReleased` | the controller releases only Leases a claim recorded (CL-031) |
 | `recordedOnlyFromOwnAnswer` | a claim records only a lease id from an answer to its own `ClaimVM`, so no orphan is adopted (CL-008) |
 | `boundClaimIsComplete` | a Bound claim carries its lease id, MicroVM, node name, time of binding and a true `Bound` (CL-002, RS-024); its expiry comes later, from `ListLeases` (CL-016), since battery's answer to `ClaimVM` carries none |
-| `idleMirrorsBattery` | once the controller is idle, every Bound claim's Lease is one battery holds and has not run out (ADR 0001, consequence 4; CL-013, CL-014) |
+| `idleMirrorsBattery` | once the controller is idle, every Bound claim's Lease is one battery holds and has not run out (CL-032, CL-013, CL-014) |
 | `expiredOnlyAfterLeaseEnds` | a claim goes Expired only once battery no longer holds its Lease or the Lease has run out (CL-016, #57) |
 | `pendingRenewalKeptWhileHeld` | a claim with a renewal the controller has not relayed goes Expired only once battery no longer holds its Lease, and so would refuse the `Heartbeat` (CL-010, CL-014, CL-016, #85) |
 

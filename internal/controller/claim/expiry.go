@@ -59,6 +59,10 @@ func (e CheckExpiry) Reconcile(ctx context.Context, s *claimscope.Scope) (claims
 	}
 	now := s.Clock.Now()
 	if exp := c.Status.LeaseExpiresAt; exp != nil && exp.After(now) {
+		//= docs/requirements/02-claims.md#recovery
+		//# While a claim is `Bound` and the Lease expiry time in its
+		//# status has not passed, the Claim Controller SHALL reconcile the claim
+		//# again once that time has passed.
 		return claimscope.Result{RequeueAfter: until(s, exp.Time)}, nil
 	}
 

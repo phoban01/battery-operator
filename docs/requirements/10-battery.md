@@ -36,6 +36,12 @@ differs, the section says so; see also [Changes since v0.1.0](#since-v010).
   `heartbeat_expiry_threshold`.
 - **BA-004** Once battery has committed a Lease in `ClaimVM`, battery SHALL
   answer that `ClaimVM` with success.
+- **BA-005** battery SHALL move a MicroVM out of the phase `AVAILABLE` in
+  the same transaction in which `ClaimVM` selects it, so that two `ClaimVM`
+  calls never lease the same MicroVM.
+- **BA-006** battery SHALL set a MicroVM's phase to `AVAILABLE` only when it
+  finishes provisioning the MicroVM, so that a MicroVM that has been leased
+  is never leased again.
 
 | ID | Source at v0.3.3 |
 |----|------------------|
@@ -43,6 +49,8 @@ differs, the section says so; see also [Changes since v0.1.0](#since-v010).
 | BA-002 | [`internal/api/lease.go`, `LeaseServer.ClaimVM`, L99-L102](https://github.com/liquidmetal-dev/battery/blob/v0.3.3/internal/api/lease.go#L99-L102) |
 | BA-003 | [`internal/api/lease.go`, `LeaseServer.ClaimVM`, L123-L147](https://github.com/liquidmetal-dev/battery/blob/v0.3.3/internal/api/lease.go#L123-L147) |
 | BA-004 | [`internal/api/lease.go`, `LeaseServer.ClaimVM`, L144-L174](https://github.com/liquidmetal-dev/battery/blob/v0.3.3/internal/api/lease.go#L144-L174) |
+| BA-005 | [`internal/store/sqlite.go`, `ClaimAvailableVM`, L280-L309](https://github.com/liquidmetal-dev/battery/blob/v0.3.3/internal/store/sqlite.go#L280-L309) |
+| BA-006 | [`internal/reconciler/provision.go`, `Provisioner.Provision`, L242-L244](https://github.com/liquidmetal-dev/battery/blob/v0.3.3/internal/reconciler/provision.go#L242-L244); [`internal/store/sqlite.go`, `ClaimAvailableVM`, L292-L299](https://github.com/liquidmetal-dev/battery/blob/v0.3.3/internal/store/sqlite.go#L292-L299) |
 
 The lease id is a random UUID (`uuid.NewString`), so battery never hands the
 same one out twice. Nothing in `ClaimVMRequest` identifies the caller's
@@ -52,6 +60,16 @@ after `CreateLease` nothing fails the call, so an error the Operator sees
 after the commit comes from the transport or the Operator's own deadline,
 not from battery (#61). The network interfaces in the answer are best effort
 and can be empty.
+
+`ClaimAvailableVM` selects an `AVAILABLE` MicroVM and moves it to `LEASED`
+with an update guarded by `phase = AVAILABLE`, inside one transaction, and
+fails if the guard matched no row. The only other write of `AVAILABLE` is
+the last step of provisioning a new MicroVM, which has a uid of its own. A
+MicroVM once leased goes on to `DELETING` and is removed (BA-023, BA-030),
+or is quarantined or deleted after a failed hook, and never comes back. So
+battery leases each MicroVM to one Lease at most, once, which the claim
+lifecycle model checks as `vmLeasedToAtMostOneClaim` and
+`releasedVMNeverReused`.
 
 ## Heartbeat {#heartbeat}
 

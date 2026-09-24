@@ -52,8 +52,15 @@ func passedClaim() *batteryv1alpha1.MicroVMClaim {
 	return c
 }
 
-// TestCheckExpiryWaitsForTheExpiry: while the expiry in the status is to
-// come, nothing is called and the claim is reconciled when it passes.
+//= docs/requirements/02-claims.md#recovery
+//= type=test
+//# While a claim is `Bound` and the Lease expiry time in its
+//# status has not passed, the Claim Controller SHALL reconcile the claim
+//# again once that time has passed.
+
+// TestCheckExpiryWaitsForTheExpiry covers CL-032: while the expiry in the
+// status is to come, nothing is called and the claim is reconciled when it
+// passes.
 func TestCheckExpiryWaitsForTheExpiry(t *testing.T) {
 	b := lists(nil)
 	s, _ := newScope(t, boundClaim(), b)
