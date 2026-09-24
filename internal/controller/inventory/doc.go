@@ -19,9 +19,14 @@ limitations under the License.
 // set of Hosts it has given battery, which the Pool Controller reads.
 //
 // The Inventory Controller has one reconcile for the whole cluster: every
-// Node event, and every change to the Secret holding battery's flintlockd
-// client certificate, leads to it. It runs, in order:
+// Node event, every change to battery's ConfigMap, and every change to the
+// Secret holding battery's flintlockd client certificate, leads to it. It
+// runs, in order:
 //
+//   - Restore writes back the Hosts the Inventory Controller last wrote to
+//     battery's configuration, when something else, applying the Manifests
+//     again, has changed them, and does not restart battery for it: battery
+//     runs with them already (IN-014).
 //   - Resume restarts battery if a previous reconcile wrote battery's
 //     configuration and did not finish restarting it, and publishes the
 //     Hosts battery runs with the first time round.
@@ -77,10 +82,12 @@ limitations under the License.
 // kept in memory (State): a Node seen for the first time starts to settle
 // then. battery's configuration is the ConfigMap, which also records,
 // in the annotation RestartPendingAnnotation, a configuration written and
-// not yet restarted into, so that Resume finishes the restart; and, in
+// not yet restarted into, so that Resume finishes the restart; in
 // ClientCertificateAnnotation, the digest of the client certificate battery
 // last restarted with, so that a renewal while the Operator was down is
-// still noticed. Resume restarts with the certificate the Secret holds when
-// it runs, which may be newer than the one the interrupted restart waited
-// for.
+// still noticed; and, in HostsAnnotation, the Hosts last written, so that
+// Restore can put them back after an apply of the Manifests, which leaves
+// annotations it does not give alone. Resume restarts with the certificate
+// the Secret holds when it runs, which may be newer than the one the
+// interrupted restart waited for.
 package inventory

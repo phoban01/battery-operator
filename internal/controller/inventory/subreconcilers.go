@@ -39,6 +39,53 @@ const (
 	annotationTrue = "true"
 )
 
+// Restore puts back battery's Hosts when something other than the
+// Inventory Controller has changed them in its configuration: applying the
+// Manifests again, which ship the configuration with no Hosts, is the case
+// it is for. battery already runs with the Hosts written last, since it
+// read its file when it started, so Restore rewrites the file alone and
+// does not restart battery. A restart that was pending stays pending, and
+// Resume finishes it with the Hosts put back.
+//
+// Where no Hosts are recorded as written, Restore records the Hosts the
+// configuration names: battery started with those.
+type Restore struct{}
+
+func (Restore) Reconcile(ctx context.Context, s *Scope) (Result, error) {
+	if s.Config.Written == nil {
+		s.Config.Written = s.Config.Hosts.clone()
+		if err := s.Store.Save(ctx, s.Config); err != nil {
+			return Result{Stop: true}, err
+		}
+		s.Log.Info("Recorded the Hosts battery's configuration names", "hosts", slices.Sorted(maps.Keys(s.Config.Hosts)))
+		return Result{}, nil
+	}
+	if s.Config.Hosts.Equal(s.Config.Written) {
+		return Result{}, nil
+	}
+
+	//= docs/requirements/04-inventory.md#keeping
+	//# If battery's configuration names Hosts other than those the
+	//# Inventory Controller last wrote to it, then the Inventory Controller SHALL
+	//# write those Hosts back to battery's configuration without restarting
+	//# battery.
+	raw, err := batterysidecar.Render(s.Config.Written.List())
+	if err != nil {
+		return Result{Stop: true}, err
+	}
+	found := s.Config.Hosts
+	restored := s.Config
+	restored.Hosts = s.Config.Written.clone()
+	restored.Raw = raw
+	if err := s.Store.Save(ctx, restored); err != nil {
+		return Result{Stop: true}, err
+	}
+	s.Config = restored
+	s.Log.Info("Restored battery's Hosts in its configuration, which something else had changed",
+		"hosts", slices.Sorted(maps.Keys(restored.Hosts)), "found", slices.Sorted(maps.Keys(found)))
+	return Result{}, nil
+}
+
 // Resume finishes a restart a previous reconcile started and did not
 // finish: its configuration is written and marked pending. It then
 // publishes the Hosts battery runs with, if they have not been yet.
@@ -249,7 +296,10 @@ func (Apply) Reconcile(ctx context.Context, s *Scope) (Result, error) {
 	//= docs/requirements/04-inventory.md#applying
 	//# When the set of Hosts changes, the Inventory Controller SHALL
 	//# write the new list to battery's configuration and restart battery.
-	pending := Config{Hosts: s.Desired, Raw: raw, Pending: true, ClientCertificate: s.Config.ClientCertificate}
+	pending := Config{
+		Hosts: s.Desired, Raw: raw, Pending: true,
+		ClientCertificate: s.Config.ClientCertificate, Written: s.Desired,
+	}
 	if err := s.Store.Save(ctx, pending); err != nil {
 		return Result{Stop: true}, err
 	}

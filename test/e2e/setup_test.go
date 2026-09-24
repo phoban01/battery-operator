@@ -173,48 +173,40 @@ func deploy(s settings) env.Func {
 		//# as its sidecar, the Exec Agent, and the fake `flintlockd` as each Host's
 		//# `flintlockd`, in a kind cluster, from the Manifests.
 
-		// A reused cluster already runs the Operator. Applying the Manifests
-		// again puts battery's ConfigMap back as they ship it, with no Hosts,
-		// and the Inventory Controller notices only when a Node changes
-		// (#116), so the Operator is restarted to start again from the
-		// ConfigMap.
-		c, err := newClient(cfg)
-		if err != nil {
+		// A reused cluster already runs the Operator: applying the Manifests
+		// again puts battery's ConfigMap back as they ship it, and the
+		// Inventory Controller writes battery's Hosts back (IN-014).
+		if _, err := applyManifests(ctx, cfg, s); err != nil {
 			return ctx, err
-		}
-		reused := c.Get(ctx, types.NamespacedName{Namespace: namespace, Name: operatorDeployment}, &appsv1.Deployment{}) == nil
-
-		dir, err := writeRunKustomization(s)
-		if err != nil {
-			return ctx, err
-		}
-		manifests, err := run(ctx, nil, s.kustomize, "build", dir)
-		if err != nil {
-			return ctx, fmt.Errorf("building the Manifests: %w", err)
-		}
-		// cert-manager's webhook may refuse the Certificates for a while
-		// after it reports available, until its CA is injected.
-		var applyErr error
-		err = wait.PollUntilContextTimeout(ctx, 5*time.Second, 2*time.Minute, true, func(ctx context.Context) (bool, error) {
-			_, applyErr = run(ctx, manifests, s.kubectl, "--kubeconfig", cfg.KubeconfigFile(),
-				"apply", "--server-side", "--force-conflicts", "-f", "-")
-			return applyErr == nil, nil
-		})
-		if err != nil {
-			return ctx, fmt.Errorf("applying the Manifests: %w: %w", err, applyErr)
-		}
-		if reused {
-			if _, err := run(ctx, nil, s.kubectl, "--kubeconfig", cfg.KubeconfigFile(), "--namespace", namespace,
-				"rollout", "restart", "deployment/"+operatorDeployment); err != nil {
-				return ctx, fmt.Errorf("restarting the Operator: %w", err)
-			}
-			if _, err := run(ctx, nil, s.kubectl, "--kubeconfig", cfg.KubeconfigFile(), "--namespace", namespace,
-				"rollout", "status", "--timeout=5m", "deployment/"+operatorDeployment); err != nil {
-				return ctx, fmt.Errorf("restarting the Operator: %w", err)
-			}
 		}
 		return ctx, nil
 	}
+}
+
+// applyManifests builds the Manifests through the overlay in config/ and
+// applies them as an upgrade would, server-side and taking every field
+// back by force, and returns what it applied.
+func applyManifests(ctx context.Context, cfg *envconf.Config, s settings) ([]byte, error) {
+	dir, err := writeRunKustomization(s)
+	if err != nil {
+		return nil, err
+	}
+	manifests, err := run(ctx, nil, s.kustomize, "build", dir)
+	if err != nil {
+		return nil, fmt.Errorf("building the Manifests: %w", err)
+	}
+	// cert-manager's webhook may refuse the Certificates for a while
+	// after it reports available, until its CA is injected.
+	var applyErr error
+	err = wait.PollUntilContextTimeout(ctx, 5*time.Second, 2*time.Minute, true, func(ctx context.Context) (bool, error) {
+		_, applyErr = run(ctx, manifests, s.kubectl, "--kubeconfig", cfg.KubeconfigFile(),
+			"apply", "--server-side", "--force-conflicts", "-f", "-")
+		return applyErr == nil, nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("applying the Manifests: %w: %w", err, applyErr)
+	}
+	return manifests, nil
 }
 
 // writeRunKustomization writes .run/kustomization.yaml, which is config/

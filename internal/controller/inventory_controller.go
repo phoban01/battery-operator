@@ -69,6 +69,11 @@ type InventoryReconciler struct {
 	// Clock defaults to clock.Real.
 	Clock clock.Clock
 
+	// ConfigMap names battery's ConfigMap, which Store keeps battery's
+	// configuration in: SetupWithManager watches it, through a cache of
+	// that one ConfigMap (IN-014).
+	ConfigMap client.ObjectKey
+
 	// ClientSecret names the Secret holding battery's client certificate.
 	ClientSecret client.ObjectKey
 	// Secrets reads that Secret. SetupWithManager sets it to a cache of
@@ -145,14 +150,19 @@ func (r *InventoryReconciler) clientCertificate(ctx context.Context) ([]byte, er
 }
 
 // SetupWithManager watches Nodes, for the changes that can change whether
-// a Node is a Host or where its flintlockd is, and battery's client
-// certificate's Secret, through a cache of that one Secret.
+// a Node is a Host or where its flintlockd is, battery's ConfigMap, for a
+// change something else made to its Hosts (IN-014), and battery's client
+// certificate's Secret; the last two each through a cache of that one
+// object.
 func (r *InventoryReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	if err := r.Options.Validate(); err != nil {
 		return err
 	}
 	if r.Store == nil || r.Restarter == nil || r.Hosts == nil || r.Pools == nil {
 		return errors.New("the Inventory Controller needs a Store, a Restarter, a HostSet and battery's Pools")
+	}
+	if r.ConfigMap.Name == "" || r.ConfigMap.Namespace == "" {
+		return errors.New("the Inventory Controller needs the name and namespace of battery's ConfigMap")
 	}
 	if r.ClientSecret.Name == "" || r.ClientSecret.Namespace == "" {
 		return errors.New("the Inventory Controller needs the name and namespace of battery's client certificate's Secret")
@@ -162,6 +172,14 @@ func (r *InventoryReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return err
 	}
 	r.Secrets = secrets
+	// battery's ConfigMap is watched so that Restore puts back the Hosts
+	// an apply of the Manifests resets (IN-014). The cache only brings the
+	// reconcile: Store reads the ConfigMap from the API server, since a
+	// stale copy would have Resume restart battery again after a restart.
+	configMaps, err := singleObjectCache(mgr, r.ConfigMap.Namespace, r.ConfigMap.Name)
+	if err != nil {
+		return err
+	}
 	enqueue := func(context.Context, client.Object) []reconcile.Request {
 		return []reconcile.Request{inventoryRequest}
 	}
@@ -173,6 +191,10 @@ func (r *InventoryReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		WatchesRawSource(source.Kind(secrets, &corev1.Secret{},
 			handler.TypedEnqueueRequestsFromMapFunc(func(ctx context.Context, s *corev1.Secret) []reconcile.Request {
 				return enqueue(ctx, s)
+			}))).
+		WatchesRawSource(source.Kind(configMaps, &corev1.ConfigMap{},
+			handler.TypedEnqueueRequestsFromMapFunc(func(ctx context.Context, cm *corev1.ConfigMap) []reconcile.Request {
+				return enqueue(ctx, cm)
 			}))).
 		// One reconcile at a time: it restarts battery, and State is not
 		// shared.
