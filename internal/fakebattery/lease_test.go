@@ -29,7 +29,7 @@ import (
 //= type=test
 //# The fake battery SHALL replenish Pools, expire Leases that are
 //# not renewed within the Pool's expiry threshold, and answer `ClaimVM` on an
-//# empty Pool with `RESOURCE_EXHAUSTED`, as battery v0.1.0 does.
+//# empty Pool with `RESOURCE_EXHAUSTED`, as battery v0.3.3 does.
 
 //= docs/requirements/08-test-doubles.md#fake-battery
 //= type=test
@@ -113,7 +113,7 @@ func TestLeaseExpiryDeletesTheMicroVM(t *testing.T) {
 //= type=test
 //# The fake battery SHALL replenish Pools, expire Leases that are
 //# not renewed within the Pool's expiry threshold, and answer `ClaimVM` on an
-//# empty Pool with `RESOURCE_EXHAUSTED`, as battery v0.1.0 does.
+//# empty Pool with `RESOURCE_EXHAUSTED`, as battery v0.3.3 does.
 
 // TestClaimOnEmptyPoolIsResourceExhausted asserts the gRPC status code on the
 // wire, because a client's exhaustion path keys on the code, and checks the
@@ -312,6 +312,18 @@ func TestReleaseKeepsTheLeaseUntilTheHostConfirms(t *testing.T) {
 // without an error, a released Lease is gone, and RefuseHeartbeats hides
 // every Lease as it makes Heartbeat NOT_FOUND.
 func TestListLeases(t *testing.T) {
+	//= docs/requirements/10-battery.md#list-leases
+	//= type=test
+	//# When battery receives a `ListLeases`, battery SHALL answer with
+	//# every Lease it holds, or every Lease of the one Pool the request names,
+	//# each with its lease id, MicroVM uid, Pool, claim time, last heartbeat time
+	//# and expiry, without renewing any of them.
+
+	//= docs/requirements/10-battery.md#list-leases
+	//= type=test
+	//# battery SHALL include in the answer to `ListLeases` a Lease
+	//# whose expiry has passed but that no sweep has deleted yet.
+
 	// No timer tick within the test: the fake fills Pools and handles
 	// claims on its kicks, and the Leases are never swept.
 	h := newHarness(t, Config{ReconcileInterval: time.Hour}, hostA)

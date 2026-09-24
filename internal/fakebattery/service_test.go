@@ -40,7 +40,7 @@ import (
 
 //= docs/requirements/08-test-doubles.md#fake-battery
 //= type=test
-//# The fake battery SHALL serve battery v0.1.0's `PoolAdmin`,
+//# The fake battery SHALL serve battery v0.3.3's `PoolAdmin`,
 //# `Lease` and `Events` services over gRPC with the generated server stubs.
 
 // TestServesTheThreeServicesOverGRPC drives all three services through the

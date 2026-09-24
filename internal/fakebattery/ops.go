@@ -206,7 +206,7 @@ type claimResult struct {
 //= docs/requirements/08-test-doubles.md#fake-battery
 //# The fake battery SHALL replenish Pools, expire Leases that are
 //# not renewed within the Pool's expiry threshold, and answer `ClaimVM` on an
-//# empty Pool with `RESOURCE_EXHAUSTED`, as battery v0.1.0 does.
+//# empty Pool with `RESOURCE_EXHAUSTED`, as battery v0.3.3 does.
 
 // claimVM implements Lease.ClaimVM: after the injected claim latency it
 // takes the longest-available MicroVM, runs the pre-lease hooks, creates the
