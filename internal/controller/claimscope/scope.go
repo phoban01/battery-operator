@@ -33,6 +33,7 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	batteryv1alpha1 "github.com/phoban01/battery-operator/api/v1alpha1"
@@ -177,12 +178,22 @@ func (s *Scope) Patch(ctx context.Context) error {
 		return err
 	}
 	if changed {
+		// A deleted claim whose last finalizer this patch removes is gone
+		// once it is written, and has no status left to write.
+		gone := !s.Claim.DeletionTimestamp.IsZero() && len(s.Claim.Finalizers) == 0
 		// The API server's answer overwrites the claim, so the status the
 		// chain wants is put back afterwards.
 		meta := client.MergeFromWithOptions(s.Original, client.MergeFromWithOptimisticLock{})
 		if err := s.Client.Patch(ctx, s.Claim, meta); err != nil {
 			s.Claim.Status = *desired
+			if gone && apierrors.IsNotFound(err) {
+				return nil
+			}
 			return fmt.Errorf("patching MicroVMClaim %s: %w", client.ObjectKeyFromObject(s.Claim), err)
+		}
+		if gone {
+			s.Claim.Status = *desired
+			return nil
 		}
 	}
 

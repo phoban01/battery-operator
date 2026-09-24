@@ -34,7 +34,7 @@ import (
 // Bind.
 //
 // A claim that is being deleted also stops the chain: releasing its Lease
-// is the release subreconciler's (CL-020, CL-021), and no deleted claim may
+// is Release's (CL-020, CL-021), and no deleted claim may
 // be bound.
 type EnsureFinalizer struct{}
 

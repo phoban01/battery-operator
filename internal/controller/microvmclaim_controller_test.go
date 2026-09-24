@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -33,6 +34,41 @@ import (
 	"github.com/phoban01/battery-operator/internal/clock"
 	"github.com/phoban01/battery-operator/internal/controller/claim"
 )
+
+// The claim these tests reconcile, and the Lease battery gives it.
+const (
+	testClaimName  = "runner-1"
+	testClaimLease = "lease-1"
+)
+
+var testClaimKey = client.ObjectKey{Namespace: "ci", Name: testClaimName}
+
+// testClaim is a new claim on the Pool small.
+func testClaim() *batteryv1alpha1.MicroVMClaim {
+	return &batteryv1alpha1.MicroVMClaim{
+		ObjectMeta: metav1.ObjectMeta{Name: testClaimKey.Name, Namespace: testClaimKey.Namespace},
+		Spec: batteryv1alpha1.MicroVMClaimSpec{
+			PoolRef:            batteryv1alpha1.PoolReference{Name: "small"},
+			ServiceAccountName: "runner",
+		},
+	}
+}
+
+// newClaimFakeClient is a fake client holding cl, with the status
+// subresource.
+func newClaimFakeClient(t *testing.T, cl *batteryv1alpha1.MicroVMClaim) (*runtime.Scheme, client.Client) {
+	t.Helper()
+	s := runtime.NewScheme()
+	if err := batteryv1alpha1.AddToScheme(s); err != nil {
+		t.Fatal(err)
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(cl).
+		WithStatusSubresource(&batteryv1alpha1.MicroVMClaim{}).
+		Build()
+	return s, c
+}
 
 // claimVMStub is a battery.Client whose ClaimVM gives the next of answers.
 // Every other method panics through the nil embedded Client.
@@ -48,7 +84,7 @@ func (s *claimVMStub) ClaimVM(context.Context, battery.PoolRef) (*battery.Claim,
 	if err != nil {
 		return nil, err
 	}
-	return &battery.Claim{LeaseID: "lease-1", VMUID: "vm-1", Host: battery.HostRef{Name: "node-a"}}, nil
+	return &battery.Claim{LeaseID: testClaimLease, VMUID: "vm-1", Host: battery.HostRef{Name: "node-a"}}, nil
 }
 
 // TestMicroVMClaimReconcilerBindsAfterTheFinalizer drives the controller
@@ -59,21 +95,7 @@ func (s *claimVMStub) ClaimVM(context.Context, battery.PoolRef) (*battery.Claim,
 // package claim.
 func TestMicroVMClaimReconcilerBindsAfterTheFinalizer(t *testing.T) {
 	ctx := context.Background()
-	s := runtime.NewScheme()
-	if err := batteryv1alpha1.AddToScheme(s); err != nil {
-		t.Fatal(err)
-	}
-	c := fake.NewClientBuilder().
-		WithScheme(s).
-		WithObjects(&batteryv1alpha1.MicroVMClaim{
-			ObjectMeta: metav1.ObjectMeta{Name: "runner-1", Namespace: "ci"},
-			Spec: batteryv1alpha1.MicroVMClaimSpec{
-				PoolRef:            batteryv1alpha1.PoolReference{Name: "small"},
-				ServiceAccountName: "runner",
-			},
-		}).
-		WithStatusSubresource(&batteryv1alpha1.MicroVMClaim{}).
-		Build()
+	s, c := newClaimFakeClient(t, testClaim())
 	b := &claimVMStub{answers: []error{battery.ErrExhausted, nil}}
 	r := &MicroVMClaimReconciler{
 		Client:    c,
@@ -83,7 +105,7 @@ func TestMicroVMClaimReconcilerBindsAfterTheFinalizer(t *testing.T) {
 		Clock:     clock.NewFake(time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)),
 		Backoff:   claim.Backoff{Min: time.Second, Max: time.Minute},
 	}
-	key := client.ObjectKey{Namespace: "ci", Name: "runner-1"}
+	key := testClaimKey
 	req := ctrl.Request{NamespacedName: key}
 	got := &batteryv1alpha1.MicroVMClaim{}
 
@@ -117,7 +139,7 @@ func TestMicroVMClaimReconcilerBindsAfterTheFinalizer(t *testing.T) {
 	if err := c.Get(ctx, key, got); err != nil {
 		t.Fatal(err)
 	}
-	if got.Status.Phase != batteryv1alpha1.MicroVMClaimBound || got.Status.LeaseID != "lease-1" {
+	if got.Status.Phase != batteryv1alpha1.MicroVMClaimBound || got.Status.LeaseID != testClaimLease {
 		t.Fatalf("status = %+v, want Bound on lease-1", got.Status)
 	}
 	if !meta.IsStatusConditionTrue(got.Status.Conditions, batteryv1alpha1.ConditionSynced) {
@@ -145,5 +167,74 @@ func TestMicroVMClaimReconcilerIgnoresAGoneClaim(t *testing.T) {
 	req := ctrl.Request{NamespacedName: client.ObjectKey{Namespace: "ci", Name: "gone"}}
 	if res, err := r.Reconcile(context.Background(), req); err != nil || res != (ctrl.Result{}) {
 		t.Errorf("Reconcile = %+v, %v; want nothing", res, err)
+	}
+}
+
+// releaseVMStub is a battery.Client whose ReleaseVM gives the next of
+// answers. Every other method panics through the nil embedded Client.
+type releaseVMStub struct {
+	battery.Client
+	answers []error
+	leases  []string
+}
+
+func (s *releaseVMStub) ReleaseVM(_ context.Context, leaseID string) error {
+	err := s.answers[len(s.leases)]
+	s.leases = append(s.leases, leaseID)
+	return err
+}
+
+// TestMicroVMClaimReconcilerReleasesADeletedClaim drives the controller
+// through the deletion of a Bound claim: battery answers UNAVAILABLE while
+// flintlockd has not confirmed the MicroVM's deletion, so the claim keeps
+// its finalizer and is retried, and it goes away once battery has released
+// the Lease. It checks the wiring; the behaviour is tested in package
+// claim.
+func TestMicroVMClaimReconcilerReleasesADeletedClaim(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)
+	deleted := metav1.NewTime(now)
+	cl := testClaim()
+	cl.Finalizers = []string{batteryv1alpha1.ReleaseFinalizer}
+	cl.DeletionTimestamp = &deleted
+	cl.Status = batteryv1alpha1.MicroVMClaimStatus{Phase: batteryv1alpha1.MicroVMClaimBound, LeaseID: testClaimLease}
+	s, c := newClaimFakeClient(t, cl)
+	b := &releaseVMStub{answers: []error{battery.ErrUnavailable, nil}}
+	r := &MicroVMClaimReconciler{
+		Client:    c,
+		Scheme:    s,
+		APIReader: c,
+		Battery:   b,
+		Clock:     clock.NewFake(now),
+		Backoff:   claim.Backoff{Min: time.Second, Max: time.Minute},
+	}
+	key := testClaimKey
+	req := ctrl.Request{NamespacedName: key}
+	got := &batteryv1alpha1.MicroVMClaim{}
+
+	// First: battery has not released the Lease yet.
+	res, err := r.Reconcile(ctx, req)
+	if err != nil || res.RequeueAfter != time.Second {
+		t.Fatalf("first Reconcile = %+v, %v; want a retry after 1s", res, err)
+	}
+	if err := c.Get(ctx, key, got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Finalizers) != 1 || got.Status.Phase != batteryv1alpha1.MicroVMClaimBound {
+		t.Fatalf("after UNAVAILABLE: finalizers %v, phase %q; want the finalizer kept and Bound", got.Finalizers, got.Status.Phase)
+	}
+	if meta.IsStatusConditionTrue(got.Status.Conditions, batteryv1alpha1.ConditionSynced) {
+		t.Errorf("Synced is true after UNAVAILABLE: %+v", got.Status.Conditions)
+	}
+
+	// Second: the Lease is released, and the claim goes away.
+	if res, err := r.Reconcile(ctx, req); err != nil || res.RequeueAfter != 0 {
+		t.Fatalf("second Reconcile = %+v, %v", res, err)
+	}
+	if err := c.Get(ctx, key, got); !apierrors.IsNotFound(err) {
+		t.Errorf("Get = %v, want the claim gone", err)
+	}
+	if len(b.leases) != 2 || b.leases[0] != testClaimLease || b.leases[1] != testClaimLease {
+		t.Errorf("ReleaseVM calls = %v, want two for lease-1", b.leases)
 	}
 }
