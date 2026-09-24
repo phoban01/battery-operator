@@ -19,6 +19,14 @@ How the Operator runs, how it reaches battery, and what the Manifests deploy
 - **DP-006** The Operator SHALL restart battery through a single mechanism
   that the Inventory Controller invokes, and SHALL wait until battery answers
   again before any controller calls it.
+- **DP-007** When the client certificate in the Secret of DP-005 changes,
+  the Operator SHALL restart battery through the mechanism of DP-006, and
+  SHALL signal battery only once the Operator's own mount of that Secret
+  holds the new certificate.
+- **DP-008** The Operator SHALL restart battery for a changed client
+  certificate at the close of a restart window of IN-012, in the same
+  single restart as every change to battery's Hosts that has settled by
+  then.
 
 battery's API must be private to the Operator, because a client that can
 reach it directly can claim and use a MicroVM without a claim, bypassing the
@@ -35,6 +43,24 @@ DP-006 leaves the mechanism open: the Operator can signal battery through a
 shared process namespace, or battery can be restarted by the kubelet when
 its configuration changes. Whichever is chosen is written down where it is
 built.
+
+battery v0.3.3 reads its client certificate once, when it starts, and
+presents it to every Host until it exits (BA-061). cert-manager renews the
+certificate before it expires and the kubelet updates the mounted files,
+but battery goes on presenting the old certificate, and once that expires
+every call to a Host fails its TLS handshake. DP-007 closes the gap with
+the one restart of DP-006: the Inventory Controller, which already restarts
+battery, watches that Secret too, by name. The kubelet updates a Secret
+volume some time after the Secret changes, so the Operator's container
+mounts the volume battery reads its certificate from, and battery is
+signalled only once that volume holds the new certificate. The Operator
+may read the Secret anyway, so the mount gives it nothing new.
+
+A renewal comes weeks before the old certificate expires, so it can wait
+for a restart window. DP-008 puts it in one, so that a renewal and a change
+to the Hosts close together restart battery once, and restarts stay at
+least one restart window apart. battery reloading its certificate would
+remove the restart; it is one of the upstream asks.
 
 ## The battery connection {#battery-connection}
 

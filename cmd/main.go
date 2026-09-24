@@ -127,13 +127,15 @@ func main() {
 	defer func() { _ = batteryConn.Close() }()
 
 	// battery restarts through restarter alone (DP-006): the Inventory
-	// Controller calls its Restart after writing battery's ConfigMap, and
+	// Controller calls its Restart after writing battery's ConfigMap, for a
+	// change to its Hosts or a renewed client certificate (DP-007), and
 	// the controllers call battery through batteryClient, which holds their
 	// calls while battery restarts.
 	restarter := &batterysidecar.Restarter{
-		ConfigFile: sidecarConfig.ConfigFile,
-		Processes:  batterysidecar.ProcFS{},
-		Ping:       batteryConn.Ping,
+		ConfigFile:     sidecarConfig.ConfigFile,
+		ClientCertFile: sidecarConfig.ClientCertFile,
+		Processes:      batterysidecar.ProcFS{},
+		Ping:           batteryConn.Ping,
 	}
 	batteryClient := batterysidecar.Gated{Client: batteryConn, Gate: restarter}
 
@@ -271,10 +273,11 @@ func main() {
 			Writer: mgr.GetClient(),
 			Key:    client.ObjectKey{Namespace: signerConfig.Namespace, Name: sidecarConfig.ConfigMap},
 		},
-		Restarter: restarter,
-		Hosts:     hosts,
-		Pools:     batteryClient,
-		Options:   inventoryOptions,
+		Restarter:    restarter,
+		ClientSecret: client.ObjectKey{Namespace: signerConfig.Namespace, Name: sidecarConfig.ClientSecret},
+		Hosts:        hosts,
+		Pools:        batteryClient,
+		Options:      inventoryOptions,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "inventory")
 		os.Exit(1)

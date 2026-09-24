@@ -25,23 +25,26 @@ import (
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 
+	"github.com/phoban01/battery-operator/internal/batterysidecar"
 	"github.com/phoban01/battery-operator/internal/clock"
 )
 
 // The Inventory Controller's scope, subreconciler and chain are local, in
 // the shape of the shared Scope[T], SubReconciler[T] and chain that #58
 // brings (CLAUDE.md, "Controller structure"). Its "object" is battery's
-// configuration: the controller builds the scope from the Nodes and the
-// configuration as stored, and the subreconcilers decide what battery's
-// Hosts should be. Writing that configuration and restarting battery is
+// configuration: the controller builds the scope from the Nodes, the
+// configuration as stored and battery's client certificate, and the
+// subreconcilers decide what battery's Hosts should be and whether battery
+// needs a restart. Writing that configuration and restarting battery is
 // battery's side of the Operator, as a call to battery's API would be, and
 // goes through Store and Restarter.
 
-// Restarter restarts battery with a configuration just written: the one
-// restart hook, batterysidecar.Restarter in production (DP-006).
+// Restarter restarts battery with a configuration just written and the
+// client certificate its Secret holds: the one restart hook,
+// batterysidecar.Restarter in production (DP-006).
 type Restarter interface {
-	// Restart returns once battery runs with config and answers again.
-	Restart(ctx context.Context, config []byte) error
+	// Restart returns once battery runs with want and answers again.
+	Restart(ctx context.Context, want batterysidecar.Mounts) error
 }
 
 // Scope is one reconcile of the inventory.
@@ -51,6 +54,9 @@ type Scope struct {
 	// Config is battery's configuration as stored; Apply and Resume keep it
 	// up to date with what they write.
 	Config Config
+	// ClientCertificate is battery's flintlockd client certificate as its
+	// Secret holds it now, nil while there is no such Secret.
+	ClientCertificate []byte
 
 	// Observed is the Hosts the Nodes make now, name to flintlockd
 	// address, before any settling; Admit sets it.
@@ -58,6 +64,9 @@ type Scope struct {
 	// Desired is the Hosts battery should have: every settled change
 	// applied to Config's Hosts; Settle sets it.
 	Desired Hosts
+	// Renewed is true when ClientCertificate is not the one battery last
+	// restarted with; Renew sets it.
+	Renewed bool
 
 	// State is what the controller remembers between reconciles.
 	State *State
@@ -204,6 +213,7 @@ func NewChain(o Options) Chain {
 		Resume{},
 		Admit{},
 		Settle{Time: o.SettleTime},
+		Renew{},
 		Window{Length: o.RestartWindow},
 		Drain{Timeout: o.DrainTimeout},
 		Apply{},

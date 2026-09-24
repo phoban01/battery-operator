@@ -30,6 +30,13 @@ import (
 // errUnknownHost is the cause when a flintlock_hosts name is not in Hosts.
 var errUnknownHost = errors.New("unknown host")
 
+//= docs/requirements/10-battery.md#restarts
+//= type=exception
+//= reason=The fake reaches each Host over the connection a test gives it, and reads no certificate, so there is none for it to hold on to.
+//# battery SHALL read the client certificate, key and certificate
+//# authority of each Host's TLS configuration only when it starts, and SHALL
+//# present that client certificate to the Host until it exits.
+
 // Hosts is the set of flintlockd Hosts the fake places MicroVMs on, by the
 // names Pools list in flintlock_hosts. Each is a gRPC connection, over
 // which the fake uses flintlock's generated MicroVM and MicroVMExec

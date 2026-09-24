@@ -125,14 +125,15 @@ func TestConfigMapStore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := h.store.Save(ctx, raw, true); err != nil {
+	if err := h.store.Save(ctx, Config{Raw: raw, Pending: true, ClientCertificate: Digest([]byte("certificate"))}); err != nil {
 		t.Fatal(err)
 	}
 	c = h.stored()
-	if !c.Hosts.Equal(Hosts{nodeA: addrA}) || !c.Pending || string(c.Raw) != string(raw) {
+	if !c.Hosts.Equal(Hosts{nodeA: addrA}) || !c.Pending || string(c.Raw) != string(raw) ||
+		c.ClientCertificate != Digest([]byte("certificate")) {
 		t.Errorf("after a pending Save: %+v", c)
 	}
-	if err := h.store.Save(ctx, raw, false); err != nil {
+	if err := h.store.Save(ctx, Config{Raw: raw}); err != nil {
 		t.Fatal(err)
 	}
 	cm := &corev1.ConfigMap{}
@@ -141,6 +142,9 @@ func TestConfigMapStore(t *testing.T) {
 	}
 	if _, ok := cm.Annotations[RestartPendingAnnotation]; ok {
 		t.Error("the pending mark was left after the restart")
+	}
+	if _, ok := cm.Annotations[ClientCertificateAnnotation]; ok {
+		t.Error("a client certificate is recorded after a Save without one")
 	}
 }
 

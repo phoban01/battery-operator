@@ -19,7 +19,8 @@ limitations under the License.
 // set of Hosts it has given battery, which the Pool Controller reads.
 //
 // The Inventory Controller has one reconcile for the whole cluster: every
-// Node event leads to it. It runs, in order:
+// Node event, and every change to the Secret holding battery's flintlockd
+// client certificate, leads to it. It runs, in order:
 //
 //   - Resume restarts battery if a previous reconcile wrote battery's
 //     configuration and did not finish restarting it, and publishes the
@@ -30,13 +31,24 @@ limitations under the License.
 //     flintlockd address, out of battery until it has held for the settle
 //     time (IN-011), and so works out the Hosts battery should have
 //     (IN-002).
-//   - Window batches the settled changes: the first one waiting opens a
-//     restart window, and nothing is applied until it closes (IN-012).
+//   - Renew notices that cert-manager has renewed battery's client
+//     certificate, which battery reads only when it starts (DP-007,
+//     BA-061).
+//   - Window batches the settled changes and a renewal: the first one
+//     waiting opens a restart window, and nothing is applied until it
+//     closes (IN-012, DP-008).
 //   - Drain, before a restart that removes Hosts, publishes the Hosts that
 //     remain and waits, for at most the drain timeout, until no Pool in
-//     battery names a leaving Host (IN-013).
+//     battery names a leaving Host (IN-013). A restart for a renewal alone
+//     removes no Host, and passes straight through.
 //   - Apply writes the Hosts to battery's configuration and restarts
-//     battery through the one restart hook (IN-010, IN-004; DP-006).
+//     battery through the one restart hook, which waits for the
+//     configuration and the certificate to reach battery's files (IN-010,
+//     IN-004; DP-006, DP-007).
+//
+// Every restart of battery goes through Apply or Resume, and so through
+// the one Restarter: a renewal and a Host change never restart battery
+// twice.
 //
 // # The restart window
 //
@@ -49,6 +61,11 @@ limitations under the License.
 // plus one window after it happens. That is the reading of IN-012 the
 // model in specs/quint/pools.qnt checks.
 //
+// A renewed client certificate is a change too, with no settle time: it
+// opens a window, or joins the one open, and goes into the same restart
+// as the Host changes settled by its close (DP-008). A renewal comes weeks
+// before the old certificate expires, so a window's wait costs nothing.
+//
 // The kubelet restarts battery with a back-off that grows while battery
 // keeps exiting within ten minutes of starting (10s, 20s, 40s, ... up to
 // five minutes), so the window also keeps the back-off from growing on a
@@ -60,5 +77,10 @@ limitations under the License.
 // kept in memory (State): a Node seen for the first time starts to settle
 // then. battery's configuration is the ConfigMap, which also records,
 // in the annotation RestartPendingAnnotation, a configuration written and
-// not yet restarted into, so that Resume finishes the restart.
+// not yet restarted into, so that Resume finishes the restart; and, in
+// ClientCertificateAnnotation, the digest of the client certificate battery
+// last restarted with, so that a renewal while the Operator was down is
+// still noticed. Resume restarts with the certificate the Secret holds when
+// it runs, which may be newer than the one the interrupted restart waited
+// for.
 package inventory

@@ -3,18 +3,21 @@
 // Pools, placement and inventory: the Pool Controller and the Inventory
 // Controller against battery.
 //
-// What it models (docs/requirements/03-pools.md, 04-inventory.md, ADR 0001
-// consequence 1):
+// What it models (docs/requirements/03-pools.md, 04-inventory.md,
+// 06-deployment.md#battery-sidecar, ADR 0001 consequence 1):
 //
 // - the Inventory Controller: decide which Nodes are Hosts (IN-001,
 //   IN-002), let a change settle (IN-011), apply the settled changes in
-//   one restart of battery per restart window (IN-010, IN-012), and before
-//   a restart that removes Hosts, have the Pools drop them (IN-013);
+//   one restart of battery per restart window (IN-010, IN-012), with a
+//   renewal of battery's client certificate in the same windows (DP-007,
+//   DP-008), and before a restart that removes Hosts, have the Pools drop
+//   them (IN-013);
 // - the Pool Controller: the finalizer, CreatePool, UpdatePool on a new
 //   generation or a new set of matching Hosts, the NoEligibleHost
 //   condition, and DeletePool under the finalizer (PO-001 to PO-003,
 //   PO-010 to PO-012);
-// - battery v0.3.3: it reads its Hosts from its configuration only when it
+// - battery v0.3.3: it reads its Hosts from its configuration, and its
+//   client certificate from its Secret's volume, only when it
 //   starts, and replenishes each Pool on the least loaded Host in the
 //   Pool's flintlock_hosts (internal/reconciler/hostpick.go). It does not
 //   check flintlock_hosts against its Hosts: CreatePool and UpdatePool take
@@ -23,6 +26,7 @@
 // - the environment: Nodes are labelled, cordoned, uncordoned, deleted and
 //   created again, their Node reports flip between ready and not ready,
 //   Pools are created, changed and deleted, leased MicroVMs are released,
+//   cert-manager renews battery's client certificate,
 //   and time passes.
 //
 // The Pool Controller resolves a selector against the Hosts the Inventory
@@ -81,6 +85,8 @@ module pools {
     pools: PoolName -> BatteryPool,
     vms: Set[PlacedVM],
     nextVM: int,
+    // the client certificate battery read when it last started (BA-061)
+    cert: int,
   }
 
   type InventoryState = {
@@ -93,10 +99,18 @@ module pools {
     // battery runs with, less those a restart is about to remove (IN-013).
     // A Host joins it only once battery has restarted with it.
     published: Set[HostName],
+    // the client certificate battery last restarted with, as the
+    // Inventory Controller recorded it
+    cert: int,
   }
 
-  // A restart of battery, and the age of each change it applied.
-  type Restart = { at: Time, changed: Set[HostName], ages: Set[Time] }
+  // A restart of battery, the age of each change it applied, and whether
+  // it was for a renewed client certificate.
+  type Restart = { at: Time, changed: Set[HostName], ages: Set[Time], renewed: bool }
+
+  // battery's client certificate's Secret: its certificate, numbered from
+  // 0 by renewal, and when cert-manager last renewed it.
+  type SecretState = { cert: int, renewedAt: Time }
 
   // A MicroVM's creation, and whether its Host's Node was a Host then.
   type Birth = { host: HostName, at: Time, nodeIsHost: bool, age: Time }
@@ -138,6 +152,7 @@ module pools {
   var battery: BatteryState
   var inv: InventoryState
   var hist: History
+  var secret: SecretState
 
   // ---------------------------------------------------------------------
   // Views
@@ -221,6 +236,7 @@ module pools {
 
   action init = all {
     now' = 0,
+    secret' = { cert: 0, renewedAt: 0 },
     nodes' = HOSTS.mapBy(h => {
       name: h,
       labels: initialLabels.get(h),
@@ -230,8 +246,8 @@ module pools {
     present' = HOSTS,
     changedAt' = HOSTS.mapBy(_ => 0),
     pools' = POOLS.mapBy(_ => PoolUnborn),
-    battery' = { up: true, hosts: HOSTS, pools: Map(), vms: Set(), nextVM: 1 },
-    inv' = { config: HOSTS, window: None, published: HOSTS },
+    battery' = { up: true, hosts: HOSTS, pools: Map(), vms: Set(), nextVM: 1, cert: 0 },
+    inv' = { config: HOSTS, window: None, published: HOSTS, cert: 0 },
     hist' = {
       restarts: List(),
       births: Set(),
@@ -262,7 +278,7 @@ module pools {
       changedAt' = if (was != becomes) changedAt.set(h, now) else changedAt,
       hist' = if (was != becomes and becomes == inv.config.contains(h) and not(settled(h)))
         { ...hist, absorbedFlaps: hist.absorbedFlaps + 1 } else hist,
-      now' = now, pools' = pools, battery' = battery, inv' = inv,
+      now' = now, secret' = secret, pools' = pools, battery' = battery, inv' = inv,
     }
   }
 
@@ -312,7 +328,7 @@ module pools {
     not(live(p)),
     pools' = pools.set(p, PoolLive(newPool(p, { size: n, heartbeatExpiryThreshold: EXPIRY, nodeSelector: sel }))),
     hist' = { ...hist, finalized: hist.finalized.exclude(Set(p)) },
-    now' = now, nodes' = nodes, present' = present, changedAt' = changedAt, battery' = battery, inv' = inv,
+    now' = now, secret' = secret, nodes' = nodes, present' = present, changedAt' = changedAt, battery' = battery, inv' = inv,
   }
 
   // A change to the spec bumps metadata.generation.
@@ -324,7 +340,7 @@ module pools {
       generation: obj(p).generation + 1,
       spec: { ...obj(p).spec, size: n, nodeSelector: sel },
     })),
-    now' = now, nodes' = nodes, present' = present, changedAt' = changedAt, battery' = battery, inv' = inv, hist' = hist,
+    now' = now, secret' = secret, nodes' = nodes, present' = present, changedAt' = changedAt, battery' = battery, inv' = inv, hist' = hist,
   }
 
   // With a finalizer the API server only marks the Pool; without one it is
@@ -333,7 +349,15 @@ module pools {
     live(p), not(obj(p).deleting),
     pools' = pools.set(p,
       if (obj(p).hasFinalizer) PoolLive({ ...obj(p), deleting: true }) else PoolGone(obj(p))),
-    now' = now, nodes' = nodes, present' = present, changedAt' = changedAt, battery' = battery, inv' = inv, hist' = hist,
+    now' = now, secret' = secret, nodes' = nodes, present' = present, changedAt' = changedAt, battery' = battery, inv' = inv, hist' = hist,
+  }
+
+  // cert-manager renews battery's client certificate, and the kubelet
+  // updates the Secret's volume.
+  action renewCertificate: bool = all {
+    secret' = { cert: secret.cert + 1, renewedAt: now },
+    now' = now, nodes' = nodes, present' = present, changedAt' = changedAt, pools' = pools,
+    battery' = battery, inv' = inv, hist' = hist,
   }
 
   // Time passes, once the Inventory Controller and battery have caught up.
@@ -341,7 +365,7 @@ module pools {
     battery.up,
     not(canOpenWindow),
     not(canCloseWindow),
-    now' = now + 1,
+    now' = now + 1, secret' = secret,
     nodes' = nodes, present' = present, changedAt' = changedAt, pools' = pools,
     battery' = battery, inv' = inv, hist' = hist,
   }
@@ -361,7 +385,7 @@ module pools {
       nextVM: battery.nextVM + 1,
     },
     hist' = { ...hist, births: hist.births.union(Set({ host: h, at: now, nodeIsHost: isHost(h), age: age(h) })) },
-    now' = now, nodes' = nodes, present' = present, changedAt' = changedAt, pools' = pools, inv' = inv,
+    now' = now, secret' = secret, nodes' = nodes, present' = present, changedAt' = changedAt, pools' = pools, inv' = inv,
   }
 
   // PickHost chose a Host battery was not configured with; Provision fails
@@ -371,7 +395,7 @@ module pools {
     leastLoaded(p).contains(h),
     not(battery.hosts.contains(h)),
     hist' = { ...hist, unknownHostPicks: hist.unknownHostPicks + 1 },
-    now' = now, nodes' = nodes, present' = present, changedAt' = changedAt, pools' = pools,
+    now' = now, secret' = secret, nodes' = nodes, present' = present, changedAt' = changedAt, pools' = pools,
     battery' = battery, inv' = inv,
   }
 
@@ -383,35 +407,48 @@ module pools {
     val vs = battery.vms.filter(v => v.pool == p and v.host == h)
     val newest = vs.fold(0, (m, v) => if (v.id > m) v.id else m)
     battery' = { ...battery, vms: battery.vms.filter(v => v.id != newest) },
-    now' = now, nodes' = nodes, present' = present, changedAt' = changedAt, pools' = pools, inv' = inv, hist' = hist,
+    now' = now, secret' = secret, nodes' = nodes, present' = present, changedAt' = changedAt, pools' = pools, inv' = inv, hist' = hist,
   }
 
+  //@= docs/requirements/10-battery.md#restarts
+  //@# battery SHALL read the client certificate, key and certificate
+  //@# authority of each Host's TLS configuration only when it starts, and SHALL
+  //@# present that client certificate to the Host until it exits.
+  //
   // battery starts, and reads its Hosts from its configuration (ADR 0001,
-  // consequence 1). Its Pools and MicroVMs survive in its database. The
-  // restart returns once battery answers, and the Inventory Controller
-  // publishes the Hosts it runs with: a joining Host reaches the Pool
-  // Controller only now.
+  // consequence 1), and its client certificate from its Secret's volume,
+  // which the Restarter has waited for. Its Pools and MicroVMs survive in
+  // its database. The restart returns once battery answers, and the
+  // Inventory Controller publishes the Hosts it runs with: a joining Host
+  // reaches the Pool Controller only now.
   action batteryStart: bool = all {
     not(battery.up),
-    battery' = { ...battery, up: true, hosts: inv.config },
+    battery' = { ...battery, up: true, hosts: inv.config, cert: secret.cert },
     inv' = { ...inv, published: inv.config },
-    now' = now, nodes' = nodes, present' = present, changedAt' = changedAt, pools' = pools, hist' = hist,
+    now' = now, secret' = secret, nodes' = nodes, present' = present, changedAt' = changedAt, pools' = pools, hist' = hist,
   }
 
   // ---------------------------------------------------------------------
   // The Inventory Controller
 
-  // A settled change is waiting: open a restart window.
+  //@= docs/requirements/06-deployment.md#battery-sidecar
+  //@# When the client certificate in the Secret of DP-005 changes,
+  //@# the Operator SHALL restart battery through the mechanism of DP-006
+  //
+  // The Secret holds a certificate battery has not restarted with.
+  def renewed: bool = secret.cert != inv.cert
+
+  // A settled change, or a renewal, is waiting: open a restart window.
   def canOpenWindow: bool = and {
     battery.up,
     inv.window == None,
-    desired != inv.config,
+    desired != inv.config or renewed,
   }
 
   action invOpenWindow: bool = all {
     canOpenWindow,
     inv' = { ...inv, window: Some(now) },
-    now' = now, nodes' = nodes, present' = present, changedAt' = changedAt, pools' = pools, battery' = battery, hist' = hist,
+    now' = now, secret' = secret, nodes' = nodes, present' = present, changedAt' = changedAt, pools' = pools, battery' = battery, hist' = hist,
   }
 
   def canCloseWindow: bool = match inv.window {
@@ -426,14 +463,15 @@ module pools {
   //@# window closes in a single restart of battery.
   //
   // The window closes: every change that has settled by now goes into one
-  // restart. If the changes flapped back meanwhile, there is nothing to
-  // apply and battery is left alone, and any Host a drain held back from
-  // the Pool Controller is published again.
+  // restart. If the changes flapped back meanwhile, and nothing was
+  // renewed, there is nothing to apply and battery is left alone, and any
+  // Host a drain held back from the Pool Controller is published again.
   action invCloseWindow: bool = all {
     canCloseWindow,
     desired == inv.config,
+    not(renewed),
     inv' = { ...inv, window: None, published: inv.config },
-    now' = now, nodes' = nodes, present' = present, changedAt' = changedAt, pools' = pools, battery' = battery, hist' = hist,
+    now' = now, secret' = secret, nodes' = nodes, present' = present, changedAt' = changedAt, pools' = pools, battery' = battery, hist' = hist,
   }
 
   // The Hosts the next restart would remove.
@@ -462,32 +500,42 @@ module pools {
     inv.published != remaining,
     inv' = { ...inv, published: remaining },
     hist' = if (poolsNamingLeaving != Set()) { ...hist, drainsWithPools: hist.drainsWithPools + 1 } else hist,
-    now' = now, nodes' = nodes, present' = present, changedAt' = changedAt, pools' = pools, battery' = battery,
+    now' = now, secret' = secret, nodes' = nodes, present' = present, changedAt' = changedAt, pools' = pools, battery' = battery,
   }
 
-  // Write the configuration and restart battery.
+  // Write the configuration and restart battery, with the client
+  // certificate the Secret holds (DP-007).
   action restartWith(pastDrain: bool): bool = all {
     canCloseWindow,
-    desired != inv.config,
+    desired != inv.config or renewed,
     inv.published == remaining,
     val changed = desired.exclude(inv.config).union(inv.config.exclude(desired))
     all {
-      inv' = { ...inv, config: desired, window: None },
+      inv' = { ...inv, config: desired, window: None, cert: secret.cert },
       battery' = { ...battery, up: false },
       hist' = { ...hist,
-        restarts: hist.restarts.append({ at: now, changed: changed, ages: changed.map(h => age(h)) }),
+        restarts: hist.restarts.append({
+          at: now, changed: changed, ages: changed.map(h => age(h)), renewed: renewed,
+        }),
         restartsPastDrain: if (pastDrain) hist.restartsPastDrain + 1 else hist.restartsPastDrain,
         staleAfterDrain: if (pastDrain) hist.staleAfterDrain.union(poolsNamingLeaving) else hist.staleAfterDrain,
       },
     },
-    now' = now, nodes' = nodes, present' = present, changedAt' = changedAt, pools' = pools,
+    now' = now, secret' = secret, nodes' = nodes, present' = present, changedAt' = changedAt, pools' = pools,
   }
 
   //@= docs/requirements/04-inventory.md#applying
   //@# When the set of Hosts changes, the Inventory Controller SHALL
   //@# write the new list to battery's configuration and restart battery.
   //
-  // Once no Pool in battery names a leaving Host (IN-013).
+  //@= docs/requirements/06-deployment.md#battery-sidecar
+  //@# The Operator SHALL restart battery for a changed client
+  //@# certificate at the close of a restart window of IN-012, in the same
+  //@# single restart as every change to battery's Hosts that has settled by
+  //@# then.
+  //
+  // Once no Pool in battery names a leaving Host (IN-013). A restart for a
+  // renewal alone removes no Host, so it never waits for one.
   action invRestart: bool = all {
     poolsNamingLeaving == Set(),
     restartWith(false),
@@ -521,7 +569,7 @@ module pools {
   action ctlAddFinalizer(p: PoolName): bool = all {
     canAddFinalizer(p),
     pools' = setPool(p, { ...obj(p), hasFinalizer: true }),
-    now' = now, nodes' = nodes, present' = present, changedAt' = changedAt, battery' = battery, inv' = inv, hist' = hist,
+    now' = now, secret' = secret, nodes' = nodes, present' = present, changedAt' = changedAt, battery' = battery, inv' = inv, hist' = hist,
   }
 
   //@= docs/requirements/03-pools.md#declaration
@@ -539,7 +587,7 @@ module pools {
     canCreate(p),
     battery' = { ...battery, pools: battery.pools.put(p, declared(p)) },
     pools' = setPool(p, { ...obj(p), status: { ...obj(p).status, observedGeneration: obj(p).generation, ready: readyFor(resolve(p)) } }),
-    now' = now, nodes' = nodes, present' = present, changedAt' = changedAt, inv' = inv, hist' = hist,
+    now' = now, secret' = secret, nodes' = nodes, present' = present, changedAt' = changedAt, inv' = inv, hist' = hist,
   }
 
   //@= docs/requirements/03-pools.md#declaration
@@ -572,7 +620,7 @@ module pools {
       placementUpdates: if (hostsChanged(p)) hist.placementUpdates + 1 else hist.placementUpdates,
       staleAfterDrain: hist.staleAfterDrain.exclude(Set(p)),
     },
-    now' = now, nodes' = nodes, present' = present, changedAt' = changedAt, inv' = inv,
+    now' = now, secret' = secret, nodes' = nodes, present' = present, changedAt' = changedAt, inv' = inv,
   }
 
   def canDelete(p: PoolName): bool = and {
@@ -591,7 +639,7 @@ module pools {
     },
     pools' = pools.set(p, PoolGone({ ...obj(p), hasFinalizer: false })),
     hist' = { ...hist, finalized: hist.finalized.union(Set(p)), staleAfterDrain: hist.staleAfterDrain.exclude(Set(p)) },
-    now' = now, nodes' = nodes, present' = present, changedAt' = changedAt, inv' = inv,
+    now' = now, secret' = secret, nodes' = nodes, present' = present, changedAt' = changedAt, inv' = inv,
   }
 
   // Whether the Pool Controller has any step it can take.
@@ -627,6 +675,7 @@ module pools {
       changePool(p, sel, n),
       deletePool(p),
       tick,
+      renewCertificate,
       // battery
       batteryProvision(p, h),
       batteryProvisionUnknownHost(p, h),
@@ -692,12 +741,14 @@ module pools {
   val noNewVMOnFormerHost: bool =
     hist.births.forall(b => not(b.nodeIsHost) implies b.age <= MAX_LAG)
 
-  // IN-011: a restart applies only changes that have held for the settle
-  // time, so a report that flaps faster than that restarts nothing.
+  // IN-011, DP-007: a restart applies only changes that have held for the
+  // settle time, or a renewed client certificate, so a report that flaps
+  // faster than the settle time restarts nothing.
   val restartOnlyForSettledChanges: bool =
-    hist.restarts.foldl(true, (ok, r) => ok and r.changed != Set() and r.ages.forall(a => a >= SETTLE))
+    hist.restarts.foldl(true, (ok, r) => ok and (r.changed != Set() or r.renewed) and r.ages.forall(a => a >= SETTLE))
 
-  // IN-012: battery restarts at most once per restart window.
+  // IN-012, DP-008: battery restarts at most once per restart window, for
+  // Host changes and renewals alike.
   val restartsOncePerWindow: bool =
     hist.restarts.indices().forall(i =>
       i > 0 implies hist.restarts[i].at - hist.restarts[i - 1].at >= WINDOW)
@@ -713,6 +764,17 @@ module pools {
     battery.up implies battery.pools.keys().forall(p =>
       hist.staleAfterDrain.contains(p) or battery.pools.get(p).flintlockHosts.subseteq(battery.hosts))
 
+  //@= docs/requirements/06-deployment.md#battery-sidecar
+  //@# When the client certificate in the Secret of DP-005 changes,
+  //@# the Operator SHALL restart battery through the mechanism of DP-006, and
+  //@# SHALL signal battery only once the Operator's own mount of that Secret
+  //@# holds the new certificate.
+  //
+  // DP-007: while battery runs, it presents the certificate its Secret
+  // holds, except for at most one restart window after a renewal.
+  val certificateFollowsSecret: bool =
+    (battery.up and battery.cert != secret.cert) implies now - secret.renewedAt <= WINDOW
+
   // All the invariants CI checks.
   val safety: bool = and {
     poolHostsMatchSelector,
@@ -723,6 +785,7 @@ module pools {
     restartOnlyForSettledChanges,
     restartsOncePerWindow,
     poolsNameKnownHosts,
+    certificateFollowsSecret,
   }
 
   // Findings: properties the requirements do not yet guarantee. Not in
@@ -745,6 +808,11 @@ module pools {
   val witnessBatchedRestart: bool = hist.restarts.foldl(false, (w, r) => w or r.changed.size() > 1)
   // two restarts, one window apart
   val witnessTwoRestarts: bool = hist.restarts.length() > 1
+  // battery restarted for a renewed client certificate alone
+  val witnessRenewalRestart: bool = hist.restarts.foldl(false, (w, r) => w or (r.renewed and r.changed == Set()))
+  // one restart applied a renewal and a Host change together
+  val witnessRenewalWithHostChange: bool =
+    hist.restarts.foldl(false, (w, r) => w or (r.renewed and r.changed != Set()))
   // a MicroVM was created on a Host whose Node had stopped being a Host,
   // before the change settled and was applied
   val witnessVMOnFormerHost: bool = hist.births.exists(b => not(b.nodeIsHost))

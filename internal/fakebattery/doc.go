@@ -75,6 +75,9 @@ limitations under the License.
 //   - State is lost when Run returns (above), where battery keeps its
 //     database across a restart (BA-060). SetFaults with UnavailableFor
 //     stands in for a restart.
+//   - Hosts are connections the caller gives it (Hosts.Add), and it reads
+//     no certificate; battery reads each Host's client certificate once,
+//     when it starts (BA-061).
 //   - A new Events subscriber is replayed the last Config.EventReplay events
 //     of each Pool; battery replays its whole outbox (BA-050).
 //   - Event payload_json carries a JSON object with the counts, lease id

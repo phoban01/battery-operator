@@ -308,4 +308,49 @@ module pools_test {
       .expect(and { hist.staleAfterDrain == Set("p1"), poolsNameKnownHosts, safety })
       .then(batteryProvisionUnknownHost("p1", "h2"))
       .expect(and { witnessUnknownHostPicked, safety })
+
+  // DP-007: a renewed client certificate restarts battery, one restart
+  // window later, and battery then presents it. The restart removes no
+  // Host, so there is nothing to drain (IN-013): it goes straight ahead.
+  run renewalRestartsBatteryTest =
+    init
+      .then(renewCertificate)
+      .expect(and { canOpenWindow, battery.cert != secret.cert, certificateFollowsSecret })
+      .then(invOpenWindow)
+      .then(ticks(WINDOW))
+      .expect(and { leaving == Set(), inv.published == remaining, poolsNamingLeaving == Set() })
+      .then(invRestart)
+      .then(batteryStart)
+      .expect(and {
+        battery.cert == secret.cert,
+        hist.restarts.length() == 1,
+        hist.restarts[0].renewed,
+        hist.restarts[0].changed == Set(),
+        not(canOpenWindow),
+        safety,
+      })
+
+  // DP-008: a renewal while a window is open for a Host change goes into
+  // the same restart, after the drain for the Host it removes.
+  run renewalJoinsHostWindowTest =
+    init
+      .then(cordon("h1"))
+      .then(ticks(SETTLE))
+      .then(invOpenWindow)
+      .then(tick)
+      .then(renewCertificate)
+      .expect(not(canOpenWindow))
+      .then(ticks(WINDOW - 1))
+      .then(invDrain)
+      .then(invRestart)
+      .then(batteryStart)
+      .expect(and {
+        battery.hosts == Set("h2", "h3"),
+        battery.cert == secret.cert,
+        hist.restarts.length() == 1,
+        hist.restarts[0].renewed,
+        hist.restarts[0].changed == Set("h1"),
+        not(canOpenWindow),
+        safety,
+      })
 }

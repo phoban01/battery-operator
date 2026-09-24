@@ -100,6 +100,9 @@ func (f *fakeProcesses) Running(p batterysidecar.Process) (bool, error) {
 	return true, nil
 }
 
+// eventAnswered is the event of battery answering again.
+const eventAnswered = "answered"
+
 // eventLog records what happened, in order.
 type eventLog struct {
 	mu     sync.Mutex
@@ -140,7 +143,7 @@ func (p *fakePing) ping(context.Context) error {
 	}
 	if !p.answered {
 		p.answered = true
-		p.events.add("answered")
+		p.events.add(eventAnswered)
 	}
 	return nil
 }
@@ -155,11 +158,13 @@ func writeConfig(t *testing.T, path, content string) {
 
 func newRestarter(t *testing.T, procs batterysidecar.Processes, ping *fakePing) *batterysidecar.Restarter {
 	t.Helper()
+	dir := t.TempDir()
 	return &batterysidecar.Restarter{
-		ConfigFile:   filepath.Join(t.TempDir(), batterysidecar.ConfigKey),
-		Processes:    procs,
-		Ping:         ping.ping,
-		PollInterval: time.Millisecond,
+		ConfigFile:     filepath.Join(dir, batterysidecar.ConfigKey),
+		ClientCertFile: filepath.Join(dir, "tls.crt"),
+		Processes:      procs,
+		Ping:           ping.ping,
+		PollInterval:   time.Millisecond,
 	}
 }
 
@@ -196,7 +201,7 @@ func TestRestart(t *testing.T) {
 	writeConfig(t, r.ConfigFile, "old")
 
 	done := make(chan error, 1)
-	go func() { done <- r.Restart(context.Background(), []byte("new")) }()
+	go func() { done <- r.Restart(context.Background(), batterysidecar.Mounts{Config: []byte("new")}) }()
 
 	// The kubelet has not updated the volume yet: battery is left alone,
 	// and controllers are not held up.
@@ -237,7 +242,7 @@ func TestRestart(t *testing.T) {
 	if err := <-called; err != nil {
 		t.Fatalf("the controller's call: %v", err)
 	}
-	want := []string{"terminate", "exited", "answered", "call"}
+	want := []string{"terminate", "exited", eventAnswered, "call"}
 	if got := events.list(); !slices.Equal(got, want) {
 		t.Errorf("events %v, want %v", got, want)
 	}
@@ -256,10 +261,10 @@ func TestRestartBetweenRestarts(t *testing.T) {
 	ping := &fakePing{answering: true, events: events}
 	r := newRestarter(t, procs, ping)
 	writeConfig(t, r.ConfigFile, "new")
-	if err := r.Restart(context.Background(), []byte("new")); err != nil {
+	if err := r.Restart(context.Background(), batterysidecar.Mounts{Config: []byte("new")}); err != nil {
 		t.Fatal(err)
 	}
-	if got := events.list(); !slices.Equal(got, []string{"answered"}) {
+	if got := events.list(); !slices.Equal(got, []string{eventAnswered}) {
 		t.Errorf("events %v, want battery to answer alone", got)
 	}
 }
@@ -287,7 +292,7 @@ func TestRestartFailures(t *testing.T) {
 			writeConfig(t, r.ConfigFile, "new")
 			ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 			defer cancel()
-			if err := r.Restart(ctx, []byte("new")); !errors.Is(err, tc.want) {
+			if err := r.Restart(ctx, batterysidecar.Mounts{Config: []byte("new")}); !errors.Is(err, tc.want) {
 				t.Errorf("Restart: %v, want %v", err, tc.want)
 			}
 			if err := r.Wait(context.Background()); err != nil {
@@ -308,10 +313,84 @@ func TestRestartWaitsForVolume(t *testing.T) {
 	// The volume is mid-swap: no file at all.
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
-	if err := r.Restart(ctx, []byte("new")); !errors.Is(err, context.DeadlineExceeded) {
+	if err := r.Restart(ctx, batterysidecar.Mounts{Config: []byte("new")}); !errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("Restart: %v, want the deadline", err)
 	}
 	if got := events.list(); len(got) != 0 {
 		t.Errorf("battery was touched: %v", got)
+	}
+}
+
+//= docs/requirements/06-deployment.md#battery-sidecar
+//= type=test
+//# When the client certificate in the Secret of DP-005 changes,
+//# the Operator SHALL restart battery through the mechanism of DP-006, and
+//# SHALL signal battery only once the Operator's own mount of that Secret
+//# holds the new certificate.
+
+// TestRestartWaitsForClientCertificate checks that a restart for a renewed
+// client certificate leaves battery alone until the Operator's mount of the
+// certificate holds the renewed one, even though the configuration is
+// already there, and then restarts battery as any other restart does.
+func TestRestartWaitsForClientCertificate(t *testing.T) {
+	t.Parallel()
+	events := &eventLog{}
+	old := batterysidecar.Process{PID: 7, Start: 100}
+	procs := newFakeProcesses(events, old)
+	ping := &fakePing{answering: true, events: events}
+	r := newRestarter(t, procs, ping)
+	writeConfig(t, r.ConfigFile, "config")
+	writeConfig(t, r.ClientCertFile, "old certificate")
+
+	done := make(chan error, 1)
+	go func() {
+		done <- r.Restart(context.Background(), batterysidecar.Mounts{
+			Config:            []byte("config"),
+			ClientCertificate: []byte("renewed certificate"),
+		})
+	}()
+
+	time.Sleep(20 * time.Millisecond)
+	if got := events.list(); len(got) != 0 {
+		t.Fatalf("battery was touched before its certificate's mount changed: %v", got)
+	}
+	writeConfig(t, r.ClientCertFile, "renewed certificate")
+	if err := <-done; err != nil {
+		t.Fatalf("Restart: %v", err)
+	}
+	if !slices.Equal(procs.terminated, []batterysidecar.Process{old}) {
+		t.Errorf("terminated %v, want %v", procs.terminated, old)
+	}
+	if got, want := events.list(), []string{"terminate", "exited", eventAnswered}; !slices.Equal(got, want) {
+		t.Errorf("events %v, want %v", got, want)
+	}
+}
+
+// TestRestartMountTimeout checks that a mount that never comes to hold
+// what battery is to restart with, because the Secret changed again
+// meanwhile, fails the restart with ErrMountTimeout and leaves battery
+// alone, so that the caller can read the Secret anew.
+func TestRestartMountTimeout(t *testing.T) {
+	t.Parallel()
+	for name, want := range map[string]batterysidecar.Mounts{
+		"configuration":      {Config: []byte("never")},
+		"client certificate": {Config: []byte("config"), ClientCertificate: []byte("never")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			events := &eventLog{}
+			procs := newFakeProcesses(events, batterysidecar.Process{PID: 7, Start: 1})
+			ping := &fakePing{answering: true, events: events}
+			r := newRestarter(t, procs, ping)
+			r.MountTimeout = 20 * time.Millisecond
+			writeConfig(t, r.ConfigFile, "config")
+			writeConfig(t, r.ClientCertFile, "certificate")
+			if err := r.Restart(context.Background(), want); !errors.Is(err, batterysidecar.ErrMountTimeout) {
+				t.Errorf("Restart: %v, want ErrMountTimeout", err)
+			}
+			if got := events.list(); len(got) != 0 {
+				t.Errorf("battery was touched: %v", got)
+			}
+		})
 	}
 }
