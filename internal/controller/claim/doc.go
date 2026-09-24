@@ -38,6 +38,22 @@ limitations under the License.
 //   - Pending records why a claim could not be bound, and asks for a retry
 //     with backoff (CL-003, CL-004, CL-007).
 //
+// A Bound claim then has three, in this order, each of which stops the
+// chain once it has called battery or changed the phase:
+//
+//   - ExpireDeleted expires the claim once battery's Events stream has
+//     reported its MicroVM deleted (CL-013).
+//   - Renew relays a pending renewal as a Heartbeat, and records battery's
+//     expiry with the renewTime it relayed (CL-010, CL-011, CL-012,
+//     CL-015).
+//   - CheckExpiry reads the Lease with ListLeases once the expiry in the
+//     status has passed, or when there is none yet, and keeps or expires
+//     the claim by battery's record (CL-012, CL-014, CL-016, CL-017). It
+//     waits while a renewal is pending, so Renew always goes first (#85).
+//
+// Bind calls ClaimVM only while it holds one of BindSlots' slots, so that
+// renewals never wait behind a slow ClaimVM (CL-018).
+//
 // After them, however they ended, Synced sets the Synced condition from
 // the last call to battery (CL-040, CL-041, CL-042).
 package claim
