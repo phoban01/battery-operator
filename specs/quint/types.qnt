@@ -4,11 +4,13 @@
 //
 // These mirror the v1alpha1 resources (docs/requirements/01-resources.md,
 // api/v1alpha1/), battery v0.1.0's Leases and MicroVMs, and the Hosts and
-// Nodes of the inventory (docs/requirements/04-inventory.md). They keep
-// only the fields a model reasons about, rather than every field of the Go
-// types. The claim lifecycle model (claims.qnt) uses the claim, Lease and
-// condition types; the Pool, battery Pool, Node and Host types are for the
-// pools and inventory model (#47), which adds to them as it needs.
+// Nodes of the inventory (docs/requirements/04-inventory.md), and the
+// CertificateSigningRequests and certificates of 09-certificates.md. They
+// keep only the fields a model reasons about, rather than every field of
+// the Go types. The claim lifecycle model (claims.qnt) uses the claim,
+// Lease and condition types; the Pool, battery Pool, Node and Host types
+// are for the pools and inventory model (#47), which adds to them as it
+// needs; the certificates model (certificates.qnt) uses the last section.
 //
 // Times are whole ticks of one clock, shared by battery and the Operator.
 module types {
@@ -238,4 +240,87 @@ module types {
 
   // A Host as battery's configuration lists it (IN-003).
   type Host = { name: HostName, address: str }
+
+  // ---------------------------------------------------------------------
+  // Certificates (09-certificates.md, 05-exec-agent.md#certificates)
+
+  // An IP address, as a Node's status lists it or a request names it.
+  type Address = str
+
+  // spec.signerName. OtherSigner stands for every signer name that is not
+  // one of the Operator's three (CT-001).
+  type SignerName = FlintlockdServing | FlintlockdClient | ExecAgentServing | OtherSigner
+
+  // spec.usages, reduced to the four the signers issue with and one that
+  // none does.
+  type KeyUsage = DigitalSignature | KeyEncipherment | ServerAuth | ClientAuth | CertSign
+
+  // A SPIFFE ID in flintlock's naming scheme (ADR 0003, decision 5):
+  // spiffe://<trustDomain>/flintlock/host/<node> for a Host's flintlockd,
+  // .../flintlock/client/exec-agent/<node> for an Exec Agent, and
+  // .../flintlock/client/battery for battery (whose node is "").
+  type SpiffeKind = HostWorkload | ExecAgentWorkload | BatteryWorkload
+  type SpiffeId = { trustDomain: str, kind: SpiffeKind, node: HostName }
+
+  // The requester's user info, which the API server records on the
+  // request: spec.username, and the authentication.kubernetes.io/node-name
+  // extra that a ServiceAccount token bound to a pod carries (Kubernetes
+  // 1.32). The requester chooses neither.
+  type Requester = { username: str, nodeName: Option[HostName] }
+
+  // Each check of 09-certificates.md#approval, in the order the Operator
+  // makes them (internal/controller/csr_review.go). The Operator denies a
+  // request, or marks it Failed, with the first check it fails.
+  type Check =
+    | CheckRequester       // RequesterNotExecAgent: CT-010, CT-011, CT-014
+    | CheckNodeName        // RequesterNodeMissing: the same
+    | CheckInvalidRequest  // InvalidRequest: not a self-signed PKCS#10 request
+    | CheckKeyUsages       // KeyUsagesMismatch: CT-012
+    | CheckNodeNotFound    // NodeNotFound: CT-010, CT-014
+    | CheckSubjectAltNames // SubjectAltNamesMismatch: CT-010, CT-011, CT-014
+
+  // Who put the Approved or Denied condition on a request: the Operator,
+  // or anyone else granted approve on the signer name.
+  type Approver = OperatorApprover | ForeignApprover
+
+  // The Approved and Denied conditions. The API server allows one of them,
+  // once, and never withdraws it.
+  type Decision =
+    | Undecided
+    | ApprovedBy(Approver)
+    | DeniedBy({ approver: Approver, reason: Check })
+
+  // The CA that signed a certificate (CT-002).
+  type CA = ServingCA | ClientCA
+
+  // An issued certificate: its subject, subject alternative names and key
+  // usages, and the CA that signed it.
+  type Certificate = {
+    ca: CA,
+    commonName: str,
+    ips: Set[Address],
+    uris: Set[SpiffeId],
+    dnsNames: Set[str],
+    usages: Set[KeyUsage],
+  }
+
+  type CertificateSigningRequest = {
+    signer: SignerName,
+    requester: Requester,
+    // What the PKCS#10 request asks for.
+    commonName: str,
+    ips: Set[Address],
+    uris: Set[SpiffeId],
+    dnsNames: Set[str],
+    // The request is well formed and its signature verifies with its own
+    // key.
+    selfSigned: bool,
+    usages: Set[KeyUsage],
+    // status.conditions: Approved or Denied
+    decision: Decision,
+    // status.conditions: Failed, with the check that failed
+    failed: Option[Check],
+    // status.certificate
+    certificate: Option[Certificate],
+  }
 }

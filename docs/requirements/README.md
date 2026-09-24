@@ -178,6 +178,20 @@ of date. `make duvet-models-write` rewrites it. `type=test` and
 | CL-031 | `specs/quint/claims.qnt` |
 | CL-040 | `specs/quint/claims.qnt` |
 | CL-042 | `specs/quint/claims.qnt` |
+| CT-001 | `specs/quint/certificates.qnt` |
+| CT-002 | `specs/quint/certificates.qnt` |
+| CT-003 | `specs/quint/certificates.qnt` |
+| CT-006 | `specs/quint/certificates.qnt` |
+| CT-007 | `specs/quint/certificates.qnt` |
+| CT-010 | `specs/quint/certificates.qnt` |
+| CT-011 | `specs/quint/certificates.qnt` |
+| CT-012 | `specs/quint/certificates.qnt` |
+| CT-013 | `specs/quint/certificates.qnt` |
+| CT-014 | `specs/quint/certificates.qnt` |
+| CT-020 | `specs/quint/certificates.qnt` |
+| EA-061 | `specs/quint/certificates.qnt` |
+| EA-062 | `specs/quint/certificates.qnt` |
+| EA-068 | `specs/quint/certificates.qnt` |
 <!-- END modelled -->
 
 ## The coverage gate
