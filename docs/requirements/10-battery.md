@@ -113,7 +113,7 @@ after `Run` starts. Together with BA-010 this means:
 The claim requirements allow for the first: a claim with a renewal the
 Claim Controller has not yet relayed is not expired while battery still
 holds its Lease (02-claims.md, Renewal, #85). The orphan bound in
-02-claims.md, Binding, leaves out the sweep interval (#86).
+02-claims.md, Binding, allows for all three (#86).
 
 The Lease row goes before the MicroVM: `DeleteLeaseIfExpired` deletes the
 row, then the sweep deletes the MicroVM. Once the Lease is gone, a

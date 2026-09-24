@@ -40,9 +40,14 @@ battery chooses the lease id, and `ClaimVM` carries only the Pool, so
 `ClaimVM` cannot be retried safely. If the Operator stops between battery's
 answer and the status write, the Lease is orphaned and the next reconcile
 claims a second MicroVM. CL-002 keeps that window as short as it can be. The
-orphan is bounded: nothing renews it, so battery expires it after the Pool's
-`heartbeat_expiry_threshold` and deletes the MicroVM (ADR 0001,
-consequence 2). A client-chosen lease id upstream would close the window.
+orphan is bounded: nothing renews it, so its expiry passes the Pool's
+`heartbeat_expiry_threshold` after it was claimed, and battery's next sweep
+deletes it and its MicroVM (ADR 0001, consequence 2). While battery runs,
+the orphan is gone within that threshold plus one `sweep_interval` of being
+claimed (BA-020); if its expiry passed while battery was down, within one
+`sweep_interval` of battery starting again (BA-022). Both hold only while
+battery's database answers the sweep. A client-chosen lease id upstream
+would close the window.
 
 A `ClaimVM` that fails in transit opens the same window without a crash.
 battery commits the Lease before it answers, so an answer lost after that
@@ -141,8 +146,8 @@ with a passed expiry has run out, and CL-014 applies. While `ListLeases`
 fails, the Claim Controller cannot tell, and CL-017 keeps the claim Bound
 rather than expire a Lease battery may still hold. The claim's condition
 `Synced` shows why (CL-040). battery cannot expire a Lease while it is
-down, and its sweep removes the overdue ones once it runs again, so CL-030
-settles such claims once battery is back.
+down, and its first sweep, one `sweep_interval` after it starts, removes the
+overdue ones (BA-022), so CL-030 settles such claims once battery is back.
 
 A Lease whose expiry has passed is still held by battery until its next
 sweep, up to one `sweep_interval` later, and a `Heartbeat` in that time

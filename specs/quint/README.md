@@ -129,7 +129,7 @@ test that reaches the violation:
 
 | Property | Checks | Finding |
 |----------|--------|---------|
-| `orphanGoneByExpiry` | an orphan is gone within the expiry threshold, as 02-claims.md, Binding, says | the sweep can come up to one interval later (#86; `orphanOutlivesExpiryTest`) |
+| `orphanGoneByExpiry` | an orphan is gone within the expiry threshold, as ADR 0001, consequence 2, says; 02-claims.md, Binding, now states `orphanLeaseBounded` | the sweep can come up to one interval later (#86; `orphanOutlivesExpiryTest`) |
 
 The witnesses show that the simulation reaches the interleavings that
 matter: an orphan (`witnessOrphan`), an orphan beside a claim bound after

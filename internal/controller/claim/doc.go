@@ -37,11 +37,17 @@ limitations under the License.
 //   - Pending records why a claim could not be bound, and asks for a retry
 //     with backoff (CL-003, CL-004, CL-007).
 //
-// A Bound claim then has three, in this order, each of which stops the
+// A Bound claim then has four, in this order, each of which stops the
 // chain only once it has expired the claim:
 //
 //   - ExpireDeleted expires the claim once battery's Events stream has
 //     reported its MicroVM deleted (CL-013).
+//   - Recover settles the claim by what the Operator's last recovery read
+//     with one unfiltered ListLeases on start and on reconnecting to
+//     battery (RecoveredLeases): a Lease battery did not list expires the
+//     claim, and one it listed with a later expiry updates the status
+//     (CL-030, CL-012, CL-011). Leases no claim records are never looked
+//     at (CL-031).
 //   - Renew relays a pending renewal as a Heartbeat, and records battery's
 //     expiry with the renewTime it relayed (CL-010, CL-011, CL-012,
 //     CL-015).
