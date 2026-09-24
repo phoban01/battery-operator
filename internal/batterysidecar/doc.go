@@ -68,8 +68,9 @@ limitations under the License.
 //
 // The kubelet restarts an exited container with a back-off that grows
 // while the container keeps exiting within ten minutes of starting (10s,
-// 20s, 40s, ... up to five minutes), so the Inventory Controller should
-// batch Host changes rather than restart battery for each one.
+// 20s, 40s, ... up to five minutes), so the Inventory Controller batches
+// Host changes into restart windows (IN-012) rather than restarting
+// battery for each one.
 //
 // The alternatives were rejected:
 //
