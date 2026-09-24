@@ -992,9 +992,10 @@ module claims {
   // battery runs it is gone within the Pool's heartbeat_expiry_threshold of
   // being claimed plus one sweep interval (BA-020), or within one sweep
   // interval of battery starting again if it ran out while battery was
-  // down (BA-022). 02-claims.md, Binding, states this bound (#86); ADR
-  // 0001 promises the threshold alone, which is orphanGoneByExpiry below,
-  // and does not hold.
+  // down (BA-022). 02-claims.md, Binding, and the correction note under
+  // ADR 0001, consequence 2, state this bound (#86, #106). The ADR's text
+  // as first written promises the threshold alone, which is
+  // orphanGoneByExpiry below, and does not hold.
   val orphanLeaseBounded: bool =
     orphans.forall(l => and {
       battery.leases.get(l).expiresAt == battery.leases.get(l).claimedAt + EXPIRY,
@@ -1113,9 +1114,11 @@ module claims {
   // filed as an issue, kept out of safety, and reached by a scenario test
   // in claims_test.qnt that fails once the model changes to close it.
 
-  // ADR 0001, consequence 2: battery expires an orphan after the Pool's
-  // heartbeat_expiry_threshold. 02-claims.md, Binding, said so too, until
-  // #86 corrected it to the bound of orphanLeaseBounded.
+  // ADR 0001, consequence 2, as first written: battery expires an orphan
+  // after the Pool's heartbeat_expiry_threshold. 02-claims.md, Binding,
+  // said so too. #86 corrected 02-claims.md, and #106 added a dated
+  // correction note under the ADR, both to the bound of orphanLeaseBounded.
+  // This property keeps the old wording, to show why it was wrong.
   // Not in safety: the sweep deletes it up to one sweep interval later
   // (BA-020), and up to one sweep interval after battery restarts
   // (BA-022), so it outlives the threshold (#86).

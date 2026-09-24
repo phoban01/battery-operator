@@ -304,8 +304,9 @@ module claims_test {
 
   // The finding of #86: a crash-window orphan outlives the Pool's
   // heartbeat_expiry_threshold by up to a sweep interval, which ADR 0001,
-  // consequence 2, does not allow for. orphanLeaseBounded, the bound
-  // battery gives and 02-claims.md, Binding, now states (#86), still holds.
+  // consequence 2, as first written, does not allow for. orphanLeaseBounded,
+  // the bound battery gives, which 02-claims.md, Binding, and the ADR's
+  // correction note now state (#86, #106), still holds.
   run orphanOutlivesExpiryTest =
     init
       .then(createClaim("a"))
