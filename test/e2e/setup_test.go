@@ -65,6 +65,9 @@ const (
 	// hostLabel marks the Nodes that are Hosts; kind-config.yaml sets it on
 	// both workers.
 	hostLabel = "battery.liquidmetal-x.dev/host"
+	// isTrue is the value of hostLabel on a Host, and of the Exec Agent's
+	// readiness annotation on a ready one.
+	isTrue = "true"
 	// flintlockdPort is where every Host's flintlockd serves, the fake one
 	// included.
 	flintlockdPort = 9090
@@ -343,7 +346,7 @@ func waitForDaemonSetReady(ctx context.Context, c client.Client, key types.Names
 // hostNodes are the Nodes labelled as Hosts, by name.
 func hostNodes(ctx context.Context, c client.Client) ([]corev1.Node, error) {
 	var nodes corev1.NodeList
-	if err := c.List(ctx, &nodes, client.MatchingLabels{hostLabel: "true"}); err != nil {
+	if err := c.List(ctx, &nodes, client.MatchingLabels{hostLabel: isTrue}); err != nil {
 		return nil, fmt.Errorf("listing the Hosts: %w", err)
 	}
 	if len(nodes.Items) == 0 {
@@ -359,7 +362,7 @@ func nonHostNode(ctx context.Context, c client.Client) (*corev1.Node, error) {
 		return nil, err
 	}
 	for i := range nodes.Items {
-		if nodes.Items[i].Labels[hostLabel] != "true" {
+		if nodes.Items[i].Labels[hostLabel] != isTrue {
 			return &nodes.Items[i], nil
 		}
 	}

@@ -55,6 +55,9 @@ linters:
           - lll
         path: api/*
       - linters:
+          - lll
+        path: test/e2e/*
+      - linters:
           - dupl
           - lll
         path: internal/*

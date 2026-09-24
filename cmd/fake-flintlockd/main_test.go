@@ -26,7 +26,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-logr/logr"
 	mvmv1 "github.com/liquidmetal-dev/flintlock/api/services/microvm/v1alpha1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -48,7 +47,7 @@ func TestRunWaitsForTheCertificates(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- run(ctx, logr.Discard(), addr, dir, defaultVersion, "h1", 10*time.Millisecond) }()
+	go func() { done <- run(ctx, addr, dir, defaultVersion, "h1", 10*time.Millisecond) }()
 	defer func() {
 		cancel()
 		if err := <-done; err != nil {

@@ -85,7 +85,7 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	if err := run(ctx, log, listen, certDir, version, name, interval); err != nil {
+	if err := run(logr.NewContext(ctx, log), listen, certDir, version, name, interval); err != nil {
 		log.Error(err, "Stopped serving")
 		os.Exit(1)
 	}
@@ -93,7 +93,8 @@ func main() {
 
 // run waits for the certificate files in certDir, then serves until ctx
 // ends.
-func run(ctx context.Context, log logr.Logger, listen, certDir, version, name string, interval time.Duration) error {
+func run(ctx context.Context, listen, certDir, version, name string, interval time.Duration) error {
+	log := logr.FromContextOrDiscard(ctx)
 	files := &fakeflintlock.TLS{
 		CertFile:     filepath.Join(certDir, certFile),
 		KeyFile:      filepath.Join(certDir, keyFile),

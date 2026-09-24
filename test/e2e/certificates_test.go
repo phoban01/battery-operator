@@ -107,7 +107,7 @@ func TestHostCertificates(t *testing.T) {
 						if err := c.Get(ctx, client.ObjectKey{Name: h.Name}, &n); err != nil {
 							return false, nil
 						}
-						return n.Annotations[execagent.AnnotationReady] == "true", nil
+						return n.Annotations[execagent.AnnotationReady] == isTrue, nil
 					})
 					if err != nil {
 						t.Fatalf("the Exec Agent does not report %s ready: %s=%q, %s=%q",
@@ -182,7 +182,7 @@ func approved(csr certificatesv1.CertificateSigningRequest) bool {
 // empty, the address ip, and nothing else.
 func wantNames(t *testing.T, cert *x509.Certificate, id, ip string) {
 	t.Helper()
-	var uris []string
+	uris := make([]string, 0, len(cert.URIs))
 	for _, u := range cert.URIs {
 		uris = append(uris, u.String())
 	}
