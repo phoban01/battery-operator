@@ -212,14 +212,12 @@ battery's container restarting, is up to the Manifests (06-deployment.md).
 ## Where the stand-ins differ {#stand-ins}
 
 The fake battery meets every assumption above except these, each cited
-in its code as an exception or a todo:
+in its code as an exception:
 
 - it sweeps once when it starts (BA-022), which is how a fresh Pool fills,
   and its state does not survive a restart (BA-060);
 - a new `Events` subscriber is replayed only the last events of each Pool
-  (BA-050);
-- it does not serve `ListLeases` (BA-040, BA-041) until it moves to
-  battery v0.3.3's protos (#71).
+  (BA-050).
 
 The claim lifecycle model (`specs/quint/claims.qnt`) is coarser than
 battery in these ways:

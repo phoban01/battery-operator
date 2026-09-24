@@ -77,8 +77,6 @@ limitations under the License.
 //     stands in for a restart.
 //   - A new Events subscriber is replayed the last Config.EventReplay events
 //     of each Pool; battery replays its whole outbox (BA-050).
-//   - ListLeases is not served until the fake moves to battery v0.3.3's
-//     protos (#71).
 //   - Event payload_json carries a JSON object with the counts, lease id
 //     and host of the transition, which battery does not promise.
 //   - UpdatePool and CreatePool refuse a heartbeat_expiry_threshold that is
@@ -89,4 +87,4 @@ package fakebattery
 
 //= docs/requirements/08-test-doubles.md#fake-battery
 //# The fake battery SHALL document every behaviour in which it
-//# deliberately differs from battery v0.1.0.
+//# deliberately differs from battery v0.3.3.

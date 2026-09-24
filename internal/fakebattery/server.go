@@ -30,7 +30,7 @@ import (
 )
 
 //= docs/requirements/08-test-doubles.md#fake-battery
-//# The fake battery SHALL serve battery v0.1.0's `PoolAdmin`,
+//# The fake battery SHALL serve battery v0.3.3's `PoolAdmin`,
 //# `Lease` and `Events` services over gRPC with the generated server stubs.
 
 // newGRPCServer builds a server with the three services registered from
@@ -123,22 +123,7 @@ func (s *poolAdminServer) ListPools(_ context.Context, req *poolmgrv1.ListPoolsR
 	return resp, nil
 }
 
-//= docs/requirements/10-battery.md#list-leases
-//= type=todo
-//= tracking-issue=71
-//# When battery receives a `ListLeases`, battery SHALL answer with
-//# every Lease it holds, or every Lease of the one Pool the request names,
-//# each with its lease id, MicroVM uid, Pool, claim time, last heartbeat time
-//# and expiry, without renewing any of them.
-
-//= docs/requirements/10-battery.md#list-leases
-//= type=todo
-//= tracking-issue=71
-//# battery SHALL include in the answer to `ListLeases` a Lease
-//# whose expiry has passed but that no sweep has deleted yet.
-
-// leaseServer implements poolmgrv1.LeaseServer. ListLeases comes with
-// battery v0.3.3's protos (#71).
+// leaseServer implements poolmgrv1.LeaseServer.
 type leaseServer struct {
 	poolmgrv1.UnimplementedLeaseServer
 	b *Battery
@@ -182,6 +167,15 @@ func (s *leaseServer) ReleaseVM(ctx context.Context, req *poolmgrv1.ReleaseVMReq
 // Lease past its expiry until the control loop sweeps it, and lists nothing,
 // without an error, for a Pool it does not know.
 func (s *leaseServer) ListLeases(_ context.Context, req *poolmgrv1.ListLeasesRequest) (*poolmgrv1.ListLeasesResponse, error) {
+	//= docs/requirements/10-battery.md#list-leases
+	//# When battery receives a `ListLeases`, battery SHALL answer with
+	//# every Lease it holds, or every Lease of the one Pool the request names,
+	//# each with its lease id, MicroVM uid, Pool, claim time, last heartbeat time
+	//# and expiry, without renewing any of them.
+
+	//= docs/requirements/10-battery.md#list-leases
+	//# battery SHALL include in the answer to `ListLeases` a Lease
+	//# whose expiry has passed but that no sweep has deleted yet.
 	var filter *PoolRef
 	if req.PoolRef != nil {
 		ref := refFromProto(req.GetPoolRef())

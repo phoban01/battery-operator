@@ -27,7 +27,7 @@ import (
 //= type=test
 //# The fake battery SHALL replenish Pools, expire Leases that are
 //# not renewed within the Pool's expiry threshold, and answer `ClaimVM` on an
-//# empty Pool with `RESOURCE_EXHAUSTED`, as battery v0.1.0 does.
+//# empty Pool with `RESOURCE_EXHAUSTED`, as battery v0.3.3 does.
 
 // TestReplenishmentStrategies drives each of the three strategies declared
 // in a PoolSpec on the fake clock. Each case asserts both what the strategy

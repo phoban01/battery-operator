@@ -26,7 +26,7 @@ import (
 //# each of the `PoolSpec` fields `microvm_template`, `size`,
 //# `replenishment_strategy`, `create_commands`, `pre_lease_commands`,
 //# `hook_failure_policy`, `heartbeat_interval` and
-//# `heartbeat_expiry_threshold` of battery v0.1.0.
+//# `heartbeat_expiry_threshold` of battery v0.3.3.
 
 // PoolSpec is battery v0.3.3's PoolSpec
 // (api/proto/poolmgr/v1alpha1/types.proto in github.com/liquidmetal-dev/battery)
@@ -93,7 +93,7 @@ type PoolSpec struct {
 
 	//= docs/requirements/01-resources.md#pool
 	//# The CRDs SHALL reject a `Pool` whose `spec.size` is negative or
-	//# whose enumerated fields hold a value that battery v0.1.0 does not define.
+	//# whose enumerated fields hold a value that battery v0.3.3 does not define.
 
 	// size is the number of MicroVMs the Pool keeps (PoolSpec.size).
 	// +required
