@@ -131,9 +131,6 @@ func scopeFor(t *testing.T, c client.Client, key client.ObjectKey, b battery.Cli
 	return s
 }
 
-// The names the claim tests use: aClaim's Pool, and the MicroVM and
-// Node of battery's answer to its ClaimVM (testLease is in release_test.go).
-const (
 // The names the claim tests use: aClaim's Pool, and the MicroVM of
 // battery's answer to its ClaimVM (testLease is in release_test.go, nodeA
 // in agentaddress_test.go).
