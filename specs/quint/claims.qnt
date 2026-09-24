@@ -8,14 +8,18 @@
 // - the Claim Controller's steps: add the finalizer, ClaimVM, write the
 //   binding, relay a renewal as Heartbeat and write battery's expiry,
 //   expire a claim from the Events stream (CL-013) or its passed expiry
-//   (CL-014), release under the finalizer, and recover after a restart;
+//   (CL-014, once ListLeases confirms it: CL-016), release with ReleaseVM
+//   and then remove the finalizer, and recover after a restart;
 // - battery's steps: replenish the Pool, answer ClaimVM, Heartbeat and
 //   ReleaseVM, expire Leases nobody renews, report deleted MicroVMs on the
 //   Events stream;
 // - the environment: Holders create, renew and delete claims, time passes,
 //   the controller crashes (between any two of its steps, including between
 //   ClaimVM and the status write), battery stops and starts, and the
-//   Events stream drops events.
+//   Events stream drops events;
+// - calls that fail in transit (CL-007, CL-015, CL-017, CL-022, CL-040):
+//   each call to battery can fail with battery having acted (the answer is
+//   lost) or not, without a crash.
 //
 // One Pool, a few claims and a handful of MicroVMs. Each controller step is
 // one call to battery or one write to the API server; a crash loses only
@@ -53,6 +57,9 @@ module claims {
     | Idle
     | ClaimAnswered(Lease)
     | HeartbeatAnswered({ leaseId: LeaseId, expiresAt: Time, renewTime: int })
+    // battery released the Lease, or reported it unknown; the finalizer
+    // write is next (CL-020)
+    | ReleaseAnswered(LeaseId)
 
   type BatteryState = {
     up: bool,
@@ -86,6 +93,15 @@ module claims {
     released: Set[LeaseId],
     // how claims went Expired: "event" (CL-013), "time" (CL-014)
     expiredVia: Set[str],
+    // every (claim, lease id) battery answered a ClaimVM for that claim
+    // with, and the controller received (CL-008)
+    answered: Set[(ClaimName, LeaseId)],
+    // what happened with calls that failed in transit, for the witnesses:
+    // "claimLost", "heartbeatLost", "releaseLost" (battery acted, and the
+    // answer was lost)
+    failures: Set[str],
+    // claims whose ReleaseVM answer was lost in transit
+    releaseLostBy: Set[ClaimName],
   }
 
   var now: Time
@@ -119,7 +135,8 @@ module claims {
     }).flatten()
 
   // Leases battery holds that no claim records and the controller is not
-  // about to record: the crash-window orphans of ADR 0001, consequence 2.
+  // about to record: the orphans of ADR 0001, consequence 2, left by a
+  // crash or by a ClaimVM answer lost in transit.
   def orphans: Set[LeaseId] =
     battery.leases.keys().filter(l =>
       not(recordedByLiveClaims.contains(l)) and not(inFlightLeases.contains(l)))
@@ -141,7 +158,7 @@ module claims {
       events: Set(),
     },
     ctrl' = { mem: CLAIMS.mapBy(_ => Idle), recovering: false },
-    hist' = { recorded: Set(), released: Set(), expiredVia: Set() },
+    hist' = { recorded: Set(), released: Set(), expiredVia: Set(), answered: Set(), failures: Set(), releaseLostBy: Set() },
   }
 
   // ---------------------------------------------------------------------
@@ -154,6 +171,23 @@ module claims {
   action setMem(c: ClaimName, f: InFlight): bool = all {
     ctrl' = { ...ctrl, mem: ctrl.mem.set(c, f) },
   }
+
+  //@= docs/requirements/02-claims.md#failed-calls
+  //@# When battery answers a call for a claim, the Claim Controller
+  //@# SHALL set the claim's condition `Synced` true.
+  pure val synced: Condition = { status: CondTrue, reason: BatteryAnswered }
+
+  //@= docs/requirements/02-claims.md#failed-calls
+  //@# If a call to battery for a claim fails in transit, then the
+  //@# Claim Controller SHALL set the claim's condition `Synced` false with the
+  //@# reason `BatteryUnavailable`, and SHALL NOT change the claim's phase
+  //@# because of that failure.
+  pure val unavailable: Condition = { status: CondFalse, reason: BatteryUnavailable }
+
+  // The claim after a call for it failed in transit: Synced false, and
+  // nothing else changed.
+  pure def unsynced(o: MicroVMClaim): MicroVMClaim =
+    { ...o, status: { ...o.status, synced: unavailable } }
 
   // battery deletes a released or expired MicroVM; its uid is retired, and
   // the Events stream reports the deletion.
@@ -286,12 +320,30 @@ module claims {
     now' = now, battery' = battery, ctrl' = ctrl, hist' = hist,
   }
 
-  def canClaimVM(c: ClaimName): bool = and {
-    live(c), idle(c), battery.up,
+  // The controller would call ClaimVM for c. The call can fail in transit
+  // whether battery is up or not; it can succeed only while battery is up.
+  def canCallClaimVM(c: ClaimName): bool = and {
+    live(c), idle(c),
     not(obj(c).deleting),
     obj(c).hasFinalizer,
     obj(c).status.phase == Pending,
     isNone(obj(c).status.leaseId),
+  }
+
+  def canClaimVM(c: ClaimName): bool = canCallClaimVM(c) and battery.up
+
+  // battery commits a Lease on vm in ClaimVM.
+  pure def newLease(b: BatteryState, vm: VMId, t: Time): Lease = {
+    id: b.nextLease, pool: POOL, vm: vm, host: VM_HOST.get(vm),
+    claimedAt: t, expiresAt: t + EXPIRY,
+  }
+
+  pure def commitLease(b: BatteryState, l: Lease): BatteryState = {
+    ...b,
+    warm: b.warm.exclude(Set(l.vm)),
+    handedOut: b.handedOut.union(Set(l.vm)),
+    leases: b.leases.put(l.id, l),
+    nextLease: b.nextLease + 1,
   }
 
   // ClaimVM succeeds. battery chooses the lease id and answers; the
@@ -299,21 +351,42 @@ module claims {
   action ctlClaimVM(c: ClaimName, vm: VMId): bool = all {
     canClaimVM(c),
     battery.warm.contains(vm),
-    val lease: Lease = {
-      id: battery.nextLease, pool: POOL, vm: vm, host: VM_HOST.get(vm),
-      claimedAt: now, expiresAt: now + EXPIRY,
-    }
+    val lease = newLease(battery, vm, now)
     all {
-      battery' = {
-        ...battery,
-        warm: battery.warm.exclude(Set(vm)),
-        handedOut: battery.handedOut.union(Set(vm)),
-        leases: battery.leases.put(lease.id, lease),
-        nextLease: battery.nextLease + 1,
-      },
+      battery' = commitLease(battery, lease),
       setMem(c, ClaimAnswered(lease)),
+      hist' = { ...hist, answered: hist.answered.union(Set((c, lease.id))) },
     },
-    now' = now, claims' = claims, hist' = hist,
+    now' = now, claims' = claims,
+  }
+
+  //@= docs/requirements/02-claims.md#binding
+  //@# If battery's `ClaimVM` for a claim fails in transit, then the
+  //@# Claim Controller SHALL keep the claim in the phase `Pending` with the
+  //@# condition `Bound` false and the reason `BatteryUnavailable`, and SHALL
+  //@# retry `ClaimVM` with backoff.
+  pure def claimUnavailable(o: MicroVMClaim): MicroVMClaim = {
+    ...o,
+    status: { ...o.status, phase: Pending, bound: unavailable, synced: unavailable },
+  }
+
+  // ClaimVM fails in transit after battery committed the Lease: the answer
+  // is lost without a crash, and the Lease is an orphan. The claim stays
+  // Pending and canCallClaimVM holds again, which is the retry.
+  action ctlClaimVMLost(c: ClaimName, vm: VMId): bool = all {
+    canClaimVM(c),
+    battery.warm.contains(vm),
+    battery' = commitLease(battery, newLease(battery, vm, now)),
+    setClaim(c, claimUnavailable(obj(c))),
+    hist' = { ...hist, failures: hist.failures.union(Set("claimLost")) },
+    now' = now, ctrl' = ctrl,
+  }
+
+  // ClaimVM fails in transit before battery acted, or battery is down.
+  action ctlClaimVMUnanswered(c: ClaimName): bool = all {
+    canCallClaimVM(c),
+    setClaim(c, claimUnavailable(obj(c))),
+    now' = now, battery' = battery, ctrl' = ctrl, hist' = hist,
   }
 
   //@= docs/requirements/02-claims.md#binding
@@ -324,7 +397,7 @@ module claims {
   action ctlPoolExhausted(c: ClaimName): bool = all {
     canClaimVM(c),
     battery.warm == Set(),
-    setClaim(c, { ...obj(c), status: { ...obj(c).status, phase: Pending, bound: { status: CondFalse, reason: PoolExhausted } } }),
+    setClaim(c, { ...obj(c), status: { ...obj(c).status, phase: Pending, bound: { status: CondFalse, reason: PoolExhausted }, synced: synced } }),
     now' = now, battery' = battery, ctrl' = ctrl, hist' = hist,
   }
 
@@ -370,6 +443,7 @@ module claims {
           boundTime: Some(now),
           leaseExpiresAt: Some(l.expiresAt),
           bound: { status: CondTrue, reason: ClaimBound },
+          synced: synced,
         },
       }),
       setMem(c, Idle),
@@ -382,13 +456,19 @@ module claims {
   //@# When the `spec.renewTime` of a Bound claim changes, the Claim
   //@# Controller SHALL call battery's `Heartbeat` for the claim's Lease and write
   //@# the expiry time battery returns to the claim's status.
-  def canHeartbeat(c: ClaimName): bool = and {
-    live(c), idle(c), battery.up,
+  def canCallHeartbeat(c: ClaimName): bool = and {
+    live(c), idle(c),
     not(obj(c).deleting),
     obj(c).status.phase == Bound,
     isSome(obj(c).status.leaseId),
     obj(c).spec.renewTime != obj(c).observedRenewTime,
   }
+
+  def canHeartbeat(c: ClaimName): bool = canCallHeartbeat(c) and battery.up
+
+  // battery renews Lease l at time t.
+  pure def renew(b: BatteryState, l: LeaseId, t: Time): BatteryState =
+    { ...b, leases: b.leases.set(l, { ...b.leases.get(l), expiresAt: t + EXPIRY }) }
 
   // Heartbeat succeeds: battery moves the Lease's expiry, and the
   // controller holds battery's answer until it writes the status.
@@ -397,15 +477,44 @@ module claims {
     val l = getOr(obj(c).status.leaseId, 0)
     all {
       holdsUnexpired(l),
-      battery' = { ...battery, leases: battery.leases.set(l, { ...battery.leases.get(l), expiresAt: now + EXPIRY }) },
+      battery' = renew(battery, l, now),
       setMem(c, HeartbeatAnswered({ leaseId: l, expiresAt: now + EXPIRY, renewTime: obj(c).spec.renewTime })),
     },
     now' = now, claims' = claims, hist' = hist,
   }
 
   //@= docs/requirements/02-claims.md#renewal
+  //@# If battery's `Heartbeat` for a Bound claim fails in transit,
+  //@# then the Claim Controller SHALL keep the claim `Bound` with the Lease
+  //@# expiry time already in its status, and SHALL retry the `Heartbeat` with
+  //@# backoff while the claim is Bound.
+  //
+  // Heartbeat fails in transit after battery renewed the Lease: battery's
+  // expiry moves, the status keeps the old one, and observedRenewTime is
+  // unchanged, so canCallHeartbeat holds again, which is the retry.
+  action ctlHeartbeatLost(c: ClaimName): bool = all {
+    canHeartbeat(c),
+    val l = getOr(obj(c).status.leaseId, 0)
+    all {
+      holdsUnexpired(l),
+      battery' = renew(battery, l, now),
+    },
+    setClaim(c, unsynced(obj(c))),
+    hist' = { ...hist, failures: hist.failures.union(Set("heartbeatLost")) },
+    now' = now, ctrl' = ctrl,
+  }
+
+  // Heartbeat fails in transit before battery acted, or battery is down.
+  action ctlHeartbeatUnanswered(c: ClaimName): bool = all {
+    canCallHeartbeat(c),
+    setClaim(c, unsynced(obj(c))),
+    now' = now, battery' = battery, ctrl' = ctrl, hist' = hist,
+  }
+
+  //@= docs/requirements/02-claims.md#renewal
   //@# The Claim Controller SHALL take a claim's Lease expiry time only
-  //@# from battery's answer to `Heartbeat` or `ClaimVM`, and SHALL NOT compute it.
+  //@# from battery's answer to `Heartbeat`, `ClaimVM` or `ListLeases`, and SHALL
+  //@# NOT compute it.
   action ctlWriteRenewed(c: ClaimName): bool = all {
     live(c),
     isHeartbeatAnswer(ctrl.mem.get(c)),
@@ -414,7 +523,7 @@ module claims {
       setClaim(c, {
         ...obj(c),
         observedRenewTime: h.renewTime,
-        status: { ...obj(c).status, leaseExpiresAt: Some(h.expiresAt) },
+        status: { ...obj(c).status, leaseExpiresAt: Some(h.expiresAt), synced: synced },
       }),
       setMem(c, Idle),
     },
@@ -428,7 +537,7 @@ module claims {
   pure def expired(o: MicroVMClaim): MicroVMClaim = {
     ...o,
     observedRenewTime: o.spec.renewTime,
-    status: { ...o.status, phase: Expired, bound: { status: CondFalse, reason: LeaseExpired } },
+    status: { ...o.status, phase: Expired, bound: { status: CondFalse, reason: LeaseExpired }, synced: synced },
   }
 
   // Heartbeat fails: battery no longer holds the Lease, or it has run out.
@@ -467,9 +576,11 @@ module claims {
   //@# Controller SHALL set the claim's phase to `Expired` and its condition
   //@# `Bound` false with the reason `LeaseExpired`.
   //
-  // The controller knows a Heartbeat succeeded only from the answer it
-  // holds (HeartbeatAnswered) or from the expiry it wrote. A crash loses
-  // the first.
+  // The controller knows a Heartbeat succeeded from the answer it holds
+  // (HeartbeatAnswered) or from the expiry it wrote, and a crash or a lost
+  // answer loses the first. CL-016 asks battery with ListLeases before
+  // expiring the claim, so the step needs battery: the controller expires
+  // the claim only if battery lists its Lease as gone or run out.
   def canExpiryPassed(c: ClaimName): bool = and {
     live(c), idle(c),
     obj(c).status.phase == Bound,
@@ -478,9 +589,44 @@ module claims {
 
   action ctlExpiryPassed(c: ClaimName): bool = all {
     canExpiryPassed(c),
+    battery.up,
+    not(holdsUnexpired(getOr(obj(c).status.leaseId, 0))),
     setClaim(c, expired(obj(c))),
     hist' = { ...hist, expiredVia: hist.expiredVia.union(Set("time")) },
     now' = now, battery' = battery, ctrl' = ctrl,
+  }
+
+  //@= docs/requirements/02-claims.md#renewal
+  //@# When the Lease expiry time in a Bound claim's status has
+  //@# passed, the Claim Controller SHALL read the claim's Lease with battery's
+  //@# `ListLeases` before it sets the claim's phase to `Expired`, and SHALL keep
+  //@# the claim `Bound` and write the expiry time battery lists if that time has
+  //@# not passed.
+  //
+  // battery lists the Lease with a later expiry: a Heartbeat succeeded
+  // whose answer the controller lost (#57). The claim stays Bound with
+  // battery's expiry. The read and the write are one step: nothing else
+  // renews the Lease in between, because the controller handles one claim
+  // at a time.
+  action ctlListRenewed(c: ClaimName): bool = all {
+    canExpiryPassed(c),
+    battery.up,
+    val l = getOr(obj(c).status.leaseId, 0)
+    all {
+      holdsUnexpired(l),
+      setClaim(c, { ...obj(c), status: { ...obj(c).status, leaseExpiresAt: Some(battery.leases.get(l).expiresAt), synced: synced } }),
+    },
+    now' = now, battery' = battery, ctrl' = ctrl, hist' = hist,
+  }
+
+  //@= docs/requirements/02-claims.md#renewal
+  //@# If the `ListLeases` call of CL-016 fails in transit, then the
+  //@# Claim Controller SHALL keep the claim `Bound` and retry the call with
+  //@# backoff.
+  action ctlListUnanswered(c: ClaimName): bool = all {
+    canExpiryPassed(c),
+    setClaim(c, unsynced(obj(c))),
+    now' = now, battery' = battery, ctrl' = ctrl, hist' = hist,
   }
 
   //@= docs/requirements/02-claims.md#release
@@ -488,24 +634,76 @@ module claims {
   //@# Controller SHALL call battery's `ReleaseVM` for the Lease, and SHALL remove
   //@# the finalizer only once battery has released the Lease or reported it
   //@# unknown.
-  def canRelease(c: ClaimName): bool = and {
-    live(c), idle(c), battery.up,
+  def canCallRelease(c: ClaimName): bool = and {
+    live(c), idle(c),
     obj(c).deleting,
     obj(c).hasFinalizer,
     isSome(obj(c).status.leaseId),
   }
 
-  // ReleaseVM, then the finalizer. battery deletes the MicroVM; a Lease it
-  // no longer holds is "unknown", which also lets the finalizer go.
-  action ctlRelease(c: ClaimName): bool = all {
+  def canRelease(c: ClaimName): bool = canCallRelease(c) and battery.up
+
+  // battery releases Lease l if it holds it, and deletes the MicroVM.
+  pure def release(b: BatteryState, l: LeaseId): BatteryState =
+    dropLeases(b, Set(l).intersect(b.leases.keys()))
+
+  // ReleaseVM succeeds. battery deletes the MicroVM; a Lease it no longer
+  // holds is "unknown", which counts as released too. The controller holds
+  // the answer until it removes the finalizer.
+  action ctlReleaseVM(c: ClaimName): bool = all {
     canRelease(c),
     val l = getOr(obj(c).status.leaseId, 0)
     all {
-      battery' = dropLeases(battery, Set(l).intersect(battery.leases.keys())),
-      claims' = claims.set(c, Gone({ ...obj(c), hasFinalizer: false })),
+      battery' = release(battery, l),
+      setMem(c, ReleaseAnswered(l)),
       hist' = { ...hist, released: hist.released.union(Set(l)) },
     },
+    now' = now, claims' = claims,
+  }
+
+  // The finalizer goes once battery has released the Lease. A crash
+  // before this step loses the answer, and the next ReleaseVM finds the
+  // Lease unknown.
+  action ctlRemoveFinalizer(c: ClaimName): bool = all {
+    live(c),
+    match ctrl.mem.get(c) {
+      | ReleaseAnswered(_) => true
+      | _ => false
+    },
+    claims' = claims.set(c, Gone({ ...obj(c), hasFinalizer: false })),
+    setMem(c, Idle),
+    now' = now, battery' = battery, hist' = hist,
+  }
+
+  //@= docs/requirements/02-claims.md#release
+  //@# If battery's `ReleaseVM` for a deleted claim fails in transit,
+  //@# then the Claim Controller SHALL keep the finalizer and retry `ReleaseVM`
+  //@# with backoff.
+  //
+  // ReleaseVM fails in transit after battery released the Lease. The
+  // finalizer stays, canCallRelease holds again, and the retry finds the
+  // Lease unknown.
+  action ctlReleaseLost(c: ClaimName): bool = all {
+    canRelease(c),
+    val l = getOr(obj(c).status.leaseId, 0)
+    all {
+      battery' = release(battery, l),
+      hist' = { ...hist,
+        released: hist.released.union(Set(l)),
+        failures: hist.failures.union(Set("releaseLost")),
+        releaseLostBy: hist.releaseLostBy.union(Set(c)) },
+    },
+    setClaim(c, unsynced(obj(c))),
     now' = now, ctrl' = ctrl,
+  }
+
+  // ReleaseVM fails in transit before battery acted, battery is down, or
+  // battery answers UNAVAILABLE because flintlockd has not confirmed the
+  // deletion and keeps the Lease.
+  action ctlReleaseUnanswered(c: ClaimName): bool = all {
+    canCallRelease(c),
+    setClaim(c, unsynced(obj(c))),
+    now' = now, battery' = battery, ctrl' = ctrl, hist' = hist,
   }
 
   //@= docs/requirements/02-claims.md#release
@@ -544,18 +742,20 @@ module claims {
   }
 
   // Whether the controller has any step it can take for any claim. Writing
-  // an answer it holds counts, as does a pending recovery.
+  // an answer it holds counts, as does a pending recovery, and so does a
+  // call it would make or retry while battery is down: a retry with backoff
+  // is work still to do.
   def controllerIdle: bool = and {
     not(canRecover),
     not(canReceiveEvent),
     CLAIMS.forall(c => and {
       not(canAddFinalizer(c)),
-      not(canClaimVM(c)),
+      not(canCallClaimVM(c)),
       not(canWriteBound(c)),
-      not(canHeartbeat(c)),
+      not(canCallHeartbeat(c)),
       not(canExpiryPassed(c)),
       not(live(c) and not(idle(c))),
-      not(canRelease(c)),
+      not(canCallRelease(c)),
       not(canReleasePending(c)),
     }),
   }
@@ -587,11 +787,21 @@ module claims {
       ctlHeartbeat(c),
       ctlHeartbeatUnknown(c),
       ctlWriteRenewed(c),
-      ctlRelease(c),
+      ctlReleaseVM(c),
+      ctlRemoveFinalizer(c),
       ctlReleasePending(c),
       ctlRecover,
       ctlEventDeleted(vm),
       ctlExpiryPassed(c),
+      ctlListRenewed(c),
+      // calls that fail in transit
+      ctlClaimVMLost(c, vm),
+      ctlClaimVMUnanswered(c),
+      ctlHeartbeatLost(c),
+      ctlHeartbeatUnanswered(c),
+      ctlListUnanswered(c),
+      ctlReleaseLost(c),
+      ctlReleaseUnanswered(c),
     }
   }
 
@@ -668,8 +878,21 @@ module claims {
       obj(c).status.bound.status == CondTrue,
     })
 
+  //@= docs/requirements/02-claims.md#binding
+  //@# The Claim Controller SHALL write to a claim's status only a
+  //@# lease id that battery returned in its answer to a `ClaimVM` call for that
+  //@# claim.
+  //
+  // A Lease whose answer was lost, in a crash or in transit, is never
+  // adopted by any claim.
+  val recordedOnlyFromOwnAnswer: bool =
+    CLAIMS.forall(c => not(isUnborn(slot(c))) implies
+      obj(c).status.leaseId.optToSet().forall(l => hist.answered.contains((c, l))))
+
   // All the invariants CI checks.
   val safety: bool = and {
+    recordedOnlyFromOwnAnswer,
+    expiredOnlyAfterLeaseEnds,
     vmLeasedToAtMostOneClaim,
     releasedVMNeverReused,
     orphanLeaseBounded,
@@ -698,8 +921,9 @@ module claims {
 
   // A claim goes Expired only once battery no longer holds its Lease, or
   // the Lease has run out: the Holder never loses a MicroVM battery still
-  // leases to it. Not in safety: CL-014 breaks it after a crash between a
-  // Heartbeat and its status write (#57); claims_test.qnt reaches it.
+  // leases to it. CL-014 alone broke it after a crash between a Heartbeat
+  // and its status write (#57), or a Heartbeat answer lost in transit;
+  // CL-016's ListLeases before expiring makes it hold.
   val expiredOnlyAfterLeaseEnds: bool =
     CLAIMS.forall(c => (live(c) and obj(c).status.phase == Expired) implies
       not(holdsUnexpired(getOr(obj(c).status.leaseId, 0))))
@@ -723,4 +947,14 @@ module claims {
   val witnessExpiredByEvent: bool = hist.expiredVia.contains("event")
   // a claim went Expired from its passed expiry time (CL-014)
   val witnessExpiredByTime: bool = hist.expiredVia.contains("time")
+  // an orphan left by a ClaimVM answer lost in transit, with no crash
+  val witnessOrphanFromLostAnswer: bool =
+    hist.failures.contains("claimLost") and orphans != Set()
+  // a ReleaseVM whose answer was lost has been retried, and the retry found
+  // the Lease unknown: the claim holds that answer, or is gone
+  val witnessReleasedAfterLostAnswer: bool =
+    hist.releaseLostBy.exists(c => isGone(slot(c)) or match ctrl.mem.get(c) {
+      | ReleaseAnswered(_) => true
+      | _ => false
+    })
 }

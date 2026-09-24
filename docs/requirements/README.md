@@ -161,15 +161,23 @@ of date. `make duvet-models-write` rewrites it. `type=test` and
 | CL-001 | `specs/quint/claims.qnt` |
 | CL-002 | `specs/quint/claims.qnt` |
 | CL-003 | `specs/quint/claims.qnt` |
+| CL-007 | `specs/quint/claims.qnt` |
+| CL-008 | `specs/quint/claims.qnt` |
 | CL-010 | `specs/quint/claims.qnt` |
 | CL-011 | `specs/quint/claims.qnt` |
 | CL-012 | `specs/quint/claims.qnt` |
 | CL-013 | `specs/quint/claims.qnt` |
 | CL-014 | `specs/quint/claims.qnt` |
+| CL-015 | `specs/quint/claims.qnt` |
+| CL-016 | `specs/quint/claims.qnt` |
+| CL-017 | `specs/quint/claims.qnt` |
 | CL-020 | `specs/quint/claims.qnt` |
 | CL-021 | `specs/quint/claims.qnt` |
+| CL-022 | `specs/quint/claims.qnt` |
 | CL-030 | `specs/quint/claims.qnt` |
 | CL-031 | `specs/quint/claims.qnt` |
+| CL-040 | `specs/quint/claims.qnt` |
+| CL-042 | `specs/quint/claims.qnt` |
 <!-- END modelled -->
 
 ## The coverage gate

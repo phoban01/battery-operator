@@ -57,6 +57,13 @@ use. It contains no requirements.
   MicroVM from a Pool.
 - **Lease**: battery's record of a claimed MicroVM, identified by the lease
   id battery chooses in `ClaimVM`. A Bound claim has exactly one Lease.
+- **Fails in transit**: said of a call to battery that ends without an
+  answer saying what battery did: the connection to battery is down, or the
+  call's deadline (DP-010) passes first. DP-011 reports both as an
+  unavailable battery, and battery's own `UNAVAILABLE` answer the same way;
+  battery v0.3.3 gives that answer when `ReleaseVM` could not yet delete the
+  MicroVM. battery may or may not have acted on a call that fails in
+  transit.
 - **Holder**: the ServiceAccount a claim names in `spec.serviceAccountName`,
   the only identity the Exec Agent lets use the claim's MicroVM.
 - **Claim token**: a ServiceAccount token for the Holder, requested with

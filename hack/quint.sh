@@ -62,4 +62,5 @@ done
 
 check specs/quint/claims.qnt safety \
   witnessOrphan witnessOrphanBesideBound witnessExpired witnessReleased \
-  witnessExpiredByEvent witnessExpiredByTime
+  witnessExpiredByEvent witnessExpiredByTime \
+  witnessOrphanFromLostAnswer witnessReleasedAfterLostAnswer
