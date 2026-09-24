@@ -52,13 +52,15 @@ type stubBattery struct {
 
 	mu    sync.Mutex
 	pools map[battery.PoolRef]battery.PoolSpec
-	calls []string
+	// status is the PoolStatus GetPool reports for a Pool it holds.
+	status map[battery.PoolRef]battery.PoolStatus
+	calls  []string
 
 	getErr, createErr, updateErr, deleteErr error
 }
 
 func newStubBattery() *stubBattery {
-	return &stubBattery{pools: map[battery.PoolRef]battery.PoolSpec{}}
+	return &stubBattery{pools: map[battery.PoolRef]battery.PoolSpec{}, status: map[battery.PoolRef]battery.PoolStatus{}}
 }
 
 func (b *stubBattery) record(call string) {
@@ -82,7 +84,7 @@ func (b *stubBattery) GetPool(_ context.Context, ref battery.PoolRef) (*battery.
 	if !ok {
 		return nil, battery.ErrNotFound
 	}
-	return &battery.Pool{Spec: spec}, nil
+	return &battery.Pool{Spec: spec, Status: b.status[spec.Ref]}, nil
 }
 
 func (b *stubBattery) CreatePool(_ context.Context, spec battery.PoolSpec) (*battery.Pool, error) {
@@ -96,7 +98,7 @@ func (b *stubBattery) CreatePool(_ context.Context, spec battery.PoolSpec) (*bat
 		return nil, battery.ErrAlreadyExists
 	}
 	b.pools[spec.Ref] = spec
-	return &battery.Pool{Spec: spec}, nil
+	return &battery.Pool{Spec: spec, Status: b.status[spec.Ref]}, nil
 }
 
 func (b *stubBattery) UpdatePool(_ context.Context, spec battery.PoolSpec) (*battery.Pool, error) {
@@ -110,7 +112,7 @@ func (b *stubBattery) UpdatePool(_ context.Context, spec battery.PoolSpec) (*bat
 		return nil, battery.ErrNotFound
 	}
 	b.pools[spec.Ref] = spec
-	return &battery.Pool{Spec: spec}, nil
+	return &battery.Pool{Spec: spec, Status: b.status[spec.Ref]}, nil
 }
 
 func (b *stubBattery) DeletePool(_ context.Context, ref battery.PoolRef) error {

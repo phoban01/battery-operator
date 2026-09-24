@@ -23,7 +23,9 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	batteryv1alpha1 "github.com/phoban01/battery-operator/api/v1alpha1"
 	"github.com/phoban01/battery-operator/internal/battery"
@@ -31,7 +33,8 @@ import (
 )
 
 // PoolReconciler is the Pool Controller (docs/requirements/03-pools.md): it
-// declares each Pool to battery. It is a thin layer: it builds a poolScope,
+// declares each Pool to battery and mirrors battery's view of it into the
+// Pool's status. It is a thin layer: it builds a poolScope,
 // runs poolChain and patches the Pool once. The logic, and its
 // requirement citations, are in the subreconcilers.
 type PoolReconciler struct {
@@ -41,6 +44,11 @@ type PoolReconciler struct {
 	Battery battery.Client
 	// Clock stamps condition transitions; nil is the wall clock.
 	Clock clock.Clock
+	// Events is the Operator's subscription to battery's Events stream: it
+	// asks for a reconcile of each Pool an event names, and of every Pool
+	// at its resync interval while it is down (PO-023, PO-024). Nil
+	// watches Pools only.
+	Events *PoolEvents
 }
 
 // +kubebuilder:rbac:groups=battery.liquidmetal-x.dev,resources=pools,verbs=get;list;watch;update;patch
@@ -65,8 +73,15 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *PoolReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
+	b := ctrl.NewControllerManagedBy(mgr).
 		For(&batteryv1alpha1.Pool{}).
-		Named("pool").
-		Complete(r)
+		Named("pool")
+	if r.Events != nil {
+		if err := mgr.Add(r.Events); err != nil {
+			return err
+		}
+		b = b.WatchesRawSource(source.Channel(r.Events.Requests(),
+			&handler.TypedEnqueueRequestForObject[*batteryv1alpha1.Pool]{}))
+	}
+	return b.Complete(r)
 }

@@ -58,6 +58,12 @@ type poolScope struct {
 	// refusal is battery's refusal of the Pool's spec in this reconcile,
 	// from CreatePool or UpdatePool, wrapping battery.ErrInvalid.
 	refusal error
+
+	// held is the Pool as battery last answered for it in this reconcile,
+	// from GetPool, CreatePool or UpdatePool; nil while battery does not
+	// hold the Pool. The status subreconcilers read battery's PoolStatus
+	// from it (PO-020).
+	held *battery.Pool
 }
 
 func newPoolScope(pool *batteryv1alpha1.Pool, c client.Client, b battery.Client, log logr.Logger, clk clock.Clock) *poolScope {
