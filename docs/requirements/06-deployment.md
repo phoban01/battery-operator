@@ -45,6 +45,19 @@ built.
   battery.
 - **DP-012** While battery is unavailable, the Operator SHALL report itself
   not ready on its readiness endpoint.
+- **DP-013** The Operator SHALL give `ClaimVM` a deadline of its own,
+  configurable apart from the deadline of the other unary calls of DP-010.
+
+`ClaimVM` runs the Pool's pre-lease hooks in the MicroVM before battery
+commits the Lease, so it can take much longer than any other unary call. If
+its deadline passes during the hooks, battery v0.3.3 treats that as a hook
+failure: it applies the Pool's hook failure policy, which deletes or
+quarantines the MicroVM, and creates no Lease (`internal/api/lease.go`).
+The Claim Controller then retries (CL-007), and a deadline that is always
+too short costs the Pool a warm MicroVM on every attempt without ever
+binding the claim. DP-013 lets the `ClaimVM` deadline be set above the time
+the Pools' pre-lease hooks can take, while the other calls keep a short
+one.
 
 ## Access {#access}
 

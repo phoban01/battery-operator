@@ -61,6 +61,8 @@ module types {
     | PoolNotFound     // CL-004
     | LeaseExpired     // CL-012
     | NoAgentAddress   // CL-006
+    | BatteryUnavailable // CL-007, CL-040
+    | BatteryAnswered  // Synced true (CL-042)
     | Rejected         // PO-004
     | NoEligibleHost   // PO-012
 
@@ -90,6 +92,9 @@ module types {
     boundTime: Option[Time],
     leaseExpiresAt: Option[Time],
     bound: Condition,
+    // Whether the status reflects battery's answer to the last call the
+    // Claim Controller made for the claim (CL-040, CL-042).
+    synced: Condition,
   }
 
   type MicroVMClaim = {
@@ -120,6 +125,7 @@ module types {
     boundTime: None,
     leaseExpiresAt: None,
     bound: unknownCondition,
+    synced: unknownCondition,
   }
 
   pure def newClaim(pool: PoolName, sa: ServiceAccountName): MicroVMClaim = {
