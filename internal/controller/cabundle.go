@@ -50,7 +50,7 @@ type caBundleReconciler struct {
 
 	// secrets reads the CA Secrets by name, configMap the CA bundle
 	// ConfigMap, each through a cache of that one object.
-	secrets   map[string]cache.Cache
+	secrets   map[string]client.Reader
 	configMap client.Reader
 }
 
@@ -117,10 +117,11 @@ func (r *caBundleReconciler) Reconcile(ctx context.Context, _ reconcile.Request)
 	return ctrl.Result{}, nil
 }
 
-// setupWithManager watches the CA Secrets and the CA bundle ConfigMap, each
+// setupWithManager watches the CA Secrets, through secretCaches, and the CA
+// bundle ConfigMap, each
 // through a cache of that one object, so that the Operator needs access to
 // those names only.
-func (r *caBundleReconciler) setupWithManager(mgr ctrl.Manager) error {
+func (r *caBundleReconciler) setupWithManager(mgr ctrl.Manager, secretCaches map[string]cache.Cache) error {
 	cmCache, err := singleObjectCache(mgr, r.Config.Namespace, r.Config.CABundleConfigMap)
 	if err != nil {
 		return err
@@ -137,7 +138,7 @@ func (r *caBundleReconciler) setupWithManager(mgr ctrl.Manager) error {
 			handler.TypedEnqueueRequestsFromMapFunc(func(context.Context, *corev1.ConfigMap) []reconcile.Request {
 				return bundle
 			})))
-	for _, c := range r.secrets {
+	for _, c := range secretCaches {
 		b = b.WatchesRawSource(source.Kind(c, &corev1.Secret{},
 			handler.TypedEnqueueRequestsFromMapFunc(func(context.Context, *corev1.Secret) []reconcile.Request {
 				return bundle
