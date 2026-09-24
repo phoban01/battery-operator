@@ -262,6 +262,8 @@ func TestLeaseAndEvents(t *testing.T) {
 		t.Errorf("Heartbeat returned expiry %v, want one in the future", expires)
 	}
 
+	checkListLeases(ctx, t, c, claim, pool, expires)
+
 	if err := c.DeletePool(ctx, pool); !errors.Is(err, battery.ErrFailedPrecondition) {
 		t.Errorf("DeletePool with a Lease outstanding: got %v, want ErrFailedPrecondition", err)
 	}
@@ -274,6 +276,37 @@ func TestLeaseAndEvents(t *testing.T) {
 	}
 	if _, err := c.Heartbeat(ctx, claim.LeaseID); !errors.Is(err, battery.ErrNotFound) {
 		t.Errorf("Heartbeat of a released Lease: got %v, want ErrNotFound", err)
+	}
+	if leases, err := c.ListLeases(ctx, nil); err != nil || len(leases) != 0 {
+		t.Errorf("ListLeases after the release = (%v, %v), want none", leases, err)
+	}
+}
+
+// checkListLeases reads claim's Lease of pool, which the last Heartbeat set
+// to expire at expires, through every Pool's Leases and through pool's. It
+// is read as the Heartbeat left it, since listing renews nothing, and a
+// Pool battery does not know lists nothing, without an error.
+func checkListLeases(ctx context.Context, t *testing.T, c *battery.Connection,
+	claim *battery.Claim, pool battery.PoolRef, expires time.Time) {
+	t.Helper()
+	for _, filter := range []*battery.PoolRef{nil, &pool} {
+		leases, err := c.ListLeases(ctx, filter)
+		if err != nil {
+			t.Fatalf("ListLeases(%v): %v", filter, err)
+		}
+		if len(leases) != 1 {
+			t.Fatalf("ListLeases(%v) = %d leases, want 1", filter, len(leases))
+		}
+		got := leases[0]
+		if got.LeaseID != claim.LeaseID || got.VMUID != claim.VMUID || got.Pool != pool ||
+			!got.ExpiresAt.Equal(expires) || got.ClaimedAt.IsZero() || got.LastHeartbeatAt.Before(got.ClaimedAt) {
+			t.Errorf("ListLeases(%v) = %+v, want lease %s of %s on %s expiring at %v",
+				filter, got, claim.LeaseID, claim.VMUID, pool, expires)
+		}
+	}
+	other := ref("unknown")
+	if leases, err := c.ListLeases(ctx, &other); err != nil || len(leases) != 0 {
+		t.Errorf("ListLeases of an unknown Pool = (%v, %v), want none and no error", leases, err)
 	}
 }
 

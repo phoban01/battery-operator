@@ -62,6 +62,16 @@ func TestDocumentedDifferences(t *testing.T) {
 		}
 	})
 
+	t.Run("a Host's flintlock version is not checked", func(t *testing.T) {
+		// The test Hosts' ServerInfo reports no version at all, which
+		// battery refuses to provision on.
+		h := newHarness(t, Config{}, hostA)
+		h.createPool(h.spec("pool", 1, hostA))
+		if n := h.stubs[hostA].live(); n != 1 {
+			t.Fatalf("%d microvms on a Host with no flintlock version, want 1", n)
+		}
+	})
+
 	t.Run("DeletePool deletes idle microvms and refuses while a lease is held", func(t *testing.T) {
 		h := newHarness(t, Config{}, hostA)
 		host := h.stubs[hostA]

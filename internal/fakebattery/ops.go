@@ -306,6 +306,25 @@ func (b *Battery) claimLatency(ctx context.Context) error {
 	}
 }
 
+// listLeases implements Lease.ListLeases: the Leases the fake holds, of one
+// Pool or of every Pool, ordered by lease id as battery orders them.
+// RefuseHeartbeats hides every Lease, as Heartbeat's NOT_FOUND does.
+func (b *Battery) listLeases(pool *PoolRef) []LeaseRecord {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.faults.RefuseHeartbeats {
+		return nil
+	}
+	out := make([]LeaseRecord, 0, len(b.leases))
+	for _, ls := range b.leases {
+		if pool == nil || ls.rec.Pool == *pool {
+			out = append(out, ls.rec)
+		}
+	}
+	slices.SortFunc(out, func(x, y LeaseRecord) int { return strings.Compare(x.LeaseID, y.LeaseID) })
+	return out
+}
+
 // heartbeat implements Lease.Heartbeat: it moves the Lease's expiry to now
 // plus the Pool's threshold and returns it. As in battery, a Lease past its
 // expiry that the control loop has not swept yet is renewed like any other;

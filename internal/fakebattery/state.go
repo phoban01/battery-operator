@@ -292,3 +292,11 @@ func newLeaseID() string {
 	_, _ = rand.Read(b[:]) // crypto/rand.Read never fails.
 	return hex.EncodeToString(b[:])
 }
+
+// newVMID returns a MicroVM id for a Pool, shaped as battery v0.3.3 shapes
+// it: the Pool's name, a dash and eight random hex digits.
+func newVMID(pool string) string {
+	var b [4]byte
+	_, _ = rand.Read(b[:]) // crypto/rand.Read never fails.
+	return pool + "-" + hex.EncodeToString(b[:])
+}

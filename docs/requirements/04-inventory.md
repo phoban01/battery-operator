@@ -1,7 +1,7 @@
 # The Inventory Controller
 
 The Inventory Controller decides which Nodes are Hosts and gives battery the
-list (ADR 0001, decisions 4 and 10). battery v0.1.0 reads its Hosts once, from
+list (ADR 0001, decisions 4 and 10). battery v0.3.3 reads its Hosts once, from
 its configuration file, and has no call to change them, so giving battery
 the list means rewriting its configuration and restarting it
 (consequence 1).
@@ -49,5 +49,5 @@ battery creates and deletes MicroVMs by calling `flintlockd` on each Host.
 Each Host's `flintlockd` serves on the Host's internal address with mutual
 TLS, and battery reaches it directly with the Operator's client certificate
 ([ADR 0002](../adr/0002-battery-reaches-flintlockd-over-mtls.md)). IN-004
-is what keeps that connection authenticated both ways: battery v0.1.0 can
+is what keeps that connection authenticated both ways: battery v0.3.3 can
 also be configured without TLS, and the Inventory Controller never does so.

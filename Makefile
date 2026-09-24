@@ -6,6 +6,11 @@ IMAGE_TAG ?= latest
 # Image URL to use all building/pushing image targets
 IMG ?= $(IMAGE_REPO):$(IMAGE_TAG)
 EXEC_AGENT_IMG ?= $(IMAGE_REPO)/exec-agent:$(IMAGE_TAG)
+# battery's poolmgrd image, the Operator's sidecar in the e2e suite. Its tag is
+# the battery version go.mod pins, without the leading v, so the sidecar and
+# the client's protos cannot drift apart.
+BATTERY_VERSION ?= $(shell awk '$$1 == "github.com/liquidmetal-dev/battery" { print $$2 }' go.mod)
+POOLMGRD_IMG ?= ghcr.io/liquidmetal-dev/poolmgrd:$(BATTERY_VERSION:v%=%)
 # YEAR defines the year value used for substituting the YEAR placeholder in the boilerplate header.
 YEAR ?= $(shell date +%Y)
 

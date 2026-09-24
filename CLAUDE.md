@@ -131,7 +131,7 @@ Now:
 | Path | What |
 |------|------|
 | `cmd/main.go` | The Operator's manager entry point |
-| `internal/battery/` | The Operator's battery gRPC client (#8); pins battery v0.1.0 |
+| `internal/battery/` | The Operator's battery gRPC client (#8); pins battery v0.3.3 |
 | `config/` | Kustomize Manifests, from kubebuilder |
 | `test/e2e/`, `test/utils/` | kubebuilder's e2e tests, against kind |
 | `docs/adr/` | Architecture decision records |

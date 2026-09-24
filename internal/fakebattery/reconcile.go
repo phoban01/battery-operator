@@ -36,7 +36,8 @@ import (
 // tick. The tick additionally tops every Pool up to its target, which is how
 // a fresh Pool fills and how a Pool recovers from a failed create or a
 // quarantined MicroVM; battery's tick does that only for
-// MIN_SIZE_THRESHOLD. The target is the idle warm size for
+// MIN_SIZE_THRESHOLD, and battery tops the event-driven strategies up only
+// once, when a Pool's reconciler starts. The target is the idle warm size for
 // IMMEDIATE_ON_LEASE, where size is headroom rather than a ceiling, and the
 // total population for the other two.
 type strategy struct {
@@ -248,6 +249,13 @@ func (b *Battery) provision(ctx context.Context, vm *vmState) {
 	spec := proto.CloneOf(ps.spec.Template)
 	hooks := ps.spec.CreateCommands
 	b.mu.Unlock()
+	// As battery v0.3.3 does, each MicroVM gets its own id, the Pool's name
+	// and eight random hex digits, and the Pool's namespace unless the
+	// template names one.
+	spec.Id = newVMID(vm.pool.name)
+	if spec.GetNamespace() == "" {
+		spec.Namespace = vm.pool.namespace
+	}
 
 	// The create is not cancelled when the fake stops. A Host does not undo
 	// a CreateMicroVM its caller stopped waiting for, so a create cut short

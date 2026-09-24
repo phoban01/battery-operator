@@ -209,7 +209,7 @@ type MicroVMClaimStatus struct {
 // releases the MicroVM.
 //
 // The proposal on battery#46 made the claim's name its lease id. battery
-// v0.1.0 chooses the lease id itself in ClaimVM, so the id is recorded in
+// v0.3.3 chooses the lease id itself in ClaimVM, so the id is recorded in
 // status.leaseID instead (ADR 0001, consequence 2).
 type MicroVMClaim struct {
 	metav1.TypeMeta `json:",inline"`

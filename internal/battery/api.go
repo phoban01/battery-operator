@@ -131,6 +131,25 @@ type Claim struct {
 	Host HostRef
 }
 
+// LeaseRecord is one proto LeaseRecord, as ListLeases returns it: battery's
+// stored record of a Lease.
+type LeaseRecord struct {
+	// LeaseID is the id ClaimVM returned.
+	LeaseID string
+	// VMUID is the flintlock uid of the leased MicroVM.
+	VMUID string
+	Pool  PoolRef
+	// ClaimedAt is when ClaimVM granted the Lease.
+	ClaimedAt time.Time
+	// LastHeartbeatAt is when the last Heartbeat renewed the Lease; until
+	// the first, it is the claim time.
+	LastHeartbeatAt time.Time
+	// ExpiresAt is the expiry the last ClaimVM or Heartbeat set. It can be
+	// in the past: battery keeps an expired Lease until its sweeper removes
+	// it, and a Heartbeat before then still renews it.
+	ExpiresAt time.Time
+}
+
 // Event is one proto Event.
 type Event struct {
 	// ID is monotonic per Pool.
@@ -187,6 +206,10 @@ type Client interface {
 	Heartbeat(ctx context.Context, leaseID string) (expiresAt time.Time, err error)
 	// ReleaseVM ends a Lease. ErrNotFound means it had already ended.
 	ReleaseVM(ctx context.Context, leaseID string) error
+	// ListLeases reads battery's Leases without renewing any, ordered by
+	// lease id. A nil pool lists every Pool's; a Pool battery does not know
+	// lists none, without an error. A Lease that is not listed has ended.
+	ListLeases(ctx context.Context, pool *PoolRef) ([]*LeaseRecord, error)
 	// Subscribe opens an event stream. It returns ErrUnavailable when
 	// battery cannot be reached; the stream reports later drops itself.
 	Subscribe(ctx context.Context, filter EventFilter) (EventStream, error)

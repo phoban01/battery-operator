@@ -3,7 +3,7 @@
 // The shared types of the battery-operator models.
 //
 // These mirror the v1alpha1 resources (docs/requirements/01-resources.md,
-// api/v1alpha1/), battery v0.1.0's Leases and MicroVMs, and the Hosts and
+// api/v1alpha1/), battery v0.3.3's Leases and MicroVMs, and the Hosts and
 // Nodes of the inventory (docs/requirements/04-inventory.md), and the
 // CertificateSigningRequests and certificates of 09-certificates.md. They
 // keep only the fields a model reasons about, rather than every field of
@@ -235,7 +235,7 @@ module types {
   }
 
   // ---------------------------------------------------------------------
-  // battery v0.1.0: Leases and MicroVMs
+  // battery v0.3.3: Leases and MicroVMs
 
   type VMPhase = Provisioning | Available | Leased | Quarantined | Deleted
 

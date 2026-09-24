@@ -105,3 +105,15 @@ func poolFromProto(pool *poolmgrv1.Pool) *Pool {
 		},
 	}
 }
+
+// leaseFromProto converts one stored Lease.
+func leaseFromProto(l *poolmgrv1.LeaseRecord) *LeaseRecord {
+	return &LeaseRecord{
+		LeaseID:         l.GetLeaseId(),
+		VMUID:           l.GetVmUid(),
+		Pool:            PoolRef{Name: l.GetPoolName(), Namespace: l.GetPoolNamespace()},
+		ClaimedAt:       l.GetClaimedAt().AsTime(),
+		LastHeartbeatAt: l.GetLastHeartbeatAt().AsTime(),
+		ExpiresAt:       l.GetExpiresAt().AsTime(),
+	}
+}

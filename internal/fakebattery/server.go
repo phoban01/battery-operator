@@ -178,6 +178,22 @@ func (s *leaseServer) ReleaseVM(ctx context.Context, req *poolmgrv1.ReleaseVMReq
 	return &emptypb.Empty{}, nil
 }
 
+// ListLeases implements poolmgrv1.LeaseServer. It renews nothing, lists a
+// Lease past its expiry until the control loop sweeps it, and lists nothing,
+// without an error, for a Pool it does not know.
+func (s *leaseServer) ListLeases(_ context.Context, req *poolmgrv1.ListLeasesRequest) (*poolmgrv1.ListLeasesResponse, error) {
+	var filter *PoolRef
+	if req.PoolRef != nil {
+		ref := refFromProto(req.GetPoolRef())
+		filter = &ref
+	}
+	resp := &poolmgrv1.ListLeasesResponse{}
+	for _, l := range s.b.listLeases(filter) {
+		resp.Leases = append(resp.Leases, leaseToProto(l))
+	}
+	return resp, nil
+}
+
 // eventsServer implements poolmgrv1.EventsServer.
 type eventsServer struct {
 	poolmgrv1.UnimplementedEventsServer
@@ -281,6 +297,18 @@ func specToProto(spec poolSpec) *poolmgrv1.PoolSpec {
 		out.HeartbeatExpiryThreshold = durationpb.New(spec.HeartbeatExpiryThreshold)
 	}
 	return out
+}
+
+func leaseToProto(l LeaseRecord) *poolmgrv1.LeaseRecord {
+	return &poolmgrv1.LeaseRecord{
+		LeaseId:         l.LeaseID,
+		VmUid:           l.VMUID,
+		PoolName:        l.Pool.Name,
+		PoolNamespace:   l.Pool.Namespace,
+		ClaimedAt:       timestamppb.New(l.ClaimedAt),
+		LastHeartbeatAt: timestamppb.New(l.LastHeartbeatAt),
+		ExpiresAt:       timestamppb.New(l.ExpiresAt),
+	}
 }
 
 func poolToProto(p *pool) *poolmgrv1.Pool {

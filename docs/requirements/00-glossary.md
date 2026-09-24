@@ -43,7 +43,7 @@ use. It contains no requirements.
 
 - **battery**: the flintlock warm-pool manager
   ([liquidmetal-dev/battery](https://github.com/liquidmetal-dev/battery)),
-  v0.1.0, run unchanged as a sidecar of the Operator. Its gRPC services are
+  v0.3.3, run unchanged as a sidecar of the Operator. Its gRPC services are
   `PoolAdmin`, `Lease` and `Events`.
 - **local `flintlockd`**: the `flintlockd` on the Exec Agent's own Host,
   which it reaches on one of that Host's addresses over mutual TLS
