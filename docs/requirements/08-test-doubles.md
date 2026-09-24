@@ -1,8 +1,10 @@
 # Test doubles
 
 There is no KVM and no battery daemon in development, so the controllers,
-the Exec Agent and the Client Library are tested against fakes and a
-Kubernetes API server test environment (envtest). The fakes come from
+the Exec Agent and the Client Library are tested in two layers: unit tests
+against the fakes below and controller-runtime's fake client, and an e2e suite
+on a kind cluster, with battery's real `poolmgrd` and the fake `flintlockd`
+([test environments](#test-environments)). The fakes come from
 flintlock-runner, where `10-test-doubles.md` specifies them.
 
 ## The fake battery {#fake-battery}

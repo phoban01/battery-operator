@@ -92,6 +92,11 @@ func aClaim(finalizers ...string) *batteryv1alpha1.MicroVMClaim {
 // claims by node name.
 func newFakeClient(t *testing.T, objs ...client.Object) client.WithWatch {
 	t.Helper()
+	//= docs/requirements/08-test-doubles.md#test-environments
+	//# The unit tests SHALL test each subreconciler, and the rest of
+	//# the logic of the controllers and the Exec Agent, against the fake battery,
+	//# the fake `flintlockd` and a fake Kubernetes client, without a Kubernetes
+	//# API server.
 	scheme := runtime.NewScheme()
 	if err := clientgoscheme.AddToScheme(scheme); err != nil {
 		t.Fatal(err)

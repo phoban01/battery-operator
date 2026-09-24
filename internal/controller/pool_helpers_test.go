@@ -179,6 +179,11 @@ func poolTestScheme(t *testing.T) *runtime.Scheme {
 // the Pool's status subresource.
 func newPoolFakeClient(t *testing.T, objs ...client.Object) client.Client {
 	t.Helper()
+	//= docs/requirements/08-test-doubles.md#test-environments
+	//# The unit tests SHALL test each subreconciler, and the rest of
+	//# the logic of the controllers and the Exec Agent, against the fake battery,
+	//# the fake `flintlockd` and a fake Kubernetes client, without a Kubernetes
+	//# API server.
 	return fake.NewClientBuilder().
 		WithScheme(poolTestScheme(t)).
 		WithObjects(objs...).
