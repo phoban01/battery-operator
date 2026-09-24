@@ -25,7 +25,7 @@
     "init_hook": [
       "export GOPATH=\"$DEVBOX_PROJECT_ROOT/.gopath\"",
       "export GOBIN=\"$GOPATH/bin\"",
-      "export CARGO_HOME=\"$DEVBOX_PROJECT_ROOT/.devbox/cargo\"",
+      "export CARGO_HOME=\"${BATTERY_OPERATOR_CARGO_HOME:-${XDG_CACHE_HOME:-$HOME/.cache}/battery-operator/cargo}\"",
       "export PATH=\"$DEVBOX_PROJECT_ROOT/.devbox/bin:$GOBIN:$CARGO_HOME/bin:$PATH\"",
       "if [ \"$(cat \"$CARGO_HOME/.duvet-version\" 2>/dev/null)\" != \"$DUVET_VERSION\" ]; then echo \"building duvet $DUVET_VERSION (first run only)...\" >&2; cargo install duvet --version \"$DUVET_VERSION\" --locked --quiet && echo \"$DUVET_VERSION\" > \"$CARGO_HOME/.duvet-version\"; fi",
       "\"$DEVBOX_PROJECT_ROOT/hack/install-dagger.sh\" \"$DEVBOX_PROJECT_ROOT/.devbox/bin\""
