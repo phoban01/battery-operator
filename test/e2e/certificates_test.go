@@ -20,7 +20,11 @@ package e2e
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/pem"
 	"fmt"
 	"net"
@@ -28,13 +32,17 @@ import (
 	"testing"
 	"time"
 
+	authorizationv1 "k8s.io/api/authorization/v1"
 	certificatesv1 "k8s.io/api/certificates/v1"
+	coordinationv1 "k8s.io/api/coordination/v1"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
 	"sigs.k8s.io/e2e-framework/pkg/features"
 
+	"github.com/phoban01/battery-operator/internal/controller"
 	"github.com/phoban01/battery-operator/internal/execagent"
 	"github.com/phoban01/battery-operator/internal/hostcert"
 )
@@ -197,4 +205,135 @@ func wantNames(t *testing.T, cert *x509.Certificate, id, ip string) {
 	if !slices.EqualFunc(cert.IPAddresses, want, func(a, b net.IP) bool { return a.Equal(b) }) {
 		t.Errorf("the certificate names the addresses %v, want %v", cert.IPAddresses, want)
 	}
+}
+
+// operatorUser is the Operator's ServiceAccount, as the Manifests name it.
+const operatorUser = "system:serviceaccount:" + namespace + ":battery-operator-controller-manager"
+
+// operatorLease is the Operator's leader-election Lease (cmd/main.go).
+const operatorLease = "6838d5b8.liquidmetal-x.dev"
+
+// TestSigner: the parts of the CertificateSigningRequest signer that only
+// an API server shows, with the Manifests' RBAC. Its review and signing
+// logic is unit-tested in internal/controller.
+func TestSigner(t *testing.T) {
+	//= docs/requirements/08-test-doubles.md#test-environments
+	//= type=test
+	//# The e2e suite SHALL test the behaviour that depends on the
+	//# Kubernetes API server, including CRD validation, admission policies,
+	//# TokenReview, TokenRequest and `CertificateSigningRequest`s, in the kind
+	//# cluster.
+
+	f := features.New("the CertificateSigningRequest signer").
+		Assess("the Operator runs under leader election with the leader-election Role", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+			c := mustClient(t, cfg)
+			var lease coordinationv1.Lease
+			err := wait.PollUntilContextTimeout(ctx, 2*time.Second, time.Minute, true, func(ctx context.Context) (bool, error) {
+				if err := c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: operatorLease}, &lease); err != nil {
+					return false, nil
+				}
+				return lease.Spec.HolderIdentity != nil && *lease.Spec.HolderIdentity != "", nil
+			})
+			if err != nil {
+				t.Fatalf("no holder of the Lease %s/%s: %v", namespace, operatorLease, err)
+			}
+			return ctx
+		}).
+		Assess("the Operator may approve and sign for its three signer names, and no other", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+			//= docs/requirements/09-certificates.md#signing
+			//= type=test
+			//# The Operator SHALL approve and sign `CertificateSigningRequest`s
+			//# for the signer names `battery.liquidmetal-x.dev/flintlockd-serving`,
+			//# `battery.liquidmetal-x.dev/flintlockd-client` and
+			//# `battery.liquidmetal-x.dev/exec-agent-serving`, and for no other signer
+			//# name.
+			c := mustClient(t, cfg)
+			for _, signer := range []string{hostcert.ServingSigner, hostcert.ClientSigner, hostcert.ExecAgentServingSigner, "example.test/other"} {
+				want := signer != "example.test/other"
+				for _, verb := range []string{"approve", "sign"} {
+					sar := &authorizationv1.SubjectAccessReview{Spec: authorizationv1.SubjectAccessReviewSpec{
+						User: operatorUser,
+						ResourceAttributes: &authorizationv1.ResourceAttributes{
+							Group: certificatesv1.GroupName, Resource: "signers", Verb: verb, Name: signer,
+						},
+					}}
+					if err := c.Create(ctx, sar); err != nil {
+						t.Fatal(err)
+					}
+					if sar.Status.Allowed != want {
+						t.Errorf("the Operator may %s for %s: %t, want %t", verb, signer, sar.Status.Allowed, want)
+					}
+				}
+			}
+			return ctx
+		}).
+		Assess("a request from anyone but the Exec Agent is denied, and one for another signer left alone", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+			//= docs/requirements/09-certificates.md#approval
+			//= type=test
+			//# If a request for any of the three signer names fails any check,
+			//# then the Operator SHALL deny it with a reason that names the check.
+			c := mustClient(t, cfg)
+			// The suite's own identity, which the API server records on the
+			// request, is the cluster's admin, not the Exec Agent.
+			denied := adminCSR(ctx, t, c, hostcert.ServingSigner)
+			other := adminCSR(ctx, t, c, "example.test/other")
+
+			var got certificatesv1.CertificateSigningRequest
+			err := wait.PollUntilContextTimeout(ctx, time.Second, time.Minute, true, func(ctx context.Context) (bool, error) {
+				if err := c.Get(ctx, client.ObjectKey{Name: denied}, &got); err != nil {
+					return false, nil
+				}
+				return len(got.Status.Conditions) > 0, nil
+			})
+			if err != nil {
+				t.Fatalf("the Operator did not decide on %s: %v", denied, err)
+			}
+			if cond := got.Status.Conditions[0]; cond.Type != certificatesv1.CertificateDenied || cond.Reason != controller.ReasonRequester {
+				t.Errorf("conditions = %+v, want Denied for %s", got.Status.Conditions, controller.ReasonRequester)
+			}
+			if len(got.Status.Certificate) != 0 {
+				t.Error("a denied request was signed")
+			}
+
+			// By now the Operator has seen the other request too.
+			if err := c.Get(ctx, client.ObjectKey{Name: other}, &got); err != nil {
+				t.Fatal(err)
+			}
+			if len(got.Status.Conditions) != 0 || len(got.Status.Certificate) != 0 {
+				t.Errorf("the request for another signer has status %+v, want it untouched", got.Status)
+			}
+			return ctx
+		}).
+		Feature()
+
+	testenv.Test(t, f)
+}
+
+// adminCSR creates a request for signer as the suite's identity, deletes
+// it when t ends, and returns its name.
+func adminCSR(ctx context.Context, t *testing.T, c client.Client, signer string) string {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	der, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{Subject: pkix.Name{CommonName: "e2e"}}, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	csr := &certificatesv1.CertificateSigningRequest{
+		ObjectMeta: metav1.ObjectMeta{GenerateName: "e2e-signer-"},
+		Spec: certificatesv1.CertificateSigningRequestSpec{
+			Request:    pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: der}),
+			SignerName: signer,
+			Usages: []certificatesv1.KeyUsage{
+				certificatesv1.UsageDigitalSignature, certificatesv1.UsageKeyEncipherment, certificatesv1.UsageServerAuth,
+			},
+		},
+	}
+	if err := c.Create(ctx, csr); err != nil {
+		t.Fatalf("creating a request for %s: %v", signer, err)
+	}
+	t.Cleanup(func() { _ = c.Delete(context.Background(), csr) })
+	return csr.Name
 }

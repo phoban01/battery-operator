@@ -48,7 +48,7 @@ type CertificateSigningRequestReconciler struct {
 
 	// cas reads the CA Secrets by name, each through a cache of that one
 	// Secret.
-	cas map[string]cache.Cache
+	cas map[string]client.Reader
 }
 
 // +kubebuilder:rbac:groups=certificates.k8s.io,resources=certificatesigningrequests,verbs=get;list;watch
@@ -195,13 +195,15 @@ func (r *CertificateSigningRequestReconciler) SetupWithManager(mgr ctrl.Manager)
 	if r.APIReader == nil {
 		r.APIReader = mgr.GetAPIReader()
 	}
-	r.cas = map[string]cache.Cache{}
+	r.cas = map[string]client.Reader{}
+	caches := map[string]cache.Cache{}
 	for _, name := range []string{r.Config.ServingCASecret, r.Config.ClientCASecret} {
 		c, err := singleObjectCache(mgr, r.Config.Namespace, name)
 		if err != nil {
 			return err
 		}
 		r.cas[name] = c
+		caches[name] = c
 	}
 
 	//= docs/requirements/09-certificates.md#signing
@@ -221,7 +223,7 @@ func (r *CertificateSigningRequestReconciler) SetupWithManager(mgr ctrl.Manager)
 		return err
 	}
 
-	return (&caBundleReconciler{Client: r.Client, Config: r.Config, secrets: r.cas}).setupWithManager(mgr)
+	return (&caBundleReconciler{Client: r.Client, Config: r.Config, secrets: r.cas}).setupWithManager(mgr, caches)
 }
 
 // isOurSigner reports whether name is one of the three signer names the
