@@ -1166,4 +1166,21 @@ module claims {
   val witnessLateHeartbeat: bool =
     CLAIMS.exists(c => canHeartbeat(c) and holds(getOr(obj(c).status.leaseId, 0))
       and not(holdsUnexpired(getOr(obj(c).status.leaseId, 0))))
+  // the controller is idle while a claim is Bound: idleMirrorsBattery's
+  // left-hand side, with a claim for its right-hand side to check, so the
+  // invariant is not checked only where it holds trivially (#65)
+  val witnessIdleWithBound: bool =
+    controllerIdle and CLAIMS.exists(c => live(c) and obj(c).status.phase == Bound)
+  // the same after battery has restarted, which loses the events on its
+  // stream, so CL-014 is what keeps the claim honest
+  val witnessIdleWithBoundAfterRestart: bool = battery.upSince > 0 and witnessIdleWithBound
+  // a claim has recorded an expiry for a Lease battery holds: the
+  // left-hand side of statusExpiryIsBatterys
+  val witnessExpiryRecordedForHeldLease: bool =
+    CLAIMS.exists(c => live(c) and isSome(obj(c).status.leaseExpiresAt)
+      and holds(getOr(obj(c).status.leaseId, 0)))
+  // a claim went Expired with a renewal the controller had not relayed:
+  // the left-hand side of pendingRenewalKeptWhileHeld
+  val witnessExpiredWithPendingRenewal: bool =
+    CLAIMS.exists(c => live(c) and obj(c).status.phase == Expired and pendingRenewal(c))
 }
