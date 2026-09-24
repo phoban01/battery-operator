@@ -20,14 +20,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	batteryv1alpha1 "github.com/phoban01/battery-operator/api/v1alpha1"
 	"github.com/phoban01/battery-operator/internal/battery"
@@ -54,7 +58,26 @@ type MicroVMClaimReconciler struct {
 	// answer, are retried; zero is
 	// claim.DefaultBackoff.
 	Backoff claim.Backoff
+	// ConcurrentReconciles is how many claims are reconciled at once; one
+	// fewer may call ClaimVM at a time (CL-018). Zero is
+	// DefaultClaimConcurrentReconciles; SetupWithManager refuses fewer
+	// than two.
+	ConcurrentReconciles int
+
+	// slots bounds the ClaimVM calls in flight; SetupWithManager sets it.
+	slots *claim.BindSlots
+	// deleted holds the MicroVMs battery's Events stream reported deleted
+	// (CL-013); SetupWithManager sets it.
+	deleted *claim.DeletedVMs
 }
+
+// DefaultClaimConcurrentReconciles is the default of the Operator's flag
+// --claim-concurrent-reconciles.
+const DefaultClaimConcurrentReconciles = 4
+
+// eventResubscribeWait is how long the event watcher waits before it
+// subscribes to battery's Events again after the stream ended.
+const eventResubscribeWait = 2 * time.Second
 
 // +kubebuilder:rbac:groups=battery.liquidmetal-x.dev,resources=microvmclaims,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=battery.liquidmetal-x.dev,resources=microvmclaims/status,verbs=get;update;patch
@@ -100,9 +123,15 @@ func (r *MicroVMClaimReconciler) chain() claimscope.Chain {
 		Steps: []claimscope.Subreconciler{
 			claim.Release{Backoff: backoff},
 			claim.EnsureFinalizer{},
-			claim.Bind{},
+			claim.Bind{Slots: r.slots},
 			claim.AgentAddress{},
 			claim.Pending{Backoff: backoff},
+			// A Bound claim: an event from battery first, then a pending
+			// renewal, and only then the expiry check, which waits for
+			// any pending renewal (#85).
+			claim.ExpireDeleted{Deleted: r.deleted},
+			claim.Renew{Backoff: backoff},
+			claim.CheckExpiry{Backoff: backoff},
 		},
 		Finally: []claimscope.Subreconciler{
 			claim.Synced{},
@@ -113,17 +142,58 @@ func (r *MicroVMClaimReconciler) chain() claimscope.Chain {
 // SetupWithManager sets up the controller with the Manager.
 // Besides its claims, it watches Nodes: a change to the Exec Agent's
 // address in a Node's report reconciles every claim bound on that Node
-// (claim.AgentAddress).
+// (claim.AgentAddress). It also adds the watcher of battery's Events
+// stream (CL-013), whose claims come in through a channel source.
 func (r *MicroVMClaimReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	n := r.ConcurrentReconciles
+	if n == 0 {
+		n = DefaultClaimConcurrentReconciles
+	}
+	slots, err := claim.NewBindSlots(n)
+	if err != nil {
+		return err
+	}
+	r.slots = slots
+	clk := r.Clock
+	if clk == nil {
+		clk = clock.Real{}
+	}
+	r.deleted = &claim.DeletedVMs{Clock: clk}
+
 	if err := mgr.GetFieldIndexer().IndexField(context.Background(),
 		&batteryv1alpha1.MicroVMClaim{}, claim.NodeNameField, claim.NodeName); err != nil {
 		return fmt.Errorf("indexing MicroVMClaims by node name: %w", err)
 	}
+	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &batteryv1alpha1.MicroVMClaim{},
+		claim.MicroVMUIDIndex, func(o client.Object) []string {
+			return claim.MicroVMUID(o.(*batteryv1alpha1.MicroVMClaim))
+		}); err != nil {
+		return fmt.Errorf("indexing MicroVMClaims by MicroVM uid: %w", err)
+	}
+	deletions := make(chan event.GenericEvent)
+	if err := mgr.Add(&claimEvents{
+		Battery: r.Battery,
+		Reader:  mgr.GetClient(),
+		Deleted: r.deleted,
+		Out:     deletions,
+		Retry:   eventResubscribeWait,
+		Clock:   clk,
+		Log:     mgr.GetLogger().WithName("microvmclaim-events"),
+	}); err != nil {
+		return err
+	}
+
+	//= docs/requirements/02-claims.md#renewal
+	//# While battery has not yet answered `ClaimVM` calls for other
+	//# claims, the Claim Controller SHALL still reconcile a Bound claim that has
+	//# a pending renewal.
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&batteryv1alpha1.MicroVMClaim{}).
 		Watches(&corev1.Node{},
 			handler.EnqueueRequestsFromMapFunc(claim.ClaimsOnNode(mgr.GetClient())),
 			builder.WithPredicates(claim.AgentAddressChanged())).
+		WatchesRawSource(source.Channel(deletions, &handler.EnqueueRequestForObject{})).
+		WithOptions(controller.Options{MaxConcurrentReconciles: n}).
 		Named("microvmclaim").
 		Complete(r)
 }

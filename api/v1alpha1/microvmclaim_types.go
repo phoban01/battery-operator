@@ -206,6 +206,14 @@ type MicroVMClaimStatus struct {
 	// +optional
 	LeaseExpiresAt *metav1.Time `json:"leaseExpiresAt,omitempty"`
 
+	// observedRenewTime is the spec.renewTime the Claim Controller last
+	// relayed to battery, or the one the claim had when it was bound. While
+	// spec.renewTime differs from it, the claim has a renewal the
+	// controller has yet to relay. It is written with leaseExpiresAt, in
+	// one write.
+	// +optional
+	ObservedRenewTime *metav1.MicroTime `json:"observedRenewTime,omitempty"`
+
 	// conditions hold the claim's Bound, Synced and AgentAvailable
 	// conditions.
 	// +listType=map

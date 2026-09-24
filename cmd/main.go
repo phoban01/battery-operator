@@ -68,6 +68,7 @@ func main() {
 	var probeAddr string
 	var secureMetrics bool
 	var enableHTTP2 bool
+	var claimConcurrentReconciles int
 	var tlsOpts []func(*tls.Config)
 	var signerConfig controller.SignerConfig
 	var batteryConfig battery.Config
@@ -93,6 +94,9 @@ func main() {
 	flag.StringVar(&metricsCertKey, "metrics-cert-key", "tls.key", "The name of the metrics server key file.")
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
+	flag.IntVar(&claimConcurrentReconciles, "claim-concurrent-reconciles", controller.DefaultClaimConcurrentReconciles,
+		"How many MicroVMClaims the Claim Controller reconciles at once, at least 2. One fewer may call "+
+			"battery's ClaimVM at a time, so a slow ClaimVM never holds up renewals.")
 	signerConfig.BindFlags(flag.CommandLine)
 	batteryConfig.BindFlags(flag.CommandLine)
 	sidecarConfig.BindFlags(flag.CommandLine)
@@ -249,6 +253,8 @@ func main() {
 		Scheme:    mgr.GetScheme(),
 		APIReader: mgr.GetAPIReader(),
 		Battery:   batteryClient,
+		// CL-018: one of these reconciles is always kept from ClaimVM.
+		ConcurrentReconciles: claimConcurrentReconciles,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "microvmclaim")
 		os.Exit(1)

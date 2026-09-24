@@ -136,7 +136,7 @@ status. battery v0.3.3's `ListLeases` reads Leases without renewing them,
 so CL-016 asks battery before anything expires the claim on time. A Lease
 battery lists with an expiry still to come was renewed since, and the
 claim keeps it. A Lease battery does not list is one battery no longer
-holds and will never hold again (BA-040), and CL-012 applies. One listed
+holds and will never hold again (BA-040, BA-003), and CL-012 applies. One listed
 with a passed expiry has run out, and CL-014 applies. While `ListLeases`
 fails, the Claim Controller cannot tell, and CL-017 keeps the claim Bound
 rather than expire a Lease battery may still hold. The claim's condition
