@@ -31,7 +31,9 @@ quint test specs/quint/claims_test.qnt
 quint run specs/quint/claims.qnt --invariant safety --max-steps 60 --max-samples 20000 \
   --witnesses witnessOrphan witnessOrphanBesideBound witnessExpired witnessReleased \
   witnessExpiredByEvent witnessExpiredByTime witnessOrphanFromLostAnswer \
-  witnessReleasedAfterLostAnswer witnessUnsweptLease witnessLateHeartbeat
+  witnessReleasedAfterLostAnswer witnessUnsweptLease witnessLateHeartbeat \
+  witnessIdleWithBound witnessIdleWithBoundAfterRestart \
+  witnessExpiryRecordedForHeldLease witnessExpiredWithPendingRenewal
 quint run specs/quint/certificates.qnt --invariant safety --max-steps 60 --max-samples 20000 \
   --witnesses witnessAgentFullyCertified witnessForeignApprovalFailed witnessForeignApprovalSigned \
   witnessAnotherHostDenied witnessSubjectIgnored witnessApprovedAwaitingCA
@@ -136,12 +138,20 @@ The witnesses show that the simulation reaches the interleavings that
 matter: an orphan (`witnessOrphan`), an orphan beside a claim bound after
 the retry (`witnessOrphanBesideBound`), an expired claim, a released one,
 a claim expired by each of CL-013 and CL-014, an orphan from a `ClaimVM`
-answer lost in transit (`witnessOrphanFromLostAnswer`), and a retried
+answer lost in transit (`witnessOrphanFromLostAnswer`), a retried
 `ReleaseVM` that finds the Lease unknown after a lost answer
 (`witnessReleasedAfterLostAnswer`), a Lease past its expiry waiting for
 the sweep (`witnessUnsweptLease`), and a renewal the controller can relay
-for such a Lease (`witnessLateHeartbeat`). `make quint` fails if a witness is
-never reached. A renewal kept past its expiry needs a renewal late in the
+for such a Lease (`witnessLateHeartbeat`). Others make an invariant's
+left-hand side true, so it is not checked only where it holds trivially:
+the controller idle with a claim Bound, before and after a battery restart
+(`witnessIdleWithBound`, `witnessIdleWithBoundAfterRestart`, for
+`idleMirrorsBattery`), an expiry recorded for a Lease battery holds
+(`witnessExpiryRecordedForHeldLease`, for `statusExpiryIsBatterys`), and
+a claim Expired with a renewal pending
+(`witnessExpiredWithPendingRenewal`, for `pendingRenewalKeptWhileHeld`).
+The rest have theirs among the witnesses above. `make quint` fails if a
+witness is never reached. A renewal kept past its expiry needs a renewal late in the
 Lease and time passing before it is relayed, which random simulation
 reaches too rarely for a witness; the scenario tests above cover it.
 
@@ -302,6 +312,11 @@ leaving Host before the restart that removes it.
 - A model's invariants are named for what they check. Each one names the
   requirement or ADR consequence it models in its comment.
 - Every invariant CI checks is in the model's `safety`.
+- An invariant that is an implication has a witness that makes its
+  left-hand side true, listed in `hack/quint.sh`, and another for after a
+  crash or a battery restart where that changes how it holds. Otherwise
+  the simulation can check it only where it holds trivially and still
+  pass.
 - A property the requirements do not yet guarantee is a finding. File it
   as an issue and keep it out of `safety`, with a scenario test that
   reaches the violation. Don't change the model to hide it.
