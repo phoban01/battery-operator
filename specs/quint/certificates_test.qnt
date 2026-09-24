@@ -208,7 +208,7 @@ module certificates_test {
   // A compromised Host's kubelet lists another Host's address as its own
   // Node's internal address. Every check passes, and the Host's agent
   // obtains a flintlockd serving certificate for the other Host's address,
-  // which battery v0.1.0 verifies flintlockd by (#75).
+  // which battery v0.3.3 verifies flintlockd by (#75).
   run compromisedKubeletTest =
     init
       .then(compromise("n1"))
