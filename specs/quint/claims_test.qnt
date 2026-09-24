@@ -303,10 +303,9 @@ module claims_test {
       .expect(and { obj("a").status.phase == Bound, holdsUnexpired(1), safety })
 
   // The finding of #86: a crash-window orphan outlives the Pool's
-  // heartbeat_expiry_threshold by up to a sweep interval, which the prose
-  // under 02-claims.md, Binding, and ADR 0001, consequence 2, do not allow
-  // for. orphanLeaseBounded, the bound battery gives, still holds. #86
-  // corrects the prose; the model already has battery's bound.
+  // heartbeat_expiry_threshold by up to a sweep interval, which ADR 0001,
+  // consequence 2, does not allow for. orphanLeaseBounded, the bound
+  // battery gives and 02-claims.md, Binding, now states (#86), still holds.
   run orphanOutlivesExpiryTest =
     init
       .then(createClaim("a"))

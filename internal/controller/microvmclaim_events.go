@@ -40,12 +40,20 @@ import (
 // deletion reported while the stream was down is seen on the next
 // subscription; an event lost anyway is caught by the claim's expiry check
 // (CL-016).
+//
+// After each subscription succeeds, and before it reads the stream, it
+// runs Recovery if it has one (CL-030): see claimRecovery for why a
+// successful subscription is the Claim Controller's start or its
+// connection to battery being restored. A recovery that fails drops the
+// subscription, which is made again after Retry.
 type claimEvents struct {
 	Battery battery.Client
 	// Reader lists claims by claim.MicroVMUIDIndex.
 	Reader  client.Reader
 	Deleted *claim.DeletedVMs
 	Out     chan<- event.GenericEvent
+	// Recovery, when set, runs after every successful subscription.
+	Recovery *claimRecovery
 	// Retry is the wait before subscribing again.
 	Retry time.Duration
 	Clock clock.Clock
@@ -57,7 +65,9 @@ func (w *claimEvents) Start(ctx context.Context) error {
 	for {
 		stream, err := w.Battery.Subscribe(ctx, battery.EventFilter{})
 		if err == nil {
-			w.follow(ctx, stream)
+			if w.recover(ctx) {
+				w.follow(ctx, stream)
+			}
 			_ = stream.Close()
 		} else {
 			w.Log.V(1).Info("Failed to subscribe to battery's events", "err", err.Error())
@@ -68,6 +78,20 @@ func (w *claimEvents) Start(ctx context.Context) error {
 		case <-w.Clock.After(w.Retry):
 		}
 	}
+}
+
+// recover runs Recovery, and reports whether the stream is to be followed.
+func (w *claimEvents) recover(ctx context.Context) bool {
+	if w.Recovery == nil {
+		return true
+	}
+	if err := w.Recovery.run(ctx); err != nil {
+		if ctx.Err() == nil {
+			w.Log.Error(err, "Failed to recover MicroVMClaims against battery's Leases; subscribing again")
+		}
+		return false
+	}
+	return true
 }
 
 // follow handles the stream's events until it ends.

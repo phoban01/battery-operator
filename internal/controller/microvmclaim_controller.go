@@ -69,6 +69,9 @@ type MicroVMClaimReconciler struct {
 	// deleted holds the MicroVMs battery's Events stream reported deleted
 	// (CL-013); SetupWithManager sets it.
 	deleted *claim.DeletedVMs
+	// recovered holds what the last recovery read from battery (CL-030);
+	// SetupWithManager sets it.
+	recovered *claim.RecoveredLeases
 }
 
 // DefaultClaimConcurrentReconciles is the default of the Operator's flag
@@ -125,11 +128,13 @@ func (r *MicroVMClaimReconciler) chain() claimscope.Chain {
 			claim.EnsureFinalizer{},
 			claim.Bind{Slots: r.slots},
 			claim.Pending{Backoff: backoff},
-			// A Bound claim: an event from battery first, then a pending
-			// renewal, and only then the expiry check, which waits for
-			// any pending renewal (#85). They stop the chain only once
-			// they have expired the claim.
+			// A Bound claim: an event from battery first, then what the
+			// last recovery read (CL-030), then a pending renewal, and
+			// only then the expiry check, which waits for any pending
+			// renewal (#85). They stop the chain only once they have
+			// expired the claim.
 			claim.ExpireDeleted{Deleted: r.deleted},
+			claim.Recover{Leases: r.recovered},
 			claim.Renew{Backoff: backoff},
 			claim.CheckExpiry{Backoff: backoff},
 			// Last, so that a Node it cannot read never holds up a
@@ -146,7 +151,9 @@ func (r *MicroVMClaimReconciler) chain() claimscope.Chain {
 // Besides its claims, it watches Nodes: a change to the Exec Agent's
 // address in a Node's report reconciles every claim bound on that Node
 // (claim.AgentAddress). It also adds the watcher of battery's Events
-// stream (CL-013), whose claims come in through a channel source.
+// stream (CL-013), whose claims come in through a channel source; after
+// each subscription it recovers every Bound claim, on start and on
+// reconnecting to battery (CL-030, claimRecovery).
 func (r *MicroVMClaimReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	n := r.ConcurrentReconciles
 	if n == 0 {
@@ -162,6 +169,7 @@ func (r *MicroVMClaimReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		clk = clock.Real{}
 	}
 	r.deleted = &claim.DeletedVMs{Clock: clk}
+	r.recovered = &claim.RecoveredLeases{}
 
 	if err := mgr.GetFieldIndexer().IndexField(context.Background(),
 		&batteryv1alpha1.MicroVMClaim{}, claim.NodeNameField, claim.NodeName); err != nil {
@@ -179,9 +187,16 @@ func (r *MicroVMClaimReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Reader:  mgr.GetClient(),
 		Deleted: r.deleted,
 		Out:     deletions,
-		Retry:   eventResubscribeWait,
-		Clock:   clk,
-		Log:     mgr.GetLogger().WithName("microvmclaim-events"),
+		Recovery: &claimRecovery{
+			Battery: r.Battery,
+			Reader:  mgr.GetClient(),
+			Leases:  r.recovered,
+			Out:     deletions,
+			Log:     mgr.GetLogger().WithName("microvmclaim-recovery"),
+		},
+		Retry: eventResubscribeWait,
+		Clock: clk,
+		Log:   mgr.GetLogger().WithName("microvmclaim-events"),
 	}); err != nil {
 		return err
 	}

@@ -881,6 +881,11 @@ module claims {
   // claim records are left alone (CL-031). The controller reads the Leases
   // with ListLeases (BA-040), which lists each with its expiry and renews
   // none; that is the only way it can tell "expired" from "unknown".
+  //
+  // The Operator lists the Leases once for every claim, and takes this
+  // step one claim at a time: claim.Recover expires a claim whose Lease
+  // battery did not list, and CheckExpiry, in the same reconcile, reads a
+  // Lease listed with a passed expiry again and applies CL-014.
   action ctlRecover: bool = all {
     canRecover,
     claims' = CLAIMS.mapBy(c =>
@@ -987,8 +992,9 @@ module claims {
   // battery runs it is gone within the Pool's heartbeat_expiry_threshold of
   // being claimed plus one sweep interval (BA-020), or within one sweep
   // interval of battery starting again if it ran out while battery was
-  // down (BA-022). The prose promises the threshold alone; that is
-  // orphanGoneByExpiry below, which does not hold (#86).
+  // down (BA-022). 02-claims.md, Binding, states this bound (#86); ADR
+  // 0001 promises the threshold alone, which is orphanGoneByExpiry below,
+  // and does not hold.
   val orphanLeaseBounded: bool =
     orphans.forall(l => and {
       battery.leases.get(l).expiresAt == battery.leases.get(l).claimedAt + EXPIRY,
@@ -1107,8 +1113,9 @@ module claims {
   // filed as an issue, kept out of safety, and reached by a scenario test
   // in claims_test.qnt that fails once the model changes to close it.
 
-  // The prose under 02-claims.md, Binding, and ADR 0001, consequence 2:
-  // battery expires an orphan after the Pool's heartbeat_expiry_threshold.
+  // ADR 0001, consequence 2: battery expires an orphan after the Pool's
+  // heartbeat_expiry_threshold. 02-claims.md, Binding, said so too, until
+  // #86 corrected it to the bound of orphanLeaseBounded.
   // Not in safety: the sweep deletes it up to one sweep interval later
   // (BA-020), and up to one sweep interval after battery restarts
   // (BA-022), so it outlives the threshold (#86).
