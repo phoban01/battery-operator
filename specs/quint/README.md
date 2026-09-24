@@ -11,9 +11,10 @@ code. They do not replace Go tests. How they cite requirements is in
 | `types.qnt` | The shared types: `Pool` and `MicroVMClaim` (spec, status, phase, conditions), battery's Leases, MicroVMs and Pools, Nodes, Node reports and Hosts |
 | `claims.qnt` | The claim lifecycle against battery (CL-001 to CL-042; ADR 0001, consequences 2 to 4) |
 | `claims_test.qnt` | Scenario tests for `claims.qnt`, one interleaving each |
+| `certificates.qnt` | Certificate approval and signing (CT-001 to CT-020; EA-061, EA-062, EA-068; ADR 0003 and ADR 0004) |
+| `certificates_test.qnt` | Scenario tests for `certificates.qnt` |
 
-Still to come: pools, placement and inventory (#47), and certificate
-approval (#48).
+Still to come: pools, placement and inventory (#47).
 
 ## Running them
 
@@ -31,6 +32,9 @@ quint run specs/quint/claims.qnt --invariant safety --max-steps 60 --max-samples
   --witnesses witnessOrphan witnessOrphanBesideBound witnessExpired witnessReleased \
   witnessExpiredByEvent witnessExpiredByTime witnessOrphanFromLostAnswer \
   witnessReleasedAfterLostAnswer
+quint run specs/quint/certificates.qnt --invariant safety --max-steps 60 --max-samples 20000 \
+  --witnesses witnessAgentFullyCertified witnessForeignApprovalFailed witnessForeignApprovalSigned \
+  witnessAnotherHostDenied witnessSubjectIgnored witnessApprovedAwaitingCA
 ```
 
 A violation prints the trace that breaks the invariant and the seed that
@@ -107,6 +111,75 @@ never reached. A claim kept Bound by `ListLeases` (CL-016) needs a
 renewal late in the Lease, a lost answer and time passing before the
 retry, which random simulation reaches too rarely for a witness; the
 scenario tests above cover it.
+
+## The certificates model
+
+`certificates.qnt` has three Hosts, n1, n2 (dual-stack) and n3, whose Node
+object has been deleted, and the Operator as approver and signer of
+`CertificateSigningRequest`s. The steps are:
+
+- **the requesters:** each uncompromised Host's Exec Agent requests its
+  three certificates under its own Node's identity (EA-061, EA-062,
+  EA-068). A Host can be compromised; from then on its agent submits
+  anything. Other identities submit anything too: another ServiceAccount, a
+  cluster admin, and the Exec Agent's ServiceAccount with a token bound to
+  no pod. A forged request starts from the request some Host's agent would
+  make for some signer name and changes any of its subject, IP addresses,
+  SPIFFE IDs (including another trust domain), DNS names, self-signature
+  and key usages, so most forgeries are near misses. The requester cannot
+  choose its username or Node, which the API server records.
+- **the other approvers:** anyone granted `approve` on the signer names
+  approves or denies any undecided request, for any signer name.
+- **the Operator:** one step is one reconcile of
+  `CertificateSigningRequestReconciler`: review the request against the
+  checks of CT-010 to CT-014, then deny it or approve and sign it; or, for
+  a request already approved by anyone, mark it Failed or sign it (CT-006).
+  It sets the subject itself (CT-007) and signs with its signer name's CA
+  (CT-002).
+- **the environment:** the CA Secrets can be unreadable, so an approved
+  request waits for its signature.
+
+Invariants, all in `safety`:
+
+| Invariant | Checks |
+|-----------|--------|
+| `noCertForAnotherNode` | every certificate names only its requester's own Host's addresses and SPIFFE IDs (CT-010, CT-011, CT-014; ADR 0003, consequence 1) |
+| `onlyExecAgentsCertified` | only the Exec Agent's ServiceAccount, bound to a Node, obtains a certificate (CT-010, CT-011, CT-014) |
+| `signedOnlyWhenApproved` | nothing is signed without `Approved` (CT-003) |
+| `signedOnlyAfterChecks` | nothing is signed without passing every check, whoever approved it (CT-006) |
+| `foreignApprovalNeverBypassesChecks` | a request someone else approved that fails a check never gets a certificate (CT-006) |
+| `subjectIsRequesterNode` | every certificate's subject is the requester's Node (CT-007) |
+| `identitiesInTrustDomain` | every certificate's SPIFFE ID is in the configured trust domain, and never battery's (CT-020) |
+| `caAndUsagesMatchSigner` | the signer name's CA and key usages, and no DNS name (CT-002, CT-012) |
+| `onlyOurSignerNames` | the Operator does nothing with another signer name (CT-001) |
+| `refusalNamesTheCheck` | a `Denied` or `Failed` condition names a check the request fails (CT-013) |
+| `idleSettled` | once the Operator is idle and can read its CAs, every request for its signer names is signed, Denied or Failed |
+
+`noCertForAnotherNode` checks the addresses a Host really holds, not the
+ones its Node lists. It holds only if a Node's internal addresses belong to
+its Host, and the main simulation assumes they do. A compromised Host's
+kubelet can list another Host's address on its own Node; the step
+`kubeletReportsAddresses` does that, is not in `step`, and the scenario
+test `compromisedKubeletTest` reaches the violation (#75).
+
+`failingRequestsDenied` (CT-013 as written: every request that fails a
+check is Denied) does not hold, and is not in `safety`. A request someone
+else approved can't be Denied; the Operator marks it Failed instead, which
+no requirement mentions (#76). `failedNotDeniedTest` reaches it.
+
+A Host whose Node is gone still obtains its client certificate: CT-011,
+unlike CT-010 and CT-014, does not ask for an existing Node, and the code
+agrees (`nodeNotFoundTest`).
+
+Not modelled: CT-004 (durations), CT-005 (publishing the CAs), the
+Manifests (CT-021 to CT-023, EA-067), and the Exec Agent's handling of what
+it receives (EA-063 to EA-066). Only the Operator signs: it alone holds the
+CA keys.
+
+The witnesses show an Exec Agent with all three certificates, a request
+someone else approved both Failed and signed, a compromised agent denied
+for another Host's address or SPIFFE ID, a requested subject ignored, and an
+approved request waiting for the CA.
 
 ## Conventions
 
