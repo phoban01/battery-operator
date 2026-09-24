@@ -117,7 +117,8 @@ func (poolExhaustion) Reconcile(_ context.Context, s *poolScope) (poolNext, erro
 
 // poolReadiness sets the Ready condition from the Hosts poolPlacement
 // found, battery's answer and the counts, unless poolRejection has already
-// set it to battery's refusal of the spec, which then stands.
+// set it to battery's refusal of the spec, which then stands, over
+// NoEligibleHost too (03-pools.md, Placement).
 //
 // A selector that matches no Host is reported first, whether or not
 // battery holds the Pool: it is what the Pool's owner has to change.

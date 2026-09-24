@@ -156,10 +156,13 @@ func TestDeletedPoolWithoutFinalizerIsLeftAlone(t *testing.T) {
 //= docs/requirements/03-pools.md#declaration
 //= type=test
 //# When a Pool exists that battery does not hold, the Pool
-//# Controller SHALL create it in battery with `CreatePool`, under the Pool's
+//# Controller SHALL add the finalizer `battery.liquidmetal-x.dev/pool` to the
+//# Pool before it creates it in battery with `CreatePool`, under the Pool's
 //# namespace and name.
 
-// TestPoolBatteryDoesNotHoldIsCreated covers PO-001.
+// TestPoolBatteryDoesNotHoldIsCreated covers PO-001 for a Pool read with
+// its finalizer; TestPoolIsNotCreatedBeforeItsFinalizerIsStored covers the
+// order.
 func TestPoolBatteryDoesNotHoldIsCreated(t *testing.T) {
 	b := newStubBattery()
 	s := newTestPoolScope(finalizedPool(), b)
@@ -320,5 +323,30 @@ func TestAcceptedPoolClearsItsRejection(t *testing.T) {
 	}
 	if ready := readyCondition(s.Pool); ready == nil || ready.Reason == PoolReasonRejected {
 		t.Errorf("Ready = %+v, want the rejection cleared and Ready set from battery's answer", ready)
+	}
+}
+
+//= docs/requirements/03-pools.md#declaration
+//= type=test
+//# When a Pool exists that battery does not hold, the Pool
+//# Controller SHALL add the finalizer `battery.liquidmetal-x.dev/pool` to the
+//# Pool before it creates it in battery with `CreatePool`, under the Pool's
+//# namespace and name.
+
+// TestPoolDeclarationWaitsForTheStoredFinalizer covers PO-001's order in
+// poolDeclaration alone: a finalizer the chain has added but the API
+// server has not yet stored does not let the Pool into battery.
+func TestPoolDeclarationWaitsForTheStoredFinalizer(t *testing.T) {
+	b := newStubBattery()
+	s := newTestPoolScope(testPool(), b)
+	controllerutil.AddFinalizer(s.Pool, PoolFinalizer)
+
+	next, err := poolDeclaration{}.Reconcile(context.Background(), s)
+	if err != nil || next != poolStop {
+		t.Errorf("next = %v, err = %v; want stop", next, err)
+	}
+	wantCalls(t, b, "GetPool ci/runners")
+	if _, ok := b.spec(poolRef(s.Pool)); ok {
+		t.Error("battery holds a Pool whose finalizer is not stored")
 	}
 }

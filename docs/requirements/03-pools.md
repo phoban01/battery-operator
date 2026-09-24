@@ -6,7 +6,8 @@ view of it into the Pool's status (ADR 0001, decision 4).
 ## Declaration {#declaration}
 
 - **PO-001** When a Pool exists that battery does not hold, the Pool
-  Controller SHALL create it in battery with `CreatePool`, under the Pool's
+  Controller SHALL add the finalizer `battery.liquidmetal-x.dev/pool` to the
+  Pool before it creates it in battery with `CreatePool`, under the Pool's
   namespace and name.
 - **PO-002** When a Pool's `metadata.generation` differs from its
   `status.observedGeneration`, the Pool Controller SHALL send the Pool's spec
@@ -18,6 +19,12 @@ view of it into the Pool's status (ADR 0001, decision 4).
 - **PO-004** If battery refuses a Pool's spec, then the Pool Controller SHALL
   set the Pool's condition `Ready` false with the reason `Rejected` and
   battery's message.
+
+Before `CreatePool` means stored: the Pool Controller calls `CreatePool`
+only for a Pool it has read back from the API server with the finalizer on
+it. A Pool deleted before then goes at once and leaves nothing in battery,
+and a Pool battery holds leaves the cluster only through the finalizer of
+PO-003, which deletes it from battery first.
 
 Most of what battery would refuse is refused at admission by RS-012; PO-004
 covers the rest.
@@ -40,6 +47,16 @@ cluster reaches every Pool that selects it with no change to any Pool
 (ADR 0001, consequence 1). It watches those Hosts and the Nodes' labels,
 so a Host joining or leaving, or a Node relabelled into or out of a
 selector, updates the Pools at once.
+
+While battery refuses a Pool's spec (PO-004), the reason `Rejected` stands
+on `Ready` even when the Pool's selector also matches no Host: the
+refusal is what the Pool's owner has to fix first, and `NoEligibleHost`
+(PO-012) shows once battery accepts a spec. Nor can `UpdatePool` carry a
+change in the Hosts the selector matches while battery refuses the spec it
+comes with. battery's Pool keeps naming the Hosts of the last spec battery
+accepted, or is not there at all if battery never accepted one, and the
+Pool's counts stay battery's for that Pool. A Host that leaves the cluster
+meanwhile is removed from battery once the drain timeout of IN-013 passes.
 
 ## Status {#pool-status}
 
