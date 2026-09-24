@@ -126,6 +126,11 @@ func settingsFromEnv() settings {
 
 // newClient is a client of the cluster that knows this project's types.
 func newClient(cfg *envconf.Config) (client.Client, error) {
+	//= docs/requirements/08-test-doubles.md#test-environments
+	//# The e2e suite SHALL test the behaviour that depends on the
+	//# Kubernetes API server, including CRD validation, admission policies,
+	//# TokenReview, TokenRequest and `CertificateSigningRequest`s, in the kind
+	//# cluster.
 	scheme := runtime.NewScheme()
 	if err := clientgoscheme.AddToScheme(scheme); err != nil {
 		return nil, err
