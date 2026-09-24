@@ -90,6 +90,42 @@ jobs:
           version: ${{ env.DAGGER_VERSION }}
           call: quint
 
+  # The e2e suite (test/e2e/README.md). kind runs on the runner, in the
+  # runner's Docker, rather than inside a Dagger function: the images are
+  # still built by Dagger and exported to that Docker, which is what
+  # `make docker-build` does locally. Not a required check yet; the
+  # maintainer makes it one once it has been stable for a while (#69).
+  e2e:
+    name: e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      KIND_VERSION: v0.30.0
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: install kind
+        run: |
+          go install "sigs.k8s.io/kind@${KIND_VERSION}"
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      # Installs the CLI only; make calls it.
+      - uses: dagger/dagger-for-github@27b130bf0f79a7f6fbbbe0fbca6760dc9bb40a77 # v8.4.1
+        with:
+          version: ${{ env.DAGGER_VERSION }}
+      - name: make test-e2e
+        env:
+          E2E_LOGS_DIR: ${{ runner.temp }}/e2e-logs
+        run: make test-e2e
+      - name: upload the cluster's logs
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: e2e-logs
+          path: ${{ runner.temp }}/e2e-logs
+          if-no-files-found: ignore
+
   requirements:
     name: requirements
     runs-on: ubuntu-latest

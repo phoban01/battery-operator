@@ -1,6 +1,9 @@
 version: "2"
 run:
   allow-parallel-runners: true
+  # the e2e suite (test/e2e) is behind this tag
+  build-tags:
+    - e2e
 linters:
   default: none
   enable:
@@ -51,6 +54,9 @@ linters:
       - linters:
           - lll
         path: api/*
+      - linters:
+          - lll
+        path: test/e2e/*
       - linters:
           - dupl
           - lll

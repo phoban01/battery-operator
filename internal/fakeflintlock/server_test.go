@@ -286,6 +286,90 @@ func TestTLS(t *testing.T) {
 	})
 }
 
+// TestTLSReload: with TLS.Reload, certificates replaced on disk serve the
+// next connection, and the MicroVMs survive the change.
+func TestTLSReload(t *testing.T) {
+	t.Parallel()
+	first, err := WriteTestCerts(t.TempDir(), "h1")
+	if err != nil {
+		t.Fatalf("WriteTestCerts: %v", err)
+	}
+	second, err := WriteTestCerts(t.TempDir(), "h1")
+	if err != nil {
+		t.Fatalf("WriteTestCerts: %v", err)
+	}
+	// The Server reads its files from dir: first's are copied there now,
+	// and second's over them later.
+	dir := t.TempDir()
+	files := &TLS{
+		CertFile:     filepath.Join(dir, "tls.crt"),
+		KeyFile:      filepath.Join(dir, "tls.key"),
+		ClientCAFile: filepath.Join(dir, "client-ca.crt"),
+		Reload:       true,
+	}
+	install := func(c *TestCerts) {
+		t.Helper()
+		for src, dst := range map[string]string{
+			c.ServerCertFile: files.CertFile,
+			c.ServerKeyFile:  files.KeyFile,
+			c.CAFile:         files.ClientCAFile,
+		} {
+			data, err := os.ReadFile(src)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(dst, data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	install(first)
+	srv := newTestServer(t, Config{Name: "h1", TLS: files})
+	serve(t, srv)
+
+	// call dials a new connection that trusts c's CA and presents c's
+	// client certificate, and calls ServerInfo.
+	call := func(c *TestCerts) error {
+		t.Helper()
+		caPEM, err := os.ReadFile(c.CAFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		roots := x509.NewCertPool()
+		roots.AppendCertsFromPEM(caPEM)
+		cert, err := tls.LoadX509KeyPair(c.ClientCertFile, c.ClientKeyFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		creds := credentials.NewTLS(&tls.Config{
+			RootCAs: roots, Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12,
+		})
+		ctx, cancel := context.WithTimeout(testCtx(t), 5*time.Second)
+		defer cancel()
+		_, err = mvmv1.NewMicroVMClient(dial(t, srv, creds)).ServerInfo(ctx, &emptypb.Empty{})
+		return err
+	}
+
+	if err := call(first); err != nil {
+		t.Fatalf("ServerInfo with the first certificates: %v", err)
+	}
+	vm, err := srv.CreateMicroVM(&types.MicroVMSpec{Id: "vm", Namespace: "ns"})
+	if err != nil {
+		t.Fatalf("CreateMicroVM: %v", err)
+	}
+
+	install(second)
+	if err := call(second); err != nil {
+		t.Errorf("ServerInfo with the replaced certificates: %v", err)
+	}
+	if err := call(first); err == nil {
+		t.Error("ServerInfo with the old certificates succeeded after they were replaced")
+	}
+	if got := srv.MicroVMs(); len(got) != 1 || got[0].GetSpec().GetUid() != vm.GetSpec().GetUid() {
+		t.Errorf("MicroVMs after the change = %v, want the one created before it", got)
+	}
+}
+
 // TestServerInfo checks the configured version, exec flag and uptime.
 func TestServerInfo(t *testing.T) {
 	t.Parallel()

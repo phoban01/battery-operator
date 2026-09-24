@@ -19,10 +19,12 @@
 //	dagger call quint
 //	dagger call images export --path=dist/images
 //	dagger call operator-image export-image --name=battery-operator:dev
+//	dagger call fake-flintlockd-image export-image --name=fake-flintlockd:dev
 //	dagger call publish --repository=ttl.sh/battery-operator-dev --tags=1h
 //
-// The two images, the Operator's and the Exec Agent's, are defined here and
-// nowhere else. There is no Dockerfile: see
+// The two images, the Operator's and the Exec Agent's, and the e2e suite's
+// fake flintlockd image are defined here and nowhere else. There is no
+// Dockerfile: see
 // docs/adr/0005-images-built-by-dagger.md.
 package main
 
@@ -92,6 +94,16 @@ var (
 		description: "battery-operator: the Exec Agent, which runs on every Host",
 	}
 	components = []component{operator, execAgent}
+
+	// fakeFlintlockd is the fake flintlockd (cmd/fake-flintlockd), which the
+	// e2e suite runs on every kind node that is a Host. It is a test double,
+	// so it is not in components: Images and Publish leave it out.
+	fakeFlintlockd = component{
+		image:       "fake-flintlockd",
+		binary:      "fake-flintlockd",
+		pkg:         "./cmd/fake-flintlockd",
+		description: "battery-operator: the e2e suite's fake flintlockd, a test double",
+	}
 )
 
 type BatteryOperator struct {
@@ -247,6 +259,18 @@ func (m *BatteryOperator) ExecAgentImage(
 	platform dagger.Platform,
 ) (*dagger.Container, error) {
 	return m.image(ctx, execAgent, platform)
+}
+
+// FakeFlintlockdImage builds the fake flintlockd's image, which runs
+// /fake-flintlockd, for one platform. The e2e suite runs it as each kind
+// Host's flintlockd. It is never published.
+func (m *BatteryOperator) FakeFlintlockdImage(
+	ctx context.Context,
+	// The platform, linux/amd64 or linux/arm64. Defaults to the engine's.
+	// +optional
+	platform dagger.Platform,
+) (*dagger.Container, error) {
+	return m.image(ctx, fakeFlintlockd, platform)
 }
 
 // Images builds both images for linux/amd64 and linux/arm64, and returns

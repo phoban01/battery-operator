@@ -1,0 +1,39 @@
+# The e2e suite's Manifests: config/default and config/exec-agent as they
+# ship, plus what only a kind cluster needs. Everything test-only is here,
+# never in config/default or config/exec-agent.
+#
+#= docs/requirements/08-test-doubles.md#test-environments
+#/ The e2e suite SHALL run the Operator with battery's `poolmgrd`
+#/ as its sidecar, the Exec Agent, and the fake `flintlockd` as each Host's
+#/ `flintlockd`, in a kind cluster, from the Manifests.
+#
+# - The Operator, with battery's poolmgrd as its sidecar, from config/default,
+#   and the Exec Agent from config/exec-agent, unchanged but for the Exec
+#   Agent's Host prerequisites (exec-agent-host-prerequisites.yaml).
+# - fake-host.yaml: the fake flintlockd on every Host, which also does what
+#   the Host Image would: creates the directory the Exec Agent writes
+#   flintlockd's certificates to, and a stand-in for containerd's thin pool.
+#
+# The images are tagged e2e, which the suite builds and loads into kind; the
+# suite sets them again from IMG, EXEC_AGENT_IMG, FAKE_FLINTLOCKD_IMG and
+# POOLMGRD_IMG when it deploys (test/e2e/README.md).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+- ../../../config/default
+- ../../../config/exec-agent
+- fake-host.yaml
+
+patches:
+- path: exec-agent-host-prerequisites.yaml
+  target:
+    kind: DaemonSet
+    name: battery-operator-exec-agent
+
+images:
+- name: ghcr.io/phoban01/battery-operator
+  newTag: e2e
+- name: ghcr.io/phoban01/battery-operator/exec-agent
+  newTag: e2e
+- name: ghcr.io/phoban01/battery-operator/fake-flintlockd
+  newTag: e2e
