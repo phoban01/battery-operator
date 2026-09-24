@@ -91,6 +91,8 @@ type settings struct {
 	// cluster is the kind cluster's name. A cluster of that name that
 	// already exists is used as it is.
 	cluster string
+	// kindConfig is the kind configuration the cluster is created from.
+	kindConfig string
 	// The images. The first three are loaded from the local Docker into
 	// kind; poolmgrd's is pulled by the nodes, and empty keeps the one the
 	// Manifests pin.
@@ -113,6 +115,7 @@ func settingsFromEnv() settings {
 	keep, _ := strconv.ParseBool(os.Getenv("E2E_KEEP_CLUSTER"))
 	return settings{
 		cluster:             get("KIND_CLUSTER", "battery-operator-e2e"),
+		kindConfig:          get("KIND_CONFIG", "kind-config.yaml"),
 		operatorImage:       get("IMG", operatorRepository+":e2e"),
 		execAgentImage:      get("EXEC_AGENT_IMG", execAgentRepository+":e2e"),
 		fakeFlintlockdImage: get("FAKE_FLINTLOCKD_IMG", fakeFlintlockdRepository+":e2e"),

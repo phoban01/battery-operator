@@ -49,7 +49,7 @@ func TestMain(m *testing.M) {
 	s := settingsFromEnv()
 	testenv = env.NewWithConfig(envconf.New())
 	testenv.Setup(
-		envfuncs.CreateClusterWithConfig(kind.NewProvider(), s.cluster, "kind-config.yaml"),
+		envfuncs.CreateClusterWithConfig(kind.NewProvider(), s.cluster, s.kindConfig),
 		envfuncs.LoadImageToCluster(s.cluster, s.operatorImage),
 		envfuncs.LoadImageToCluster(s.cluster, s.execAgentImage),
 		envfuncs.LoadImageToCluster(s.cluster, s.fakeFlintlockdImage),
