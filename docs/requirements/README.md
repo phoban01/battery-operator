@@ -24,6 +24,14 @@ The design these requirements specify is recorded in
 | `07-client.md` | `CC` | The Client Library that consumers use to claim and use a MicroVM |
 | `08-test-doubles.md` | `TD` | The fake battery and fake `flintlockd` that stand in for KVM and battery during development |
 | `09-certificates.md` | `CT` | The Operator as approver and signer of the Hosts' certificates, and the SPIFFE identities they carry |
+| `10-battery.md` | `BA` | What the Operator assumes battery v0.3.3 does, each with a pointer into battery's source |
+
+`10-battery.md` is the one document whose subject is not a system this
+project builds. Its statements are assumptions about battery, read from
+battery's source, and they are normative for what stands in for battery
+here: the fake battery cites each one it implements, with a test, and the
+Quint models cite the ones their battery steps encode. A requirement that
+depends on battery's behaviour names the assumption.
 
 ## EARS patterns
 
@@ -31,7 +39,7 @@ Use exactly one of these shapes per requirement. The subject is always one of
 the system names defined in the glossary: the Operator, the CRDs, the Claim
 Controller, the Pool Controller, the Inventory Controller, the Exec Agent, the
 Manifests, the Client Library, the fake battery, the fake `flintlockd`, the
-unit tests, the e2e suite.
+unit tests, the e2e suite. In `10-battery.md` alone, the subject is battery.
 
 | Pattern | Shape |
 |---------|-------|
@@ -158,6 +166,21 @@ of date. `make duvet-models-write` rewrites it. `type=test` and
 <!-- BEGIN modelled: written by hack/duvet-models.sh --write; do not edit -->
 | ID | Model |
 |----|-------|
+| BA-001 | `specs/quint/claims.qnt` |
+| BA-003 | `specs/quint/claims.qnt` |
+| BA-004 | `specs/quint/claims.qnt` |
+| BA-010 | `specs/quint/claims.qnt` |
+| BA-011 | `specs/quint/claims.qnt` |
+| BA-020 | `specs/quint/claims.qnt` |
+| BA-021 | `specs/quint/claims.qnt` |
+| BA-022 | `specs/quint/claims.qnt` |
+| BA-023 | `specs/quint/claims.qnt` |
+| BA-030 | `specs/quint/claims.qnt` |
+| BA-031 | `specs/quint/claims.qnt` |
+| BA-032 | `specs/quint/claims.qnt` |
+| BA-041 | `specs/quint/claims.qnt` |
+| BA-051 | `specs/quint/claims.qnt` |
+| BA-060 | `specs/quint/claims.qnt` |
 | CL-001 | `specs/quint/claims.qnt` |
 | CL-002 | `specs/quint/claims.qnt` |
 | CL-003 | `specs/quint/claims.qnt` |

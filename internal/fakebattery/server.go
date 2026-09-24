@@ -123,7 +123,22 @@ func (s *poolAdminServer) ListPools(_ context.Context, req *poolmgrv1.ListPoolsR
 	return resp, nil
 }
 
-// leaseServer implements poolmgrv1.LeaseServer.
+//= docs/requirements/10-battery.md#list-leases
+//= type=todo
+//= tracking-issue=71
+//# When battery receives a `ListLeases`, battery SHALL answer with
+//# every Lease it holds, or every Lease of the one Pool the request names,
+//# each with its lease id, MicroVM uid, Pool, claim time, last heartbeat time
+//# and expiry, without renewing any of them.
+
+//= docs/requirements/10-battery.md#list-leases
+//= type=todo
+//= tracking-issue=71
+//# battery SHALL include in the answer to `ListLeases` a Lease
+//# whose expiry has passed but that no sweep has deleted yet.
+
+// leaseServer implements poolmgrv1.LeaseServer. ListLeases comes with
+// battery v0.3.3's protos (#71).
 type leaseServer struct {
 	poolmgrv1.UnimplementedLeaseServer
 	b *Battery

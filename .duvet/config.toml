@@ -60,6 +60,11 @@ format = "markdown"
 source = "docs/requirements/09-certificates.md"
 format = "markdown"
 
+# What the Operator assumes battery does; the fake battery cites it.
+[[specification]]
+source = "docs/requirements/10-battery.md"
+format = "markdown"
+
 [report.html]
 enabled = true
 path = ".duvet/reports/report.html"

@@ -95,8 +95,28 @@ func (s strategy) tickDeficit(c counts) int {
 // tick is one pass of the control loop: expire and warn on Leases, retry
 // deletions a Host refused, and top every Pool up. Every time it reads
 // comes from Config.Clock, so a test that advances a fake clock past a
-// Lease's expiry has the Lease expired on the next tick.
+// Lease's expiry has the Lease expired on the next tick. The tick is the
+// fake's sweep: until it runs, a Lease past its expiry is still held and a
+// heartbeat renews it, as in battery.
 func (b *Battery) tick(ctx context.Context) {
+	//= docs/requirements/10-battery.md#expiry
+	//# battery SHALL delete an expired Lease only in a sweep, which
+	//# runs once every `sweep_interval` while battery runs, and which deletes
+	//# every Lease whose expiry is at or before the time of the sweep.
+
+	//= docs/requirements/10-battery.md#expiry
+	//= type=implication
+	//# If a `Heartbeat` renews a Lease after a sweep has listed it as
+	//# expired and before the sweep deletes it, then battery SHALL keep the Lease
+	//# with its renewed expiry.
+
+	//= docs/requirements/10-battery.md#expiry
+	//# When a sweep deletes a Lease, battery SHALL delete the Lease's
+	//# MicroVM through `flintlockd`, and SHALL retry the deletion in every later
+	//# sweep until `flintlockd` confirms it.
+
+	// The implication: the tick lists and deletes expired Leases under b.mu,
+	// which heartbeat also takes, so no heartbeat lands in between.
 	now := b.cfg.Clock.Now()
 	var expired, pending []*vmState
 
@@ -454,8 +474,14 @@ func (b *Battery) deleteOnHost(ctx context.Context, hostName, uid string) error 
 	return nil
 }
 
+//= docs/requirements/10-battery.md#events
+//# battery SHALL record `VM_DELETED_DUE_TO_EXPIRY` or
+//# `VM_DELETED_ON_RELEASE` for a leased MicroVM only after `flintlockd` has
+//# confirmed its deletion.
+
 // finishDeletionLocked removes a deleted MicroVM and its Lease, emits its
-// VM_DELETED_* event and starts the strategy's replacement.
+// VM_DELETED_* event and starts the strategy's replacement. deleteVM calls
+// it only once the Host has confirmed the deletion.
 func (b *Battery) finishDeletionLocked(vm *vmState) {
 	if _, ok := b.vms[vm.id]; !ok {
 		return

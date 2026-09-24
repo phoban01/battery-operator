@@ -9,7 +9,7 @@ code. They do not replace Go tests. How they cite requirements is in
 | Module | Covers |
 |--------|--------|
 | `types.qnt` | The shared types: `Pool` and `MicroVMClaim` (spec, status, phase, conditions) and their places in the API server, battery's Leases, MicroVMs and Pools, Nodes, Node reports and Hosts |
-| `claims.qnt` | The claim lifecycle against battery (CL-001 to CL-042; ADR 0001, consequences 2 to 4) |
+| `claims.qnt` | The claim lifecycle against battery (CL-001 to CL-042; ADR 0001, consequences 2 to 4), with battery as `docs/requirements/10-battery.md` describes it (BA-*) |
 | `claims_test.qnt` | Scenario tests for `claims.qnt`, one interleaving each |
 | `certificates.qnt` | Certificate approval and signing (CT-001 to CT-020; EA-061, EA-062, EA-068; ADR 0003 and ADR 0004) |
 | `certificates_test.qnt` | Scenario tests for `certificates.qnt` |
@@ -31,7 +31,7 @@ quint test specs/quint/claims_test.qnt
 quint run specs/quint/claims.qnt --invariant safety --max-steps 60 --max-samples 20000 \
   --witnesses witnessOrphan witnessOrphanBesideBound witnessExpired witnessReleased \
   witnessExpiredByEvent witnessExpiredByTime witnessOrphanFromLostAnswer \
-  witnessReleasedAfterLostAnswer
+  witnessReleasedAfterLostAnswer witnessUnsweptLease witnessLateHeartbeat
 quint run specs/quint/certificates.qnt --invariant safety --max-steps 60 --max-samples 20000 \
   --witnesses witnessAgentFullyCertified witnessForeignApprovalFailed witnessForeignApprovalSigned \
   witnessAnotherHostDenied witnessSubjectIgnored witnessApprovedAwaitingCA
@@ -62,9 +62,13 @@ The steps are:
   passed (CL-014, CL-016), release with `ReleaseVM` and then remove the
   finalizer, and recover on start and on reconnecting. Each step is one
   call to battery or one write to the API server.
-- **battery:** replenish the Pool, answer the `Lease` calls, expire
-  Leases nobody renews, and report each deleted MicroVM on its `Events`
-  stream.
+- **battery:** replenish the Pool, answer the `Lease` calls, sweep the
+  Leases nobody renewed, and report each deleted MicroVM on its `Events`
+  stream. These steps cite `docs/requirements/10-battery.md`. A `Heartbeat`
+  renews any Lease battery still holds, including one past its expiry
+  (BA-010). The sweep is a step of its own: time can pass a Lease's expiry
+  by up to one sweep interval (`SWEEP`) before a sweep deletes it (BA-020),
+  and battery's first sweep after a start is one interval later (BA-022).
 - **the environment:** claims are created, renewed and deleted, and time
   passes. The controller can crash between any two of its steps, which
   loses the answer it held, as between `ClaimVM` and the status write.
@@ -82,7 +86,7 @@ Invariants, all in `safety`:
 |-----------|--------|
 | `vmLeasedToAtMostOneClaim` | a MicroVM is leased to at most one claim (glossary, Lease) |
 | `releasedVMNeverReused` | a released or expired MicroVM is never handed out again (02-claims.md, Release) |
-| `orphanLeaseBounded` | an orphan, from a crash or a `ClaimVM` answer lost in transit, is never renewed, and is gone within the expiry threshold (ADR 0001, consequence 2) |
+| `orphanLeaseBounded` | an orphan, from a crash or a `ClaimVM` answer lost in transit, is never renewed, and is gone within the expiry threshold plus one sweep interval, or one sweep interval after battery starts (ADR 0001, consequence 2; BA-020, BA-022) |
 | `finalizerRemovedOnlyAfterRelease` | a claim is gone only after battery has released its Lease (CL-020) |
 | `leaseOnlyUnderFinalizer` | a Lease is claimed and recorded only under the finalizer (CL-001) |
 | `statusExpiryIsBatterys` | a claim's `leaseExpiresAt` is never later than battery's (CL-011; ADR 0001, consequence 3) |
@@ -105,13 +109,23 @@ scenario tests `renewedClaimKeptAfterCrashTest`,
 `renewedClaimListedAfterCrashTest` and `heartbeatAnswerLostTest` show the
 claim kept Bound with battery's expiry.
 
+Two properties do not hold, and are kept out of `safety`, each with a
+scenario test that reaches the violation:
+
+| Property | Checks | Finding |
+|----------|--------|---------|
+| `expiredOnlyOnceBatteryRefuses` | a claim goes Expired only once battery would refuse a `Heartbeat` for its Lease | CL-014 expires a claim whose Lease is past its expiry but not yet swept, which a `Heartbeat` would still renew, and drops a renewal asked for in time (#85; `renewalLostToExpiryBeforeSweepTest`) |
+| `orphanGoneByExpiry` | an orphan is gone within the expiry threshold, as 02-claims.md, Binding, says | the sweep can come up to one interval later (#86; `orphanOutlivesExpiryTest`) |
+
 The witnesses show that the simulation reaches the interleavings that
 matter: an orphan (`witnessOrphan`), an orphan beside a claim bound after
 the retry (`witnessOrphanBesideBound`), an expired claim, a released one,
 a claim expired by each of CL-013 and CL-014, an orphan from a `ClaimVM`
 answer lost in transit (`witnessOrphanFromLostAnswer`), and a retried
 `ReleaseVM` that finds the Lease unknown after a lost answer
-(`witnessReleasedAfterLostAnswer`). `make quint` fails if a witness is
+(`witnessReleasedAfterLostAnswer`), a Lease past its expiry waiting for
+the sweep (`witnessUnsweptLease`), and a renewal the controller can relay
+for such a Lease (`witnessLateHeartbeat`). `make quint` fails if a witness is
 never reached. A claim kept Bound by `ListLeases` (CL-016) needs a
 renewal late in the Lease, a lost answer and time passing before the
 retry, which random simulation reaches too rarely for a witness; the

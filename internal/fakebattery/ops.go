@@ -214,6 +214,23 @@ type claimResult struct {
 // RESOURCE_EXHAUSTED when nothing is AVAILABLE and NOT_FOUND for an unknown
 // Pool.
 func (b *Battery) claimVM(ctx context.Context, ref PoolRef) (*claimResult, error) {
+	//= docs/requirements/10-battery.md#claiming
+	//# If a Pool has no MicroVM in the phase `AVAILABLE`, then battery
+	//# SHALL answer `ClaimVM` for that Pool with `RESOURCE_EXHAUSTED` and create no
+	//# Lease.
+
+	//= docs/requirements/10-battery.md#claiming
+	//# If battery holds no Pool of the name and namespace a `ClaimVM`
+	//# names, then battery SHALL answer it with `NOT_FOUND`.
+
+	//= docs/requirements/10-battery.md#claiming
+	//# When `ClaimVM` succeeds, battery SHALL choose a new lease id,
+	//# and set the Lease's expiry to the time of the claim plus the Pool's
+	//# `heartbeat_expiry_threshold`.
+
+	//= docs/requirements/10-battery.md#claiming
+	//# Once battery has committed a Lease in `ClaimVM`, battery SHALL
+	//# answer that `ClaimVM` with success.
 	if err := b.claimLatency(ctx); err != nil {
 		return nil, err
 	}
@@ -290,9 +307,20 @@ func (b *Battery) claimLatency(ctx context.Context) error {
 }
 
 // heartbeat implements Lease.Heartbeat: it moves the Lease's expiry to now
-// plus the Pool's threshold and returns it. RefuseHeartbeats makes every
-// Lease look expired.
+// plus the Pool's threshold and returns it. As in battery, a Lease past its
+// expiry that the control loop has not swept yet is renewed like any other;
+// only a Lease the fake no longer holds is NOT_FOUND. RefuseHeartbeats
+// makes every Lease look gone.
 func (b *Battery) heartbeat(leaseID string) (time.Time, error) {
+	//= docs/requirements/10-battery.md#heartbeat
+	//# When battery receives a `Heartbeat` for a Lease it still holds,
+	//# battery SHALL set the Lease's expiry to the time of the `Heartbeat` plus
+	//# the Pool's `heartbeat_expiry_threshold` and answer with that expiry,
+	//# whether or not the Lease's previous expiry has passed.
+
+	//= docs/requirements/10-battery.md#heartbeat
+	//# If battery does not hold the Lease a `Heartbeat` names, then
+	//# battery SHALL answer it with `NOT_FOUND`.
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.faults.RefuseHeartbeats {
@@ -317,6 +345,21 @@ func (b *Battery) heartbeat(leaseID string) (time.Time, error) {
 // confirms the deletion; until then a retry gets UNAVAILABLE and the control
 // loop keeps retrying the deletion.
 func (b *Battery) releaseVM(ctx context.Context, leaseID string) error {
+	//= docs/requirements/10-battery.md#release
+	//# When battery receives a `ReleaseVM` for a Lease it holds,
+	//# battery SHALL delete the Lease's MicroVM through `flintlockd` and answer
+	//# with success only once `flintlockd` has confirmed the deletion and the
+	//# Lease is deleted.
+
+	//= docs/requirements/10-battery.md#release
+	//# If `flintlockd` does not confirm the deletion of a released
+	//# Lease's MicroVM, then battery SHALL answer the `ReleaseVM` with
+	//# `UNAVAILABLE`, keep the Lease, and retry the deletion in every later sweep
+	//# until `flintlockd` confirms it, deleting the Lease then.
+
+	//= docs/requirements/10-battery.md#release
+	//# If battery does not hold the Lease a `ReleaseVM` names, then
+	//# battery SHALL answer it with `NOT_FOUND`.
 	b.mu.Lock()
 	ls, ok := b.leases[leaseID]
 	if !ok {

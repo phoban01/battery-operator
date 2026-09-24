@@ -35,6 +35,16 @@ limitations under the License.
 // placement per Pool, RESOURCE_EXHAUSTED from ClaimVM on a Pool with
 // nothing AVAILABLE, the host field on ClaimVMResponse, the three
 // replenishment strategies, the hook failure policies and the event types.
+// What the Operator assumes battery does is listed in
+// docs/requirements/10-battery.md (BA-*), from battery v0.3.3's source; the
+// fake cites each assumption where it implements it, with a test, and cites
+// the ones it does not meet as exceptions. In particular, as in battery, a
+// Lease past its expiry is held until the next tick sweeps it, and a
+// heartbeat in that time renews it (BA-010, BA-020); ReleaseVM answers
+// UNAVAILABLE and keeps the Lease until the Host confirms the deletion
+// (BA-031); and VM_EXPIRING_SOON comes again after every heartbeat that
+// moves a Lease's expiry, since battery warns once per expiry.
+//
 // The fake deliberately differs from battery in these ways:
 //
 //   - The control loop's tick tops every Pool up to its target, whatever
@@ -45,11 +55,23 @@ limitations under the License.
 //   - DeletePool deletes the Pool's idle MicroVMs and refuses only while a
 //     Lease is outstanding; battery refuses while the Pool owns any
 //     MicroVM.
-//   - VM_EXPIRING_SOON is emitted again after every heartbeat that moves a
-//     Lease's expiry, so a long-held Lease sees one warning per heartbeat
-//     where the proto describes one per Lease. A test that counts the
-//     warnings is counting the fake's behaviour; wait for the first one
-//     instead.
+//   - VM_EXPIRING_SOON fires one Pool heartbeat_interval before a Lease's
+//     expiry, or half its heartbeat_expiry_threshold when the Pool sets no
+//     interval; battery uses one process-wide warning_window, 30 seconds by
+//     default.
+//   - ReleaseVM emits VM_RELEASED before the deletion; battery never emits
+//     it, although the proto defines it.
+//   - The control loop ticks, and so sweeps, once when Run starts; battery's
+//     first sweep is one sweep_interval after it starts (BA-022). The fake's
+//     interval is Config.ReconcileInterval, one second by default, where
+//     battery's sweep_interval defaults to ten seconds.
+//   - State is lost when Run returns (above), where battery keeps its
+//     database across a restart (BA-060). SetFaults with UnavailableFor
+//     stands in for a restart.
+//   - A new Events subscriber is replayed the last Config.EventReplay events
+//     of each Pool; battery replays its whole outbox (BA-050).
+//   - ListLeases is not served until the fake moves to battery v0.3.3's
+//     protos (#71).
 //   - Event payload_json carries a JSON object with the counts, lease id
 //     and host of the transition, which battery does not promise.
 //   - UpdatePool and CreatePool refuse a heartbeat_expiry_threshold that is
