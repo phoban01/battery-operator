@@ -124,14 +124,17 @@ func (r *MicroVMClaimReconciler) chain() claimscope.Chain {
 			claim.Release{Backoff: backoff},
 			claim.EnsureFinalizer{},
 			claim.Bind{Slots: r.slots},
-			claim.AgentAddress{},
 			claim.Pending{Backoff: backoff},
 			// A Bound claim: an event from battery first, then a pending
 			// renewal, and only then the expiry check, which waits for
-			// any pending renewal (#85).
+			// any pending renewal (#85). They stop the chain only once
+			// they have expired the claim.
 			claim.ExpireDeleted{Deleted: r.deleted},
 			claim.Renew{Backoff: backoff},
 			claim.CheckExpiry{Backoff: backoff},
+			// Last, so that a Node it cannot read never holds up a
+			// renewal (CL-018).
+			claim.AgentAddress{},
 		},
 		Finally: []claimscope.Subreconciler{
 			claim.Synced{},

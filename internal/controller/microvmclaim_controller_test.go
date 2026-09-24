@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -30,6 +31,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	batteryv1alpha1 "github.com/phoban01/battery-operator/api/v1alpha1"
 	"github.com/phoban01/battery-operator/internal/battery"
@@ -273,5 +275,81 @@ func TestMicroVMClaimReconcilerReleasesADeletedClaim(t *testing.T) {
 	}
 	if len(b.leases) != 2 || b.leases[0] != testClaimLease || b.leases[1] != testClaimLease {
 		t.Errorf("ReleaseVM calls = %v, want two for lease-1", b.leases)
+	}
+}
+
+// heartbeatStub is a battery.Client whose Heartbeat renews to 12:01:00 on
+// the test's day and counts its calls. Every other method panics through
+// the nil embedded Client.
+type heartbeatStub struct {
+	battery.Client
+	calls int
+}
+
+func (s *heartbeatStub) Heartbeat(context.Context, string) (time.Time, error) {
+	s.calls++
+	return time.Date(2026, 9, 24, 12, 1, 0, 0, time.UTC), nil
+}
+
+//= docs/requirements/02-claims.md#renewal
+//= type=test
+//# While battery has not yet answered `ClaimVM` calls for other
+//# claims, the Claim Controller SHALL still reconcile a Bound claim that has
+//# a pending renewal.
+
+// TestMicroVMClaimReconcilerRenewsWhenTheNodeCannotBeRead: AgentAddress
+// runs after the renewal steps, so a Node read that fails is reported,
+// and the renewal is relayed and written all the same. In the spirit of
+// CL-018: nothing but battery's own answer holds up a renewal.
+func TestMicroVMClaimReconcilerRenewsWhenTheNodeCannotBeRead(t *testing.T) {
+	ctx := context.Background()
+	start := time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)
+	cl := testClaim()
+	cl.Finalizers = []string{batteryv1alpha1.ReleaseFinalizer}
+	renewed := metav1.NewMicroTime(start)
+	relayed := metav1.NewMicroTime(start.Add(-time.Minute))
+	expires := metav1.NewTime(start.Add(30 * time.Second))
+	cl.Spec.RenewTime = &renewed
+	cl.Status = batteryv1alpha1.MicroVMClaimStatus{
+		Phase:             batteryv1alpha1.MicroVMClaimBound,
+		LeaseID:           testClaimLease,
+		MicroVM:           &batteryv1alpha1.MicroVMReference{UID: testClaimVM},
+		Host:              &batteryv1alpha1.HostReference{NodeName: "node-a"},
+		LeaseExpiresAt:    &expires,
+		ObservedRenewTime: &relayed,
+	}
+	s, base := newClaimFakeClient(t, cl)
+	c := interceptor.NewClient(base.(client.WithWatch), interceptor.Funcs{
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if _, ok := obj.(*corev1.Node); ok {
+				return errors.New("the cache is not synced")
+			}
+			return c.Get(ctx, key, obj, opts...)
+		},
+	})
+	b := &heartbeatStub{}
+	r := &MicroVMClaimReconciler{
+		Client:    c,
+		Scheme:    s,
+		APIReader: c,
+		Battery:   b,
+		Clock:     clock.NewFake(start),
+	}
+
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: testClaimKey}); err == nil {
+		t.Error("Reconcile succeeded, want the Node read's error")
+	}
+	if b.calls != 1 {
+		t.Errorf("Heartbeat calls = %d, want 1", b.calls)
+	}
+	got := &batteryv1alpha1.MicroVMClaim{}
+	if err := c.Get(ctx, testClaimKey, got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Status.LeaseExpiresAt == nil || !got.Status.LeaseExpiresAt.Time.Equal(start.Add(time.Minute)) {
+		t.Errorf("leaseExpiresAt = %v, want battery's 12:01:00", got.Status.LeaseExpiresAt)
+	}
+	if !got.Status.ObservedRenewTime.Equal(&renewed) {
+		t.Errorf("observedRenewTime = %v, want the relayed %v", got.Status.ObservedRenewTime, renewed)
 	}
 }

@@ -149,7 +149,7 @@ func (r Renew) Reconcile(ctx context.Context, s *claimscope.Scope) (claimscope.R
 		// no expiry check runs until a Heartbeat is answered.
 		after := retryAfter(s, r.Backoff)
 		s.Log.V(1).Info("Kept MicroVMClaim Bound after Heartbeat failed in transit", "retryAfter", after)
-		return claimscope.Result{Stop: true, RequeueAfter: after}, nil
+		return claimscope.Result{RequeueAfter: after}, nil
 	case err != nil:
 		// CL-041: Synced records it, and the controller's rate limiter
 		// retries it with backoff.
@@ -163,7 +163,7 @@ func (r Renew) Reconcile(ctx context.Context, s *claimscope.Scope) (claimscope.R
 	c.Status.LeaseExpiresAt = &metav1.Time{Time: expiresAt}
 	c.Status.ObservedRenewTime = relayed
 	s.Log.V(1).Info("Renewed MicroVMClaim", "lease", c.Status.LeaseID, "expiresAt", expiresAt)
-	return claimscope.Result{Stop: true, RequeueAfter: until(s, expiresAt)}, nil
+	return claimscope.Result{RequeueAfter: until(s, expiresAt)}, nil
 }
 
 // until is how long from now until t, at least a second, for a requeue

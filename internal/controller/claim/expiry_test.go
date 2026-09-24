@@ -104,8 +104,8 @@ func TestCheckExpiryKeepsALeaseBatteryStillHolds(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !res.Stop || res.RequeueAfter != 23*time.Second {
-				t.Errorf("result = %+v, want the chain stopped and a requeue at battery's expiry, 23s", res)
+			if res.Stop || res.RequeueAfter != 23*time.Second {
+				t.Errorf("result = %+v, want the chain to go on, with a requeue at battery's expiry, 23s", res)
 			}
 			if len(b.lists) != 1 || b.lists[0] != (battery.PoolRef{Name: testPool, Namespace: "ci"}) {
 				t.Errorf("ListLeases calls = %v, want one for ci/small", b.lists)
@@ -222,8 +222,8 @@ func TestCheckExpiryKeepsTheClaimWhenListLeasesFailsInTransit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !res.Stop || res.RequeueAfter != 4*time.Second {
-		t.Errorf("result = %+v, want the chain stopped and a retry after 4s", res)
+	if res.Stop || res.RequeueAfter != 4*time.Second {
+		t.Errorf("result = %+v, want the chain to go on, with a retry after 4s", res)
 	}
 	got := patched(t, s, c)
 	wantBound(t, got)

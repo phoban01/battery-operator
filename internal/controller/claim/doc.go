@@ -25,21 +25,20 @@ limitations under the License.
 // finalizer once the Lease is gone, and stops the chain (CL-020, CL-021,
 // CL-022).
 //
-// Binding is four steps, in this order:
+// Binding is three steps, in this order:
 //
 //   - EnsureFinalizer puts the release finalizer on the claim, and stops
 //     the chain until that is written (CL-001).
-//   - Bind calls battery's ClaimVM for a claim that has no Lease, and
-//     records a successful answer in the status (CL-002).
-//   - AgentAddress copies the Exec Agent's address from the Node report of
-//     a Bound claim's Host, or says there is none (CL-005, CL-006). The
-//     controller watches Nodes, so a change to the report reaches the
-//     claims bound on the Host (ClaimsOnNode).
+//   - Bind calls battery's ClaimVM for a claim that has no Lease, records
+//     a successful answer in the status, and stops the chain so that the
+//     status is written before anything else (CL-002). It calls ClaimVM
+//     only while it holds one of BindSlots' slots, so that renewals never
+//     wait behind a slow ClaimVM (CL-018).
 //   - Pending records why a claim could not be bound, and asks for a retry
 //     with backoff (CL-003, CL-004, CL-007).
 //
 // A Bound claim then has three, in this order, each of which stops the
-// chain once it has called battery or changed the phase:
+// chain only once it has expired the claim:
 //
 //   - ExpireDeleted expires the claim once battery's Events stream has
 //     reported its MicroVM deleted (CL-013).
@@ -51,8 +50,12 @@ limitations under the License.
 //     the claim by battery's record (CL-012, CL-014, CL-016, CL-017). It
 //     waits while a renewal is pending, so Renew always goes first (#85).
 //
-// Bind calls ClaimVM only while it holds one of BindSlots' slots, so that
-// renewals never wait behind a slow ClaimVM (CL-018).
+// AgentAddress comes last. It copies the Exec Agent's address from the
+// Node report of a Bound claim's Host, or says there is none (CL-005,
+// CL-006), and runs on the first reconcile after the binding is written.
+// The controller watches Nodes, so a change to the report reaches the
+// claims bound on the Host (ClaimsOnNode). Being last, a Node it cannot
+// read never holds up a renewal or an expiry.
 //
 // After them, however they ended, Synced sets the Synced condition from
 // the last call to battery (CL-040, CL-041, CL-042).

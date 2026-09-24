@@ -186,8 +186,8 @@ func TestRenewRelaysAPendingRenewal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !res.Stop || res.RequeueAfter != 47*time.Second {
-		t.Errorf("result = %+v, want the chain stopped and a requeue at the expiry, 47s", res)
+	if res.Stop || res.RequeueAfter != 47*time.Second {
+		t.Errorf("result = %+v, want the chain to go on, with a requeue at the expiry, 47s", res)
 	}
 	if len(b.heartbeats) != 1 || b.heartbeats[0] != testLease {
 		t.Errorf("Heartbeat calls = %v, want one for lease-1", b.heartbeats)
@@ -294,8 +294,8 @@ func TestRenewKeepsTheClaimWhenHeartbeatFailsInTransit(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !res.Stop || res.RequeueAfter != tc.want {
-				t.Errorf("result = %+v, want the chain stopped and a retry after %s", res, tc.want)
+			if res.Stop || res.RequeueAfter != tc.want {
+				t.Errorf("result = %+v, want the chain to go on, with a retry after %s", res, tc.want)
 			}
 			got := patched(t, s, c)
 			wantBound(t, got)

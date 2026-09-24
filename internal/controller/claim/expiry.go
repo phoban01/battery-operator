@@ -81,7 +81,7 @@ func (e CheckExpiry) Reconcile(ctx context.Context, s *claimscope.Scope) (claims
 		// either, so nothing is lost by waiting.
 		after := retryAfter(s, e.Backoff)
 		s.Log.V(1).Info("Kept MicroVMClaim Bound after ListLeases failed in transit", "retryAfter", after)
-		return claimscope.Result{Stop: true, RequeueAfter: after}, nil
+		return claimscope.Result{RequeueAfter: after}, nil
 	case err != nil:
 		// CL-041: Synced records it, and the controller's rate limiter
 		// retries it with backoff.
@@ -125,5 +125,5 @@ func (e CheckExpiry) Reconcile(ctx context.Context, s *claimscope.Scope) (claims
 	//# compute it.
 	c.Status.LeaseExpiresAt = &metav1.Time{Time: rec.ExpiresAt}
 	s.Log.V(1).Info("Read the Lease expiry of MicroVMClaim from battery", "lease", rec.LeaseID, "expiresAt", rec.ExpiresAt)
-	return claimscope.Result{Stop: true, RequeueAfter: until(s, rec.ExpiresAt)}, nil
+	return claimscope.Result{RequeueAfter: until(s, rec.ExpiresAt)}, nil
 }
