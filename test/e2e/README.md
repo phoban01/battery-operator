@@ -87,3 +87,16 @@ cluster cannot pass pod traffic between its nodes: a host firewall that
 filters bridged traffic by reverse path (NixOS's default,
 `networking.firewall.checkReversePath`) drops it, and the API server then
 cannot reach cert-manager's webhook.
+
+## Reaching the Exec Agent
+
+`TestClientLibraryClaimLife` runs the Client Library (`pkg/claimclient`) in
+the test process, as a Consumer would, and dials the Exec Agent at the
+address in the claim's status. That address is the Host's internal address
+and port 10270, where the agent serves in the node's network namespace.
+The test process reaches it directly: a kind node's internal address is on
+kind's Docker network, which the machine running Docker routes to, the
+GitHub runner included. The suite does not run a test pod in the cluster.
+On a machine that cannot route to the Docker network, such as one whose
+Docker runs in a VM, this test fails to connect, and no other test depends
+on it.
