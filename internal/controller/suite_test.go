@@ -100,6 +100,14 @@ var _ = BeforeSuite(func() {
 	// +kubebuilder:scaffold:scheme
 
 	By("bootstrapping test environment")
+	//= docs/requirements/08-test-doubles.md#test-environments
+	//# The unit tests and the e2e suite SHALL use envtest only where
+	//# neither a fake nor the kind cluster can exercise a behaviour, and SHALL
+	//# say why beside that use.
+	// Why envtest here: this suite predates ADR 0006 and has not moved yet.
+	// Its logic (reviewing and signing a CSR, the CA bundle) belongs in unit
+	// tests with a fake client, and the signer's RBAC as shipped in the e2e
+	// suite; #104 moves it and removes this use.
 	testEnv = &envtest.Environment{
 		CRDDirectoryPaths:     []string{filepath.Join("..", "..", "config", "crd", "bases")},
 		ErrorIfCRDPathMissing: false,

@@ -156,6 +156,14 @@ func Start() (*Env, error) {
 	if err != nil {
 		return nil, err
 	}
+	//= docs/requirements/08-test-doubles.md#test-environments
+	//# The unit tests and the e2e suite SHALL use envtest only where
+	//# neither a fake nor the kind cluster can exercise a behaviour, and SHALL
+	//# say why beside that use.
+	// Why envtest here: this suite predates ADR 0006 and has not moved yet.
+	// Its logic (the claim checks, readiness, renewal timing, the relay) belongs
+	// in unit tests with fakes, and TokenReview, the admission policy and the
+	// agent's RBAC in the e2e suite; #105 moves it and removes this use.
 	env := &envtest.Environment{
 		CRDDirectoryPaths:     []string{filepath.Join(root, "config", "crd", "bases")},
 		ErrorIfCRDPathMissing: true,

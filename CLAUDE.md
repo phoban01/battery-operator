@@ -136,6 +136,7 @@ Now:
 | `config/` | Kustomize Manifests, from kubebuilder; `config/default` is the entry point, with battery as a sidecar and cert-manager's certificates (`config/certificates`) |
 | `internal/manifests/` | Tests of the Manifests as `kustomize build` renders them |
 | `test/e2e/`, `test/utils/` | kubebuilder's e2e tests, against kind |
+| `test/layers/` | Checks that the tests keep to their two layers: envtest only where a file cites TD-027 and says why |
 | `docs/adr/` | Architecture decision records |
 | `docs/requirements/` | EARS requirements, `.duvet/` their configs (code, and models) and snapshot |
 | `hack/` | Boilerplate header, `duvet-coverage.sh`, `duvet-models.sh`, `quint.sh` |
