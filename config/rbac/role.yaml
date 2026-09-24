@@ -11,6 +11,30 @@ rules:
   verbs:
   - get
 - apiGroups:
+  - battery.liquidmetal-x.dev
+  resources:
+  - pools
+  verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - battery.liquidmetal-x.dev
+  resources:
+  - pools/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - battery.liquidmetal-x.dev
+  resources:
+  - pools/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
   - certificates.k8s.io
   resources:
   - certificatesigningrequests

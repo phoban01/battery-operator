@@ -41,6 +41,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/yaml"
+
+	batteryv1alpha1 "github.com/phoban01/battery-operator/api/v1alpha1"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -90,6 +92,9 @@ var _ = BeforeSuite(func() {
 
 	var err error
 	err = certificatesv1.AddToScheme(scheme.Scheme)
+	Expect(err).NotTo(HaveOccurred())
+
+	err = batteryv1alpha1.AddToScheme(scheme.Scheme)
 	Expect(err).NotTo(HaveOccurred())
 
 	// +kubebuilder:scaffold:scheme
