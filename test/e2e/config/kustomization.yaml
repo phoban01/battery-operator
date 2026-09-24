@@ -10,6 +10,7 @@
 # - The Operator, with battery's poolmgrd as its sidecar, from config/default,
 #   and the Exec Agent from config/exec-agent, unchanged but for the Exec
 #   Agent's Host prerequisites (exec-agent-host-prerequisites.yaml).
+# - manager-inventory-timing.yaml: shorter Inventory Controller timings.
 # - fake-host.yaml: the fake flintlockd on every Host, which also does what
 #   the Host Image would: creates the directory the Exec Agent writes
 #   flintlockd's certificates to, and a stand-in for containerd's thin pool.
@@ -29,6 +30,10 @@ patches:
   target:
     kind: DaemonSet
     name: battery-operator-exec-agent
+- path: manager-inventory-timing.yaml
+  target:
+    kind: Deployment
+    name: controller-manager
 
 images:
 - name: ghcr.io/phoban01/battery-operator

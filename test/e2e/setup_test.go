@@ -21,9 +21,7 @@ package e2e
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -68,9 +66,6 @@ const (
 	// isTrue is the value of hostLabel on a Host, and of the Exec Agent's
 	// readiness annotation on a ready one.
 	isTrue = "true"
-	// flintlockdPort is where every Host's flintlockd serves, the fake one
-	// included.
-	flintlockdPort = 9090
 )
 
 // The images' repositories, as config/ names them.
@@ -166,45 +161,30 @@ func installCertManager(ctx context.Context, cfg *envconf.Config) (context.Conte
 }
 
 // deploy applies the overlay in config/, through a kustomization it writes
-// to .run/ that sets the images and battery's Hosts.
+// to .run/ that sets the images.
 //
-// battery's Hosts are the kind nodes labelled as Hosts, at their internal
-// addresses, rendered with batterysidecar.Render as the Inventory
-// Controller renders them. The addresses are kind's, so the suite renders
-// them when the cluster exists rather than config/ holding them. The
-// Inventory Controller rewrites the file from the Exec Agents' reports once
-// it admits the Hosts; #99 drops this in favour of it.
+// battery starts with the Hosts the Manifests give it, none. The Inventory
+// Controller gives battery the kind workers once their Exec Agents report
+// them ready, which TestPoolPlacementAndClaim checks.
 func deploy(s settings) env.Func {
 	return func(ctx context.Context, cfg *envconf.Config) (context.Context, error) {
 		//= docs/requirements/08-test-doubles.md#test-environments
 		//# The e2e suite SHALL run the Operator with battery's `poolmgrd`
 		//# as its sidecar, the Exec Agent, and the fake `flintlockd` as each Host's
 		//# `flintlockd`, in a kind cluster, from the Manifests.
+
+		// A reused cluster already runs the Operator. Applying the Manifests
+		// again puts battery's ConfigMap back as they ship it, with no Hosts,
+		// and the Inventory Controller notices only when a Node changes
+		// (#116), so the Operator is restarted to start again from the
+		// ConfigMap.
 		c, err := newClient(cfg)
 		if err != nil {
 			return ctx, err
 		}
-		hosts, err := hostNodes(ctx, c)
-		if err != nil {
-			return ctx, err
-		}
-		var batteryHosts []batterysidecar.Host
-		for _, n := range hosts {
-			ip, err := internalIP(n)
-			if err != nil {
-				return ctx, err
-			}
-			batteryHosts = append(batteryHosts, batterysidecar.Host{
-				Name:    n.Name,
-				Address: net.JoinHostPort(ip, strconv.Itoa(flintlockdPort)),
-			})
-		}
-		batteryConfig, err := batterysidecar.Render(batteryHosts)
-		if err != nil {
-			return ctx, err
-		}
+		reused := c.Get(ctx, types.NamespacedName{Namespace: namespace, Name: operatorDeployment}, &appsv1.Deployment{}) == nil
 
-		dir, err := writeRunKustomization(s, batteryConfig)
+		dir, err := writeRunKustomization(s)
 		if err != nil {
 			return ctx, err
 		}
@@ -223,15 +203,24 @@ func deploy(s settings) env.Func {
 		if err != nil {
 			return ctx, fmt.Errorf("applying the Manifests: %w: %w", err, applyErr)
 		}
+		if reused {
+			if _, err := run(ctx, nil, s.kubectl, "--kubeconfig", cfg.KubeconfigFile(), "--namespace", namespace,
+				"rollout", "restart", "deployment/"+operatorDeployment); err != nil {
+				return ctx, fmt.Errorf("restarting the Operator: %w", err)
+			}
+			if _, err := run(ctx, nil, s.kubectl, "--kubeconfig", cfg.KubeconfigFile(), "--namespace", namespace,
+				"rollout", "status", "--timeout=5m", "deployment/"+operatorDeployment); err != nil {
+				return ctx, fmt.Errorf("restarting the Operator: %w", err)
+			}
+		}
 		return ctx, nil
 	}
 }
 
 // writeRunKustomization writes .run/kustomization.yaml, which is config/
-// with the suite's images and battery's configuration, and returns its
-// directory. kustomize needs it below the repository, since it refuses an
-// absolute path to config/.
-func writeRunKustomization(s settings, batteryConfig []byte) (string, error) {
+// with the suite's images, and returns its directory. kustomize needs it
+// below the repository, since it refuses an absolute path to config/.
+func writeRunKustomization(s settings) (string, error) {
 	images := []map[string]string{}
 	for _, img := range []struct{ repository, ref string }{
 		{operatorRepository, s.operatorImage},
@@ -244,21 +233,11 @@ func writeRunKustomization(s settings, batteryConfig []byte) (string, error) {
 		}
 		images = append(images, kustomizeImage(img.repository, img.ref))
 	}
-	patch, err := json.Marshal([]map[string]string{{
-		"op": "replace", "path": "/data/" + batterysidecar.ConfigKey, "value": string(batteryConfig),
-	}})
-	if err != nil {
-		return "", err
-	}
 	k := map[string]any{
 		"apiVersion": "kustomize.config.k8s.io/v1beta1",
 		"kind":       "Kustomization",
 		"resources":  []string{"../config"},
 		"images":     images,
-		"patches": []map[string]any{{
-			"target": map[string]string{"kind": "ConfigMap", "name": batteryConfigMap},
-			"patch":  string(patch),
-		}},
 	}
 	out, err := yaml.Marshal(k)
 	if err != nil {
