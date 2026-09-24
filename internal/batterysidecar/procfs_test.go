@@ -27,6 +27,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/phoban01/battery-operator/internal/batterysidecar"
 )
@@ -124,6 +125,27 @@ func TestProcFSTerminate(t *testing.T) {
 	}
 }
 
+// waitExec waits until the command line of the child pid names name.
+// cmd.Start returns once the child's exec has replaced its memory, but the
+// kernel sets the new command line a moment later, and until then
+// /proc/<pid>/cmdline reads empty.
+func waitExec(t *testing.T, pid int, name string) {
+	t.Helper()
+	path := filepath.Join("/proc", strconv.Itoa(pid), "cmdline")
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		cmdline, err := os.ReadFile(path)
+		argv0, _, _ := strings.Cut(string(cmdline), "\x00")
+		if err == nil && filepath.Base(argv0) == name {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("child %d: command line %q (%v), want %s", pid, cmdline, err, name)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 // TestProcFSRealProcess finds, signals and outlives a real child process
 // through the real /proc.
 func TestProcFSRealProcess(t *testing.T) {
@@ -136,6 +158,7 @@ func TestProcFSRealProcess(t *testing.T) {
 		t.Skip("cannot run sleep:", err)
 	}
 	t.Cleanup(func() { _ = cmd.Process.Kill() })
+	waitExec(t, cmd.Process.Pid, "sleep")
 
 	p := batterysidecar.ProcFS{}
 	found, err := p.Find("sleep")
