@@ -50,11 +50,13 @@ type PoolReconciler struct {
 	// each Pool's selector is resolved against (PO-010): the Operator's
 	// inventory.HostSet.
 	Hosts PoolHosts
-	// Events is the Operator's subscription to battery's Events stream: it
-	// asks for a reconcile of each Pool an event names, and of every Pool
-	// at its resync interval while it is down (PO-023, PO-024). Nil
-	// watches Pools only.
-	Events *PoolEvents
+	// Events is the Operator's subscription to battery's Events stream,
+	// which it shares with the Claim Controller: SetupWithManager registers
+	// the Pool Controller's side, which asks for a reconcile of each Pool
+	// an event names, and of every Pool at the resync interval while the
+	// stream is down (PO-023, PO-024). The caller adds Events to the
+	// manager. Nil watches Pools only.
+	Events *BatteryEvents
 }
 
 // +kubebuilder:rbac:groups=battery.liquidmetal-x.dev,resources=pools,verbs=get;list;watch;update;patch
@@ -92,10 +94,9 @@ func (r *PoolReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&corev1.Node{}, handler.EnqueueRequestsFromMapFunc(r.everyPoolForNode),
 			builder.WithPredicates(nodeLabelsChanged))
 	if r.Events != nil {
-		if err := mgr.Add(r.Events); err != nil {
-			return err
-		}
-		b = b.WatchesRawSource(source.Channel(r.Events.Requests(),
+		events := newPoolEvents(mgr.GetClient(), mgr.GetLogger().WithName("pool-events"))
+		r.Events.add(events)
+		b = b.WatchesRawSource(source.Channel(events.Requests(),
 			&handler.TypedEnqueueRequestForObject[*batteryv1alpha1.Pool]{}))
 	}
 	return b.Complete(r)

@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -42,8 +43,8 @@ const poolEventsTimeout = 30 * time.Second
 // testHostA is the Host the Pools in these tests run on.
 const testHostA = "host-a"
 
-// startPoolEvents runs e until the test ends.
-func startPoolEvents(t *testing.T, e *PoolEvents) {
+// startBatteryEvents runs e until the test ends.
+func startBatteryEvents(t *testing.T, e *BatteryEvents) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -51,14 +52,14 @@ func startPoolEvents(t *testing.T, e *PoolEvents) {
 	t.Cleanup(func() {
 		cancel()
 		if err := <-done; err != nil {
-			t.Errorf("PoolEvents.Start: %v", err)
+			t.Errorf("BatteryEvents.Start: %v", err)
 		}
 	})
 }
 
 // reconcileFromEvents stands in for the controller's workqueue: it calls
 // r.Reconcile for each Pool e asks for, until the test ends.
-func reconcileFromEvents(t *testing.T, r *PoolReconciler, e *PoolEvents) {
+func reconcileFromEvents(t *testing.T, r *PoolReconciler, e *poolEvents) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -129,9 +130,11 @@ func TestPoolStatusFollowsBatteryEvents(t *testing.T) {
 		t.Fatalf("Reconcile: %v", err)
 	}
 
-	events := NewPoolEvents(bc, k8s, time.Hour)
-	reconcileFromEvents(t, r, events)
-	startPoolEvents(t, events)
+	events := NewBatteryEvents(bc, time.Hour)
+	pe := newPoolEvents(k8s, logr.Discard())
+	events.add(pe)
+	reconcileFromEvents(t, r, pe)
+	startBatteryEvents(t, events)
 
 	status := func(want func(batteryv1alpha1.PoolStatus) bool) func() (bool, string) {
 		return func() (bool, string) {
@@ -162,7 +165,7 @@ func TestPoolStatusFollowsBatteryEvents(t *testing.T) {
 		return st.Leased == 1 && st.Available == 3
 	}))
 
-	// The stream drops; PoolEvents subscribes again and the next lease
+	// The stream drops; BatteryEvents subscribes again and the next lease
 	// still arrives by event.
 	fb.SetFaults(fakebattery.Faults{DropEventsStream: true})
 	eventually(t, "a new subscription", func() (bool, string) {
@@ -233,7 +236,7 @@ type fixedBackoff time.Duration
 func (f fixedBackoff) Next(int) time.Duration { return time.Duration(f) }
 
 // takeRequests reads n requests from e, sorted.
-func takeRequests(t *testing.T, e *PoolEvents, n int) []string {
+func takeRequests(t *testing.T, e *poolEvents, n int) []string {
 	t.Helper()
 	var got []string
 	for range n {
@@ -249,7 +252,7 @@ func takeRequests(t *testing.T, e *PoolEvents, n int) []string {
 }
 
 // noRequest checks that e asks for nothing for a while.
-func noRequest(t *testing.T, e *PoolEvents) {
+func noRequest(t *testing.T, e *poolEvents) {
 	t.Helper()
 	select {
 	case ev := <-e.Requests():
@@ -276,19 +279,21 @@ func TestPoolEventsResyncWhileTheStreamIsDown(t *testing.T) {
 	k8s := newPoolFakeClient(t, testPool(), other)
 	clk := clock.NewFake(poolTestEpoch)
 	b := &downBattery{}
-	e := NewPoolEvents(b, k8s, time.Minute)
+	e := NewBatteryEvents(b, time.Minute)
 	e.Clock = clk
 	e.Backoff = fixedBackoff(90 * time.Second)
-	startPoolEvents(t, e)
+	pe := newPoolEvents(k8s, logr.Discard())
+	e.add(pe)
+	startBatteryEvents(t, e)
 	both := []string{"ci/builders", "ci/runners"}
 
 	// Down: the resync timer and the retry timer are armed.
 	if err := clk.BlockUntil(ctx, 2); err != nil {
 		t.Fatal(err)
 	}
-	noRequest(t, e)
+	noRequest(t, pe)
 	clk.Advance(time.Minute)
-	if got := takeRequests(t, e, 2); !slices.Equal(got, both) {
+	if got := takeRequests(t, pe, 2); !slices.Equal(got, both) {
 		t.Errorf("first resync asked for %q, want %q", got, both)
 	}
 
@@ -301,9 +306,9 @@ func TestPoolEventsResyncWhileTheStreamIsDown(t *testing.T) {
 
 	// Connected: no resync, however long; an event asks for its Pool.
 	clk.Advance(10 * time.Minute)
-	noRequest(t, e)
+	noRequest(t, pe)
 	stream.events <- &battery.Event{ID: 1, Pool: battery.PoolRef{Namespace: "ci", Name: "runners"}}
-	if got := takeRequests(t, e, 1); !slices.Equal(got, []string{"ci/runners"}) {
+	if got := takeRequests(t, pe, 1); !slices.Equal(got, []string{"ci/runners"}) {
 		t.Errorf("event asked for %q, want ci/runners", got)
 	}
 
@@ -316,7 +321,7 @@ func TestPoolEventsResyncWhileTheStreamIsDown(t *testing.T) {
 		t.Fatal(err)
 	}
 	clk.Advance(time.Minute)
-	if got := takeRequests(t, e, 2); !slices.Equal(got, both) {
+	if got := takeRequests(t, pe, 2); !slices.Equal(got, both) {
 		t.Errorf("resync after the drop asked for %q, want %q", got, both)
 	}
 }

@@ -35,9 +35,9 @@ import (
 // claim's Lease, and sends every Bound claim to Out, whose channel source
 // reconciles it; claim.Recover then settles the claim.
 //
-// The event watcher, claimEvents, runs it after each subscription to
-// battery's Events stream succeeds, before it reads the stream. The first
-// subscription is the Claim Controller's start. Every later one follows a
+// claimEvents, the Claim Controller's side of BatteryEvents, runs it after
+// each subscription to battery's Events stream succeeds, before the stream
+// is read. The first subscription is the Claim Controller's start. Every later one follows a
 // stream that ended because battery went away, or restarted (DP-006: the
 // gated client holds the Subscribe until the restart is over), so it is
 // the connection being restored. No other signal is needed, and a

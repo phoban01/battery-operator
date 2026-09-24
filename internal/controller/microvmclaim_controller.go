@@ -20,7 +20,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -63,6 +62,13 @@ type MicroVMClaimReconciler struct {
 	// DefaultClaimConcurrentReconciles; SetupWithManager refuses fewer
 	// than two.
 	ConcurrentReconciles int
+	// Events is the Operator's subscription to battery's Events stream,
+	// which it shares with the Pool Controller: SetupWithManager registers
+	// the Claim Controller's side, which expires the claims of deleted
+	// MicroVMs (CL-013) and recovers every Bound claim after each
+	// subscription (CL-030). The caller adds Events to the manager.
+	// SetupWithManager refuses nil.
+	Events *BatteryEvents
 
 	// slots bounds the ClaimVM calls in flight; SetupWithManager sets it.
 	slots *claim.BindSlots
@@ -77,10 +83,6 @@ type MicroVMClaimReconciler struct {
 // DefaultClaimConcurrentReconciles is the default of the Operator's flag
 // --claim-concurrent-reconciles.
 const DefaultClaimConcurrentReconciles = 4
-
-// eventResubscribeWait is how long the event watcher waits before it
-// subscribes to battery's Events again after the stream ended.
-const eventResubscribeWait = 2 * time.Second
 
 // +kubebuilder:rbac:groups=battery.liquidmetal-x.dev,resources=microvmclaims,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=battery.liquidmetal-x.dev,resources=microvmclaims/status,verbs=get;update;patch
@@ -150,11 +152,14 @@ func (r *MicroVMClaimReconciler) chain() claimscope.Chain {
 // SetupWithManager sets up the controller with the Manager.
 // Besides its claims, it watches Nodes: a change to the Exec Agent's
 // address in a Node's report reconciles every claim bound on that Node
-// (claim.AgentAddress). It also adds the watcher of battery's Events
-// stream (CL-013), whose claims come in through a channel source; after
-// each subscription it recovers every Bound claim, on start and on
-// reconnecting to battery (CL-030, claimRecovery).
+// (claim.AgentAddress). It also registers its side of Events, battery's
+// Events stream (CL-013), whose claims come in through a channel source;
+// after each subscription that side recovers every Bound claim, on start
+// and on reconnecting to battery (CL-030, claimRecovery).
 func (r *MicroVMClaimReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	if r.Events == nil {
+		return errors.New("the Claim Controller needs battery's Events stream")
+	}
 	n := r.ConcurrentReconciles
 	if n == 0 {
 		n = DefaultClaimConcurrentReconciles
@@ -182,8 +187,7 @@ func (r *MicroVMClaimReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return fmt.Errorf("indexing MicroVMClaims by MicroVM uid: %w", err)
 	}
 	deletions := make(chan event.GenericEvent)
-	if err := mgr.Add(&claimEvents{
-		Battery: r.Battery,
+	r.Events.add(&claimEvents{
 		Reader:  mgr.GetClient(),
 		Deleted: r.deleted,
 		Out:     deletions,
@@ -194,12 +198,8 @@ func (r *MicroVMClaimReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			Out:     deletions,
 			Log:     mgr.GetLogger().WithName("microvmclaim-recovery"),
 		},
-		Retry: eventResubscribeWait,
-		Clock: clk,
-		Log:   mgr.GetLogger().WithName("microvmclaim-events"),
-	}); err != nil {
-		return err
-	}
+		Log: mgr.GetLogger().WithName("microvmclaim-events"),
+	})
 
 	//= docs/requirements/02-claims.md#renewal
 	//# While battery has not yet answered `ClaimVM` calls for other

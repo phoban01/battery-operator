@@ -127,17 +127,14 @@ func TestClaimEventsSendsTheClaimOfADeletedMicroVM(t *testing.T) {
 	}}}
 	out := make(chan event.GenericEvent, 4)
 	w := &claimEvents{
-		Battery: b,
 		Reader:  c,
 		Deleted: &claim.DeletedVMs{},
 		Out:     out,
-		Retry:   10 * time.Millisecond,
-		Clock:   clock.Real{},
 		Log:     testr.New(t),
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- w.Start(ctx) }()
+	go func() { done <- claimEventsOn(b, w).Start(ctx) }()
 
 	select {
 	case e := <-out:
@@ -174,3 +171,11 @@ func TestClaimEventsSendsTheClaimOfADeletedMicroVM(t *testing.T) {
 
 // testClaimVM is the MicroVM of the claim these tests watch.
 const testClaimVM = "vm-1"
+
+// claimEventsOn is a BatteryEvents over b with only w registered, which
+// subscribes again 10ms after each subscription ends or fails.
+func claimEventsOn(b battery.Client, w *claimEvents) *BatteryEvents {
+	e := &BatteryEvents{Battery: b, Backoff: fixedBackoff(10 * time.Millisecond), Clock: clock.Real{}}
+	e.add(w)
+	return e
+}

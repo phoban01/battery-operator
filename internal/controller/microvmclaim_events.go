@@ -18,7 +18,6 @@ package controller
 
 import (
 	"context"
-	"time"
 
 	"github.com/go-logr/logr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -26,89 +25,57 @@ import (
 
 	batteryv1alpha1 "github.com/phoban01/battery-operator/api/v1alpha1"
 	"github.com/phoban01/battery-operator/internal/battery"
-	"github.com/phoban01/battery-operator/internal/clock"
 	"github.com/phoban01/battery-operator/internal/controller/claim"
 )
 
-// claimEvents follows battery's Events stream for the Claim Controller
-// (CL-013). For each MicroVM battery reports deleted, it records the uid
-// in Deleted and sends every claim that records that MicroVM to Out, whose
-// channel source reconciles it; claim.ExpireDeleted then expires it.
+// claimEvents is the Claim Controller's side of BatteryEvents (CL-013).
+// For each MicroVM battery reports deleted, it records the uid in Deleted
+// and sends every claim that records that MicroVM to Out, whose channel
+// source reconciles it; claim.ExpireDeleted then expires it.
 //
-// The stream is subscribed for every Pool and subscribed again whenever it
-// ends. battery replays its outbox to a new subscriber (BA-050), so a
-// deletion reported while the stream was down is seen on the next
-// subscription; an event lost anyway is caught by the claim's expiry check
-// (CL-016).
+// BatteryEvents subscribes for every Pool and subscribes again whenever
+// the stream ends. battery replays its outbox to a new subscriber
+// (BA-050), so a deletion reported while the stream was down is seen on
+// the next subscription; an event lost anyway is caught by the claim's
+// expiry check (CL-016).
 //
-// After each subscription succeeds, and before it reads the stream, it
-// runs Recovery if it has one (CL-030): see claimRecovery for why a
-// successful subscription is the Claim Controller's start or its
+// After each subscription succeeds, and before BatteryEvents reads the
+// stream, it runs Recovery if it has one (CL-030): see claimRecovery for
+// why a successful subscription is the Claim Controller's start or its
 // connection to battery being restored. A recovery that fails drops the
-// subscription, which is made again after Retry.
+// subscription, which BatteryEvents makes again after its backoff.
 type claimEvents struct {
-	Battery battery.Client
 	// Reader lists claims by claim.MicroVMUIDIndex.
 	Reader  client.Reader
 	Deleted *claim.DeletedVMs
 	Out     chan<- event.GenericEvent
 	// Recovery, when set, runs after every successful subscription.
 	Recovery *claimRecovery
-	// Retry is the wait before subscribing again.
-	Retry time.Duration
-	Clock clock.Clock
-	Log   logr.Logger
+	Log      logr.Logger
 }
 
-// Start implements manager.Runnable. It runs until ctx is done.
-func (w *claimEvents) Start(ctx context.Context) error {
-	for {
-		stream, err := w.Battery.Subscribe(ctx, battery.EventFilter{})
-		if err == nil {
-			if w.recover(ctx) {
-				w.follow(ctx, stream)
-			}
-			_ = stream.Close()
-		} else {
-			w.Log.V(1).Info("Failed to subscribe to battery's events", "err", err.Error())
-		}
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-w.Clock.After(w.Retry):
-		}
-	}
-}
+var _ eventConsumer = (*claimEvents)(nil)
 
-// recover runs Recovery, and reports whether the stream is to be followed.
-func (w *claimEvents) recover(ctx context.Context) bool {
+// subscribed implements eventConsumer: it runs Recovery.
+func (w *claimEvents) subscribed(ctx context.Context) error {
 	if w.Recovery == nil {
-		return true
+		return nil
 	}
 	if err := w.Recovery.run(ctx); err != nil {
 		if ctx.Err() == nil {
 			w.Log.Error(err, "Failed to recover MicroVMClaims against battery's Leases; subscribing again")
 		}
-		return false
+		return err
 	}
-	return true
+	return nil
 }
 
-// follow handles the stream's events until it ends.
-func (w *claimEvents) follow(ctx context.Context, stream battery.EventStream) {
-	for {
-		e, err := stream.Recv(ctx)
-		if err != nil {
-			if ctx.Err() == nil {
-				w.Log.V(1).Info("Lost battery's event stream", "err", err.Error())
-			}
-			return
-		}
-		w.handle(ctx, e)
-	}
-}
+// resync implements eventConsumer: a claim needs none, since its own
+// expiry check reads battery while the stream is down (CL-016).
+func (w *claimEvents) resync(context.Context) {}
 
-// handle records a deleted MicroVM and sends the claims that record it.
+// handle implements eventConsumer: it records a deleted MicroVM and sends
+// the claims that record it.
 func (w *claimEvents) handle(ctx context.Context, e *battery.Event) {
 	if !claim.ReportsDeletion(e) {
 		return
