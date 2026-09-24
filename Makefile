@@ -180,7 +180,7 @@ undeploy: kustomize ## Undeploy controller from the K8s cluster specified in ~/.
 
 DUVET ?= duvet
 
-.PHONY: duvet duvet-ci duvet-open coverage-gate duvet-models duvet-models-write
+.PHONY: duvet duvet-ci duvet-open coverage-gate coverage-ratchet duvet-models duvet-models-write
 
 ## duvet: extract requirements, build the HTML/JSON reports and refresh the snapshot
 # --ci false is explicit: duvet turns the snapshot check on by itself when CI
@@ -206,6 +206,11 @@ duvet-open: duvet
 coverage-gate:
 	@if [ -z "$(IDS)" ]; then echo 'usage: make coverage-gate IDS="CL-001 CL-002"' >&2; exit 2; fi
 	DUVET=$(DUVET) hack/duvet-coverage.sh $(IDS)
+
+## coverage-ratchet: fail if a requirement cited in code and a test at the merge base of BASE (default origin/main) lost either
+BASE ?= origin/main
+coverage-ratchet:
+	DUVET=$(DUVET) hack/duvet-coverage.sh --base $(BASE) $(IDS)
 
 ## duvet-models: list every requirement as implemented, tested and modelled
 duvet-models: duvet

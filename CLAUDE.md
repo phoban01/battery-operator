@@ -56,6 +56,10 @@ README there has the rules; the short version:
   unless the PR is a milestone that says `Snapshot: milestone` on its own
   line. Restore it with `git checkout origin/main -- .duvet/snapshot.txt`.
 - Check your IDs locally: `make coverage-gate IDS="CL-001 CL-002"`.
+- CI's citation ratchet also fails the PR if any requirement, owned or not,
+  that had both citations at the merge base with `main` loses either one.
+  Check it locally with `make coverage-ratchet`. A requirement is retired
+  by marking it `(withdrawn)`, never by deleting it.
 - The Quint models under `specs/quint/` cite requirements with model
   citations: `//@=` and `//@#`, and no `type=` line. They show a
   requirement as *modelled* and never count for the coverage gate, so a

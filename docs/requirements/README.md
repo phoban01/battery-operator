@@ -246,12 +246,35 @@ test citation. A PR that implements no requirement, such as tooling or
 documentation, says `Owns: none`. Ranges expand to every ID that exists
 between the two numbers.
 
+## The citation ratchet
+
+The coverage gate checks only the IDs a PR owns, so CI also runs a ratchet
+over every requirement. It builds duvet's report for the merge base of the
+PR's target branch and its head, and for the head, and fails for every
+requirement that had both an implementation and a test citation on the base
+and has lost either one on the head, naming the ID and what it lost:
+
+```
+FAIL RS-001: lost its implementation citation, which the base has
+FAIL RS-002: lost its test citation, which the base has
+```
+
+A citation is lost when its code or test is deleted, and also when `gofmt`
+rewrites `//=` to `// =`, which duvet ignores without an error. A
+requirement dropped from its document fails too: a retired requirement is
+marked `(withdrawn)` and keeps its number (rule 5), and the ratchet skips a
+requirement that the head marks `(withdrawn)`.
+
+On a push to `main`, the ratchet runs against the commit `main` was at
+before the push; a tag's commit was ratcheted when it reached `main`.
+
 ## Running duvet
 
 ```sh
 cargo install duvet --locked       # once
 make duvet                         # writes .duvet/reports/report.html and refreshes .duvet/snapshot.txt
 make coverage-gate IDS="CL-001"    # the gate CI runs, for chosen IDs
+make coverage-ratchet              # the ratchet CI runs, against the merge base of BASE (default origin/main)
 make duvet-ci                      # fails if the snapshot differs from the committed one
 ```
 

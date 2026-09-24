@@ -15,6 +15,7 @@
 //	dagger call build export --path=bin/manager
 //	dagger call check-generated
 //	dagger call requirements --owns=none
+//	dagger call requirements --owns=none --base=$(git merge-base origin/main HEAD)
 //	dagger call duvet-report export --path=.duvet/reports
 //	dagger call quint
 //	dagger call images export --path=dist/images
@@ -173,27 +174,93 @@ func (m *BatteryOperator) DuvetReport() *dagger.Directory {
 // Requirements runs `make duvet`, then the coverage gate over the
 // requirement IDs in owns, the value of a PR body's Owns: line. "none" skips
 // the gate, for a PR that implements no requirement.
+//
+// With base, it also runs the citation ratchet: it builds duvet's report of
+// base, a commit or branch of the repository on GitHub, and fails for every
+// requirement that had an implementation and a test citation there and has
+// lost either one in the source. A PR's base is the merge base of its target
+// branch and its head:
+//
+//	dagger call requirements --owns=none --base=$(git merge-base origin/main HEAD)
+//
+// The base comes from GitHub, not the local .git, which in a git worktree is
+// a file that Dagger can't load; a base is always a commit on GitHub.
 func (m *BatteryOperator) Requirements(
 	ctx context.Context,
 	// The Owns: line's value: requirement IDs separated by spaces or commas,
 	// or "none".
 	owns string,
+	// The commit (a full SHA) or branch to ratchet against; empty skips the
+	// ratchet.
+	// +optional
+	base string,
 ) (string, error) {
 	ids := strings.Fields(strings.ReplaceAll(owns, ",", " "))
 	switch {
 	case len(ids) == 0:
 		return "", fmt.Errorf("no requirement IDs given; a PR that implements no requirement says 'Owns: none'")
 	case len(ids) == 1 && ids[0] == "none":
-		// Still produce the report, so a broken spec or citation fails.
-		if _, err := m.duvet().Sync(ctx); err != nil {
-			return "", err
-		}
-		return "no requirement IDs claimed; skipping the coverage gate\n", nil
+		ids = nil
 	}
-	return m.duvet().
-		WithEnvVariable("SKIP_REPORT", "1").
-		WithExec(append([]string{"hack/duvet-coverage.sh"}, ids...)).
+
+	var out strings.Builder
+	if len(ids) == 0 {
+		out.WriteString("no requirement IDs claimed; skipping the coverage gate\n")
+	}
+	head := m.duvet().WithEnvVariable("SKIP_REPORT", "1")
+	var args []string
+	if base != "" {
+		repo := dag.Git(sourceURL)
+		ref := repo.Ref(base)
+		if isCommit(base) {
+			ref = repo.Commit(base)
+		}
+		sha, err := ref.Commit(ctx)
+		if err != nil {
+			return "", fmt.Errorf("resolving the ratchet's base %s in %s: %w", base, sourceURL, err)
+		}
+		if sha != base {
+			base += ", " + sha
+		}
+		fmt.Fprintf(&out, "ratchet base: %s\n", base)
+		tree := ref.Tree(dagger.GitRefTreeOpts{DiscardGitDir: true})
+		head = head.WithFile("/base-report.json", baseReport(tree))
+		args = append(args, "--no-regressions", "/base-report.json")
+	}
+	if len(ids) == 0 && len(args) == 0 {
+		// Still produce the report, so a broken spec or citation fails.
+		_, err := head.Sync(ctx)
+		return out.String(), err
+	}
+	stdout, err := head.
+		WithExec(append(append([]string{"hack/duvet-coverage.sh"}, args...), ids...)).
 		Stdout(ctx)
+	return out.String() + stdout, err
+}
+
+// isCommit reports whether s is a full commit SHA rather than a branch.
+func isCommit(s string) bool {
+	if len(s) != 40 {
+		return false
+	}
+	for _, c := range s {
+		if !strings.ContainsRune("0123456789abcdef", c) {
+			return false
+		}
+	}
+	return true
+}
+
+// baseReport is duvet's report.json of tree, the ratchet's base. It runs
+// `duvet report` rather than `make duvet`: only the report is needed.
+func baseReport(tree *dagger.Directory) *dagger.File {
+	return dag.Container().
+		From(goImage).
+		WithFile("/usr/local/bin/duvet", duvetBinary()).
+		WithDirectory(src, tree).
+		WithWorkdir(src).
+		WithExec([]string{"sh", "-ec", "rm -rf .duvet/requirements && duvet report --ci false"}).
+		File(src + "/.duvet/reports/report.json")
 }
 
 // Quint typechecks, tests and simulates the Quint models in specs/quint
