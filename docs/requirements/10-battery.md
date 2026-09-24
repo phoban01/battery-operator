@@ -110,8 +110,9 @@ after `Run` starts. Together with BA-010 this means:
   (`Sweeper.Tick`, L115-L118), so the bound holds only while battery's
   database answers.
 
-The claim requirements do not account for this yet: CL-014 can expire a
-claim whose Lease battery would still renew (#85), and the orphan bound in
+The claim requirements allow for the first: a claim with a renewal the
+Claim Controller has not yet relayed is not expired while battery still
+holds its Lease (02-claims.md, Renewal, #85). The orphan bound in
 02-claims.md, Binding, leaves out the sweep interval (#86).
 
 The Lease row goes before the MicroVM: `DeleteLeaseIfExpired` deletes the

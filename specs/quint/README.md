@@ -56,10 +56,11 @@ safety` names the invariant that broke. `QUINT_MAX_STEPS`,
 The steps are:
 
 - **the Claim Controller:** add the finalizer, `ClaimVM`, write the binding,
-  relay a renewal as `Heartbeat`, write battery's expiry, expire a Bound
-  claim when the Events stream reports its MicroVM deleted (CL-013) or,
-  after reading its Lease with `ListLeases`, when battery's expiry has
-  passed (CL-014, CL-016), release with `ReleaseVM` and then remove the
+  relay a pending renewal as `Heartbeat`, write battery's expiry with the
+  relayed `renewTime`, expire a Bound claim when the Events stream reports
+  its MicroVM deleted (CL-013) or, once no renewal is pending and after
+  reading its Lease with `ListLeases`, when battery's expiry has passed or
+  battery no longer lists the Lease (CL-012, CL-014, CL-016), release with `ReleaseVM` and then remove the
   finalizer, and recover on start and on reconnecting. Each step is one
   call to battery or one write to the API server.
 - **battery:** replenish the Pool, answer the `Lease` calls, sweep the
@@ -92,9 +93,10 @@ Invariants, all in `safety`:
 | `statusExpiryIsBatterys` | a claim's `leaseExpiresAt` is never later than battery's (CL-011; ADR 0001, consequence 3) |
 | `onlyRecordedLeasesReleased` | the controller releases only Leases a claim recorded (CL-031) |
 | `recordedOnlyFromOwnAnswer` | a claim records only a lease id from an answer to its own `ClaimVM`, so no orphan is adopted (CL-008) |
-| `boundClaimIsComplete` | a Bound claim carries its lease id, MicroVM, node name, times and a true `Bound` (CL-002, RS-024) |
+| `boundClaimIsComplete` | a Bound claim carries its lease id, MicroVM, node name, time of binding and a true `Bound` (CL-002, RS-024); its expiry comes later, from `ListLeases` (CL-016), since battery's answer to `ClaimVM` carries none |
 | `idleMirrorsBattery` | once the controller is idle, every Bound claim's Lease is one battery holds and has not run out (ADR 0001, consequence 4; CL-013, CL-014) |
 | `expiredOnlyAfterLeaseEnds` | a claim goes Expired only once battery no longer holds its Lease or the Lease has run out (CL-016, #57) |
+| `pendingRenewalKeptWhileHeld` | a claim with a renewal the controller has not relayed goes Expired only once battery no longer holds its Lease, and so would refuse the `Heartbeat` (CL-010, CL-014, CL-016, #85) |
 
 `idleMirrorsBattery` is the safety form of "an unrenewed Bound claim
 eventually goes Expired", since `quint run` checks state invariants only.
@@ -104,17 +106,29 @@ It depends on CL-014: without it, a dropped event leaves the claim Bound
 `expiredOnlyAfterLeaseEnds` did not hold with CL-014 alone. After a crash
 between a successful `Heartbeat` and its status write, or a `Heartbeat`
 answer lost in transit, CL-014 expired a claim whose Lease battery had just
-renewed (#57). CL-016 reads the Lease with `ListLeases` first, and the
-scenario tests `renewedClaimKeptAfterCrashTest`,
-`renewedClaimListedAfterCrashTest` and `heartbeatAnswerLostTest` show the
-claim kept Bound with battery's expiry.
+renewed (#57). The controller now writes the relayed `renewTime` with
+battery's expiry in one write (CL-010), so after such a crash or lost
+answer the renewal is still pending: CL-014 and CL-016 wait, and the
+`Heartbeat` is sent again. The scenario tests
+`renewedClaimKeptAfterCrashTest`, `renewedClaimRenewedAgainAfterCrashTest`
+and `heartbeatAnswerLostTest` show the claim kept Bound with battery's
+expiry.
 
-Two properties do not hold, and are kept out of `safety`, each with a
-scenario test that reaches the violation:
+`pendingRenewalKeptWhileHeld` did not hold while CL-014 expired a claim as
+soon as its expiry passed: battery keeps a Lease past its expiry until the
+next sweep, and a `Heartbeat` then still renews it (BA-010, BA-020), so a
+renewal asked for in time and not yet relayed was lost (#85). CL-014 and
+CL-016 now wait for a pending renewal, and `renewalNotLostToExpiryTest`,
+`renewalKeptPastExpiryTest` and `renewalKeptAcrossRestartTest` show the
+claim kept. A claim with no renewal pending still goes Expired before the
+sweep (`unrenewedClaimExpiresBeforeSweepTest`): that is what `Expired`
+means (02-claims.md, Renewal).
+
+One property does not hold, and is kept out of `safety`, with a scenario
+test that reaches the violation:
 
 | Property | Checks | Finding |
 |----------|--------|---------|
-| `expiredOnlyOnceBatteryRefuses` | a claim goes Expired only once battery would refuse a `Heartbeat` for its Lease | CL-014 expires a claim whose Lease is past its expiry but not yet swept, which a `Heartbeat` would still renew, and drops a renewal asked for in time (#85; `renewalLostToExpiryBeforeSweepTest`) |
 | `orphanGoneByExpiry` | an orphan is gone within the expiry threshold, as 02-claims.md, Binding, says | the sweep can come up to one interval later (#86; `orphanOutlivesExpiryTest`) |
 
 The witnesses show that the simulation reaches the interleavings that
@@ -126,10 +140,9 @@ answer lost in transit (`witnessOrphanFromLostAnswer`), and a retried
 (`witnessReleasedAfterLostAnswer`), a Lease past its expiry waiting for
 the sweep (`witnessUnsweptLease`), and a renewal the controller can relay
 for such a Lease (`witnessLateHeartbeat`). `make quint` fails if a witness is
-never reached. A claim kept Bound by `ListLeases` (CL-016) needs a
-renewal late in the Lease, a lost answer and time passing before the
-retry, which random simulation reaches too rarely for a witness; the
-scenario tests above cover it.
+never reached. A renewal kept past its expiry needs a renewal late in the
+Lease and time passing before it is relayed, which random simulation
+reaches too rarely for a witness; the scenario tests above cover it.
 
 ## The certificates model
 

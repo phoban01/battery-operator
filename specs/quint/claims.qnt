@@ -509,6 +509,10 @@ module claims {
 
   def canWriteBound(c: ClaimName): bool = live(c) and isClaimAnswer(ctrl.mem.get(c))
 
+  // battery's answer to ClaimVM carries no expiry time, so the claim is
+  // Bound with none, and CL-016 reads it with ListLeases (ctlListRenewed).
+  // The renewTime the claim has now is recorded as relayed: the new Lease
+  // runs from later than any renewal before it.
   action ctlWriteBound(c: ClaimName): bool = all {
     canWriteBound(c),
     val l = claimAnswer(ctrl.mem.get(c))
@@ -522,7 +526,7 @@ module claims {
           microVM: Some(l.vm),
           nodeName: Some(l.host),
           boundTime: Some(now),
-          leaseExpiresAt: Some(l.expiresAt),
+          leaseExpiresAt: None,
           bound: { status: CondTrue, reason: ClaimBound },
           synced: synced,
         },
@@ -533,16 +537,23 @@ module claims {
     now' = now, battery' = battery,
   }
 
+  // A pending renewal (glossary): the Holder has changed spec.renewTime
+  // since the controller last relayed it.
+  def pendingRenewal(c: ClaimName): bool =
+    obj(c).spec.renewTime != obj(c).observedRenewTime
+
   //@= docs/requirements/02-claims.md#renewal
-  //@# When the `spec.renewTime` of a Bound claim changes, the Claim
-  //@# Controller SHALL call battery's `Heartbeat` for the claim's Lease and write
-  //@# the expiry time battery returns to the claim's status.
+  //@# While the `spec.renewTime` of a Bound claim differs from the
+  //@# last `renewTime` the Claim Controller relayed for it, the Claim Controller
+  //@# SHALL call battery's `Heartbeat` for the claim's Lease, and SHALL write
+  //@# the expiry time battery returns and the `renewTime` it relayed to the
+  //@# claim's status in one write.
   def canCallHeartbeat(c: ClaimName): bool = and {
     live(c), idle(c),
     not(obj(c).deleting),
     obj(c).status.phase == Bound,
     isSome(obj(c).status.leaseId),
-    obj(c).spec.renewTime != obj(c).observedRenewTime,
+    pendingRenewal(c),
   }
 
   def canHeartbeat(c: ClaimName): bool = canCallHeartbeat(c) and battery.up
@@ -602,8 +613,8 @@ module claims {
 
   //@= docs/requirements/02-claims.md#renewal
   //@# The Claim Controller SHALL take a claim's Lease expiry time only
-  //@# from battery's answer to `Heartbeat`, `ClaimVM` or `ListLeases`, and SHALL
-  //@# NOT compute it.
+  //@# from battery's answer to `Heartbeat` or `ListLeases`, and SHALL NOT
+  //@# compute it.
   action ctlWriteRenewed(c: ClaimName): bool = all {
     live(c),
     isHeartbeatAnswer(ctrl.mem.get(c)),
@@ -619,23 +630,26 @@ module claims {
     now' = now, battery' = battery, hist' = hist,
   }
 
-  //@= docs/requirements/02-claims.md#renewal
-  //@# If battery reports a claim's Lease as unknown or expired, then
-  //@# the Claim Controller SHALL set the claim's phase to `Expired` and its
-  //@# condition `Bound` false with the reason `LeaseExpired`.
+  // The claim once it has gone Expired. Its observedRenewTime is left as it
+  // was, so that pendingRenewalKeptWhileHeld can see a renewal the
+  // controller had not relayed when the claim expired.
   pure def expired(o: MicroVMClaim): MicroVMClaim = {
     ...o,
-    observedRenewTime: o.spec.renewTime,
-    status: { ...o.status, phase: Expired, bound: { status: CondFalse, reason: LeaseExpired }, synced: synced },
+    status:{ ...o.status, phase: Expired, bound: { status: CondFalse, reason: LeaseExpired }, synced: synced },
   }
 
   //@= docs/requirements/10-battery.md#heartbeat
   //@# If battery does not hold the Lease a `Heartbeat` names, then
   //@# battery SHALL answer it with `NOT_FOUND`.
   //
+  //@= docs/requirements/02-claims.md#renewal
+  //@# If battery answers a `Heartbeat` for a claim's Lease with
+  //@# `NOT_FOUND`, or leaves the claim's Lease out of its answer to
+  //@# `ListLeases`, then the Claim Controller SHALL set the claim's phase to
+  //@# `Expired` and its condition `Bound` false with the reason `LeaseExpired`.
+  //
   // Heartbeat fails: battery no longer holds the Lease. battery has no
-  // answer for "expired" (BA-011), so this is the only way a Heartbeat
-  // fails, and CL-012's "expired" never comes from a Heartbeat.
+  // answer for "expired" (BA-011): it renews any Lease it still holds.
   action ctlHeartbeatUnknown(c: ClaimName): bool = all {
     canHeartbeat(c),
     not(holds(getOr(obj(c).status.leaseId, 0))),
@@ -666,22 +680,36 @@ module claims {
   }
 
   //@= docs/requirements/02-claims.md#renewal
-  //@# When the Lease expiry time battery gave for a Bound claim has
-  //@# passed and no `Heartbeat` for that claim has succeeded since, the Claim
-  //@# Controller SHALL set the claim's phase to `Expired` and its condition
-  //@# `Bound` false with the reason `LeaseExpired`.
+  //@# When a Bound claim has no pending renewal, and its status has
+  //@# no Lease expiry time or one that has passed, the Claim Controller SHALL
+  //@# read the claim's Lease with battery's `ListLeases`
   //
-  // The controller knows a Heartbeat succeeded from the answer it holds
-  // (HeartbeatAnswered) or from the expiry it wrote, and a crash or a lost
-  // answer loses the first. CL-016 asks battery with ListLeases before
-  // expiring the claim, so the step needs battery: the controller expires
-  // the claim only if battery lists its Lease as gone or run out.
+  // A claim just bound has no expiry in its status, since battery's answer
+  // to ClaimVM carries none; getOr counts it as passed. A claim with a
+  // pending renewal waits for its Heartbeat (CL-010) instead: battery
+  // still renews a Lease past its expiry until the sweep (BA-010), so
+  // expiring it first would drop a renewal the Holder asked for (#85).
   def canExpiryPassed(c: ClaimName): bool = and {
     live(c), idle(c),
     obj(c).status.phase == Bound,
+    not(pendingRenewal(c)),
     getOr(obj(c).status.leaseExpiresAt, 0) <= now,
   }
 
+  //@= docs/requirements/02-claims.md#renewal
+  //@# When battery lists a Bound claim's Lease in its answer to
+  //@# `ListLeases` with an expiry time that has passed, and the claim has no
+  //@# pending renewal, the Claim Controller SHALL set the claim's phase to
+  //@# `Expired` and its condition `Bound` false with the reason `LeaseExpired`.
+  //
+  //@= docs/requirements/02-claims.md#renewal
+  //@# If battery answers a `Heartbeat` for a claim's Lease with
+  //@# `NOT_FOUND`, or leaves the claim's Lease out of its answer to
+  //@# `ListLeases`, then the Claim Controller SHALL set the claim's phase to
+  //@# `Expired` and its condition `Bound` false with the reason `LeaseExpired`.
+  //
+  // battery lists the Lease with a passed expiry (CL-014), or does not
+  // list it (CL-012). The read and the write are one step.
   action ctlExpiryPassed(c: ClaimName): bool = all {
     canExpiryPassed(c),
     battery.up,
@@ -692,17 +720,17 @@ module claims {
   }
 
   //@= docs/requirements/02-claims.md#renewal
-  //@# When the Lease expiry time in a Bound claim's status has
-  //@# passed, the Claim Controller SHALL read the claim's Lease with battery's
-  //@# `ListLeases` before it sets the claim's phase to `Expired`, and SHALL keep
-  //@# the claim `Bound` and write the expiry time battery lists if that time has
+  //@# When a Bound claim has no pending renewal, and its status has
+  //@# no Lease expiry time or one that has passed, the Claim Controller SHALL
+  //@# read the claim's Lease with battery's `ListLeases`, and SHALL keep the
+  //@# claim `Bound` and write the expiry time battery lists if that time has
   //@# not passed.
   //
-  // battery lists the Lease with a later expiry: a Heartbeat succeeded
-  // whose answer the controller lost (#57). The claim stays Bound with
-  // battery's expiry. The read and the write are one step: nothing else
-  // renews the Lease in between, because the controller handles one claim
-  // at a time.
+  // battery lists the Lease with a later expiry: the claim was just bound,
+  // or its status is behind battery's for another reason. The claim stays
+  // Bound with battery's expiry. The read and the write are one step:
+  // nothing else renews the Lease in between, because the controller
+  // reconciles one claim at a time.
   action ctlListRenewed(c: ClaimName): bool = all {
     canExpiryPassed(c),
     battery.up,
@@ -846,16 +874,19 @@ module claims {
   //@# battery SHALL include in the answer to `ListLeases` a Lease
   //@# whose expiry has passed but that no sweep has deleted yet.
   //
-  // Every Bound claim whose Lease battery no longer holds, or holds past
-  // its expiry, becomes Expired (CL-012). Leases no claim records are left
-  // alone (CL-031). The controller reads the Leases with ListLeases
-  // (BA-040), which lists each with its expiry and renews none; that is
-  // the only way it can tell "expired" from "unknown".
+  // Every Bound claim whose Lease battery no longer holds becomes Expired
+  // (CL-012), and so does one whose Lease battery holds past its expiry,
+  // unless the claim has a pending renewal (CL-014): that one waits for its
+  // Heartbeat, which battery still answers until the sweep (#85). Leases no
+  // claim records are left alone (CL-031). The controller reads the Leases
+  // with ListLeases (BA-040), which lists each with its expiry and renews
+  // none; that is the only way it can tell "expired" from "unknown".
   action ctlRecover: bool = all {
     canRecover,
     claims' = CLAIMS.mapBy(c =>
       if (live(c) and obj(c).status.phase == Bound
-          and not(holdsUnexpired(getOr(obj(c).status.leaseId, 0))))
+          and not(holdsUnexpired(getOr(obj(c).status.leaseId, 0)))
+          and (not(holds(getOr(obj(c).status.leaseId, 0))) or not(pendingRenewal(c))))
         Live(expired(obj(c)))
       else slot(c)),
     ctrl' = { ...ctrl, recovering: false },
@@ -991,13 +1022,15 @@ module claims {
   val onlyRecordedLeasesReleased: bool = hist.released.subseteq(hist.recorded)
 
   // CL-002 and RS-024: a Bound claim carries everything a consumer needs.
+  // Its Lease expiry time is not among them at first: battery's answer to
+  // ClaimVM carries none, and CL-016 reads it with ListLeases after the
+  // binding is written.
   val boundClaimIsComplete: bool =
     CLAIMS.forall(c => (live(c) and obj(c).status.phase == Bound) implies and {
       isSome(obj(c).status.leaseId),
       isSome(obj(c).status.microVM),
       isSome(obj(c).status.nodeName),
       isSome(obj(c).status.boundTime),
-      isSome(obj(c).status.leaseExpiresAt),
       obj(c).status.bound.status == CondTrue,
     })
 
@@ -1016,6 +1049,7 @@ module claims {
   val safety: bool = and {
     recordedOnlyFromOwnAnswer,
     expiredOnlyAfterLeaseEnds,
+    pendingRenewalKeptWhileHeld,
     vmLeasedToAtMostOneClaim,
     releasedVMNeverReused,
     orphanLeaseBounded,
@@ -1028,9 +1062,10 @@ module claims {
   }
 
   //@= docs/requirements/02-claims.md#renewal
-  //@# When the Lease expiry time battery gave for a Bound claim has
-  //@# passed and no `Heartbeat` for that claim has succeeded since, the Claim
-  //@# Controller SHALL set the claim's phase to `Expired`
+  //@# When battery lists a Bound claim's Lease in its answer to
+  //@# `ListLeases` with an expiry time that has passed, and the claim has no
+  //@# pending renewal, the Claim Controller SHALL set the claim's phase to
+  //@# `Expired`
   //
   // ADR 0001, consequence 4: a Bound claim's Lease exists in battery, or
   // the claim goes Expired. As a state invariant: once the controller has
@@ -1051,21 +1086,26 @@ module claims {
     CLAIMS.forall(c => (live(c) and obj(c).status.phase == Expired) implies
       not(holdsUnexpired(getOr(obj(c).status.leaseId, 0))))
 
+  // A claim that goes Expired with a renewal the controller has not
+  // relayed does so only once battery would refuse a Heartbeat for its
+  // Lease, that is once no Lease row is left (BA-010, BA-011). A Lease past
+  // its expiry is still renewable until the sweep, and expiring the claim
+  // then would drop a renewal the Holder asked for in time (#85). CL-014
+  // and CL-016 wait while a renewal is pending, and CL-010 relays it
+  // first. expired() leaves observedRenewTime as it was, so the pending
+  // renewal is still visible on the Expired claim.
+  //
+  // A claim with no pending renewal can still go Expired while battery
+  // holds its Lease past its expiry, before the sweep: that is what
+  // Expired means (02-claims.md, Renewal), and no renewal is lost.
+  val pendingRenewalKeptWhileHeld: bool =
+    CLAIMS.forall(c => (live(c) and obj(c).status.phase == Expired and pendingRenewal(c)) implies
+      not(holds(getOr(obj(c).status.leaseId, 0))))
+
   // ---------------------------------------------------------------------
   // Properties the requirements do not yet guarantee. Each is a finding,
   // filed as an issue, kept out of safety, and reached by a scenario test
   // in claims_test.qnt that fails once the model changes to close it.
-
-  // A claim goes Expired only once battery would refuse a Heartbeat for its
-  // Lease, that is once no Lease row is left (BA-010, BA-011). Not in
-  // safety: CL-014 expires a claim as soon as its expiry passes, while the
-  // Lease waits up to a sweep interval for the sweep and a Heartbeat would
-  // still renew it. With a renewal already requested, the Holder loses a
-  // MicroVM battery would have kept (#85).
-  // claims_test.qnt, renewalLostToExpiryBeforeSweepTest, reaches it.
-  val expiredOnlyOnceBatteryRefuses: bool =
-    CLAIMS.forall(c => (live(c) and obj(c).status.phase == Expired) implies
-      not(holds(getOr(obj(c).status.leaseId, 0))))
 
   // The prose under 02-claims.md, Binding, and ADR 0001, consequence 2:
   // battery expires an orphan after the Pool's heartbeat_expiry_threshold.

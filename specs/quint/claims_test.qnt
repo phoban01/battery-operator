@@ -7,15 +7,41 @@ module claims_test {
   import types.* from "./types"
   import claims.* from "./claims"
 
-  // A claim bound to vm from scratch: created, finalizer, ClaimVM, status.
+  // A claim bound to vm from scratch: created, finalizer, ClaimVM, status,
+  // and the Lease's expiry read with ListLeases (CL-016), since battery's
+  // answer to ClaimVM carries none.
   run bind(c: ClaimName, vm: VMId): bool =
     createClaim(c)
       .then(ctlAddFinalizer(c))
       .then(replenish(vm))
       .then(ctlClaimVM(c, vm))
       .then(ctlWriteBound(c))
+      .then(ctlListRenewed(c))
 
   run ticks(n: int): bool = n.reps(_ => tick)
+
+  // CL-011 and CL-016: the binding is written with no expiry time, and
+  // ListLeases gives battery's.
+  run boundWithoutExpiryTest =
+    init
+      .then(createClaim("a"))
+      .then(ctlAddFinalizer("a"))
+      .then(replenish("v1"))
+      .then(ctlClaimVM("a", "v1"))
+      .then(ctlWriteBound("a"))
+      .expect(and {
+        obj("a").status.phase == Bound,
+        obj("a").status.leaseExpiresAt == None,
+        canExpiryPassed("a"),
+        not(controllerIdle),
+        safety,
+      })
+      .then(ctlListRenewed("a"))
+      .expect(and {
+        obj("a").status.leaseExpiresAt == Some(EXPIRY),
+        controllerIdle,
+        safety,
+      })
 
   run bindTest =
     init
@@ -206,25 +232,75 @@ module claims_test {
       .then(tick)
       .fail()
 
-  // The finding of #85: the Holder renews before the expiry, the
-  // controller has not relayed the renewal when the expiry passes, and
-  // CL-014 expires the claim. battery still holds the Lease and would have
-  // renewed it (BA-010). This test fails once the model changes to close
-  // it.
-  run renewalLostToExpiryBeforeSweepTest =
+  // #85: the Holder renews before the expiry, and the controller has not
+  // relayed the renewal when the expiry passes. battery still holds the
+  // Lease until the sweep and would renew it (BA-010), so the claim is not
+  // expired on time while the renewal is pending (CL-014, CL-016); the
+  // Heartbeat goes first (CL-010), and the claim keeps its Lease.
+  run renewalNotLostToExpiryTest =
     init
       .then(bind("a", "v1"))
       .then(ticks(EXPIRY - 1))
       .then(renewClaim("a"))
       .then(tick)
-      .expect(canExpiryPassed("a") and canHeartbeat("a"))
+      .expect(and { not(canExpiryPassed("a")), canHeartbeat("a"), holds(1), not(holdsUnexpired(1)) })
       .then(ctlExpiryPassed("a"))
+      .fail()
+
+  run renewalKeptPastExpiryTest =
+    init
+      .then(bind("a", "v1"))
+      .then(ticks(EXPIRY - 1))
+      .then(renewClaim("a"))
+      .then(tick)
+      .then(ctlHeartbeat("a"))
+      .then(ctlWriteRenewed("a"))
       .expect(and {
-        obj("a").status.phase == Expired,
-        holds(1),
-        not(expiredOnlyOnceBatteryRefuses),
+        obj("a").status.phase == Bound,
+        obj("a").status.leaseExpiresAt == Some(EXPIRY + EXPIRY),
+        holdsUnexpired(1),
         safety,
       })
+
+  // #85: a renewal relayed only after the sweep is too late. battery
+  // answers NOT_FOUND, and CL-012 expires the claim; battery would have
+  // refused the Heartbeat, so pendingRenewalKeptWhileHeld holds.
+  run renewalAfterSweepTooLateTest =
+    init
+      .then(bind("a", "v1"))
+      .then(ticks(EXPIRY - 1))
+      .then(renewClaim("a"))
+      .then(ticks(2))
+      .then(batteryExpire)
+      .then(ctlHeartbeatUnknown("a"))
+      .expect(and { obj("a").status.phase == Expired, pendingRenewal("a"), not(holds(1)), safety })
+
+  // With no renewal pending, the claim goes Expired as soon as battery
+  // lists its expiry as passed, before the sweep deletes the Lease (CL-014).
+  run unrenewedClaimExpiresBeforeSweepTest =
+    init
+      .then(bind("a", "v1"))
+      .then(ticks(EXPIRY))
+      .expect(and { holds(1), not(holdsUnexpired(1)), canExpiryPassed("a") })
+      .then(ctlExpiryPassed("a"))
+      .expect(and { obj("a").status.phase == Expired, holds(1), safety })
+
+  // #85 across a restart of battery: the Holder renews while battery is
+  // down and the Lease runs out. Recovery finds the Lease held past its
+  // expiry, but the renewal is pending, so the claim stays Bound and the
+  // Heartbeat renews it before the first sweep (BA-022).
+  run renewalKeptAcrossRestartTest =
+    init
+      .then(bind("a", "v1"))
+      .then(batteryStop)
+      .then(renewClaim("a"))
+      .then(ticks(EXPIRY + 1))
+      .then(batteryStart)
+      .then(ctlRecover)
+      .expect(and { obj("a").status.phase == Bound, holds(1), canHeartbeat("a"), safety })
+      .then(ctlHeartbeat("a"))
+      .then(ctlWriteRenewed("a"))
+      .expect(and { obj("a").status.phase == Bound, holdsUnexpired(1), safety })
 
   // The finding of #86: a crash-window orphan outlives the Pool's
   // heartbeat_expiry_threshold by up to a sweep interval, which the prose
@@ -274,10 +350,12 @@ module claims_test {
       .then(ctlExpiryPassed("a"))
       .expect(and { obj("a").status.phase == Expired, controllerIdle, safety })
 
-  // The finding of #57, closed by CL-016: a crash between a successful
-  // Heartbeat and its status write leaves the old expiry in the status.
-  // CL-014 alone would expire a claim whose Lease battery has just renewed;
-  // ListLeases shows battery's later expiry, and the claim stays Bound.
+  // The finding of #57: a crash between a successful Heartbeat and its
+  // status write leaves the old expiry in the status. CL-014 alone would
+  // expire a claim whose Lease battery has just renewed. The relayed
+  // renewTime is written with the expiry (CL-010), so the renewal is still
+  // pending after the crash, nothing expires the claim, and the Heartbeat
+  // is sent again.
   run renewedClaimKeptAfterCrashTest =
     init
       .then(bind("a", "v1"))
@@ -287,11 +365,11 @@ module claims_test {
       .then(crashController)
       .then(ctlRecover)
       .then(tick)
-      .expect(canExpiryPassed("a") and holdsUnexpired(1))
+      .expect(and { not(canExpiryPassed("a")), canHeartbeat("a"), holdsUnexpired(1) })
       .then(ctlExpiryPassed("a"))
       .fail()
 
-  run renewedClaimListedAfterCrashTest =
+  run renewedClaimRenewedAgainAfterCrashTest =
     init
       .then(bind("a", "v1"))
       .then(ticks(2))
@@ -300,10 +378,11 @@ module claims_test {
       .then(crashController)
       .then(ctlRecover)
       .then(tick)
-      .then(ctlListRenewed("a"))
+      .then(ctlHeartbeat("a"))
+      .then(ctlWriteRenewed("a"))
       .expect(and {
         obj("a").status.phase == Bound,
-        obj("a").status.leaseExpiresAt == Some(2 + EXPIRY),
+        obj("a").status.leaseExpiresAt == Some(3 + EXPIRY),
         not(canExpiryPassed("a")),
         safety,
       })
@@ -340,8 +419,9 @@ module claims_test {
       .expect(and { orphans == Set(), obj("a").status.phase == Bound, safety })
 
   // CL-015: Heartbeat fails in transit after battery renewed. The claim
-  // stays Bound with the old expiry and retries; CL-016 then finds battery's
-  // later expiry instead of expiring the claim.
+  // stays Bound with the old expiry, the renewal stays pending, and the
+  // retry renews again; nothing expires the claim in between, even once
+  // the old expiry has passed.
   run heartbeatAnswerLostTest =
     init
       .then(bind("a", "v1"))
@@ -357,10 +437,13 @@ module claims_test {
         safety,
       })
       .then(tick)
-      .then(ctlListRenewed("a"))
+      .expect(not(canExpiryPassed("a")))
+      .then(ctlHeartbeat("a"))
+      .then(ctlWriteRenewed("a"))
       .expect(and {
         obj("a").status.phase == Bound,
-        obj("a").status.leaseExpiresAt == Some(2 + EXPIRY),
+        obj("a").status.leaseExpiresAt == Some(3 + EXPIRY),
+        obj("a").status.synced.status == CondTrue,
         safety,
       })
 
