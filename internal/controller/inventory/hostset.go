@@ -37,6 +37,13 @@ type Hosts map[string]string
 // Equal reports whether h and o are the same Hosts at the same addresses.
 func (h Hosts) Equal(o Hosts) bool { return maps.Equal(h, o) }
 
+// clone is a copy of h, never nil.
+func (h Hosts) clone() Hosts {
+	out := make(Hosts, len(h))
+	maps.Copy(out, h)
+	return out
+}
+
 // List is h as batterysidecar renders it, sorted by name.
 func (h Hosts) List() []batterysidecar.Host {
 	out := make([]batterysidecar.Host, 0, len(h))

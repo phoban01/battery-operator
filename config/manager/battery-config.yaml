@@ -10,6 +10,11 @@
 # refuses to start with an empty Hosts list, so it holds one placeholder
 # Host that no Pool names and whose address never resolves.
 #
+# Applying the Manifests again puts this content back. The Inventory
+# Controller watches this ConfigMap and writes back the Hosts it recorded in
+# its battery.liquidmetal-x.dev/hosts annotation, which the Manifests do not
+# give, without restarting battery (IN-014).
+#
 # Every Host is reached over mutual TLS with battery's client certificate,
 # verified against the serving CA, at the paths the battery-tls volume
 # mounts them on. battery's own API is plaintext on loopback, which only

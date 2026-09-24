@@ -87,3 +87,35 @@ TLS, and battery reaches it directly with the Operator's client certificate
 ([ADR 0002](../adr/0002-battery-reaches-flintlockd-over-mtls.md)). IN-004
 is what keeps that connection authenticated both ways: battery v0.3.3 can
 also be configured without TLS, and the Inventory Controller never does so.
+
+## Keeping battery's configuration {#keeping}
+
+- **IN-014** If battery's configuration names Hosts other than those the
+  Inventory Controller last wrote to it, then the Inventory Controller SHALL
+  write those Hosts back to battery's configuration without restarting
+  battery.
+
+battery's configuration lives in a ConfigMap the Manifests ship with no
+Hosts (DP-004). Applying the Manifests again, with
+`kubectl apply --server-side --force-conflicts` or with client-side
+`kubectl apply`, puts that content back: server-side, the Manifests' field
+manager takes the field back by force; client-side, the three-way merge sets
+every field the Manifests give that the live object differs in. battery goes
+on running with the Hosts it read when it started, but the kubelet updates
+its mounted file, so its next restart, or the Operator pod's, would start it
+with none. The Inventory Controller therefore watches that one ConfigMap as
+well as the Nodes, and puts back the Hosts it wrote, whatever changed them.
+
+It records the Hosts it last wrote in an annotation on the ConfigMap. The
+Manifests give no such annotation, so neither kind of apply touches it, and
+the record survives the Operator's restart too. Where there is no record
+yet, on the Manifests' first apply or after an Operator that kept none, the
+Inventory Controller records the Hosts the configuration names.
+
+Writing the Hosts back does not restart battery, because battery already
+runs with them: the change reached only its file. A restart for it would be
+one more than IN-011 and IN-012 allow for, and would come with every apply.
+A restart the Inventory Controller began and did not finish is finished as
+before, with the Hosts written back. If battery exits between the apply and
+the write back, it starts with no Hosts, and gets them back only with the
+Inventory Controller's next restart of it.

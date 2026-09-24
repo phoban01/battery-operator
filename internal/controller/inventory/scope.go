@@ -210,6 +210,7 @@ func (o Options) Validate() error {
 // NewChain is the Inventory Controller's chain, in order.
 func NewChain(o Options) Chain {
 	return Chain{
+		Restore{},
 		Resume{},
 		Admit{},
 		Settle{Time: o.SettleTime},

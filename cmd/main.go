@@ -274,13 +274,15 @@ func main() {
 		setupLog.Error(err, "Failed to add the subscription to battery's events")
 		os.Exit(1)
 	}
+	batteryConfigMap := client.ObjectKey{Namespace: signerConfig.Namespace, Name: sidecarConfig.ConfigMap}
 	if err := (&controller.InventoryReconciler{
 		Client: mgr.GetClient(),
 		Store: inventory.ConfigMapStore{
 			Reader: mgr.GetAPIReader(),
 			Writer: mgr.GetClient(),
-			Key:    client.ObjectKey{Namespace: signerConfig.Namespace, Name: sidecarConfig.ConfigMap},
+			Key:    batteryConfigMap,
 		},
+		ConfigMap:    batteryConfigMap,
 		Restarter:    restarter,
 		ClientSecret: client.ObjectKey{Namespace: signerConfig.Namespace, Name: sidecarConfig.ClientSecret},
 		Hosts:        hosts,

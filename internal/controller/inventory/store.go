@@ -20,6 +20,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
@@ -40,6 +41,13 @@ const RestartPendingAnnotation = "battery.liquidmetal-x.dev/restart-pending"
 // it (DP-007).
 const ClientCertificateAnnotation = "battery.liquidmetal-x.dev/client-certificate-sha256"
 
+// HostsAnnotation records on battery's ConfigMap, as a JSON object of Host
+// name to flintlockd address, the Hosts the Inventory Controller last wrote
+// to the configuration. The Manifests give no such annotation, so applying
+// them again leaves it alone, and the Inventory Controller can put back the
+// Hosts an apply reset (IN-014).
+const HostsAnnotation = "battery.liquidmetal-x.dev/hosts"
+
 // Config is battery's configuration as stored.
 type Config struct {
 	// Hosts are the configuration's Hosts, without the placeholder an empty
@@ -53,6 +61,10 @@ type Config struct {
 	// ClientCertificate is the Digest of the client certificate battery last
 	// restarted with, "" if none is recorded.
 	ClientCertificate string
+	// Written is the Hosts the Inventory Controller last wrote to Raw, from
+	// HostsAnnotation: nil where none is recorded, or the record is not a
+	// JSON object of strings.
+	Written Hosts
 }
 
 // Digest is the SHA-256 digest of a client certificate, in hex: what
@@ -66,7 +78,8 @@ func Digest(cert []byte) string {
 type Store interface {
 	// Load reads the configuration.
 	Load(ctx context.Context) (Config, error)
-	// Save writes c's Raw, Pending and ClientCertificate; Hosts are Raw's.
+	// Save writes c's Raw, Pending and ClientCertificate, and Written
+	// unless it is nil; Hosts are Raw's.
 	Save(ctx context.Context, c Config) error
 }
 
@@ -107,6 +120,7 @@ func (c ConfigMapStore) Load(ctx context.Context) (Config, error) {
 		Raw:               raw,
 		Pending:           cm.Annotations[RestartPendingAnnotation] == annotationTrue,
 		ClientCertificate: cm.Annotations[ClientCertificateAnnotation],
+		Written:           writtenHosts(cm.Annotations[HostsAnnotation]),
 	}, nil
 }
 
@@ -122,6 +136,13 @@ func (c ConfigMapStore) Save(ctx context.Context, config Config) error {
 	cm.Data[batterysidecar.ConfigKey] = string(config.Raw)
 	setAnnotation(cm, RestartPendingAnnotation, config.Pending, annotationTrue)
 	setAnnotation(cm, ClientCertificateAnnotation, config.ClientCertificate != "", config.ClientCertificate)
+	if config.Written != nil {
+		written, err := json.Marshal(config.Written)
+		if err != nil {
+			return fmt.Errorf("recording the Hosts written to ConfigMap %s: %w", c.Key, err)
+		}
+		setAnnotation(cm, HostsAnnotation, true, string(written))
+	}
 	if err := c.Writer.Update(ctx, cm); err != nil {
 		return fmt.Errorf("updating ConfigMap %s: %w", c.Key, err)
 	}
@@ -146,4 +167,18 @@ func (c ConfigMapStore) get(ctx context.Context) (*corev1.ConfigMap, error) {
 		return nil, fmt.Errorf("reading ConfigMap %s: %w", c.Key, err)
 	}
 	return cm, nil
+}
+
+// writtenHosts reads HostsAnnotation's value: nil when it is empty or not a
+// JSON object of strings, so that a record that cannot be read is made
+// again from the configuration.
+func writtenHosts(value string) Hosts {
+	if value == "" {
+		return nil
+	}
+	hosts := Hosts{}
+	if err := json.Unmarshal([]byte(value), &hosts); err != nil {
+		return nil
+	}
+	return hosts
 }
