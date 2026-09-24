@@ -31,6 +31,7 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
@@ -41,6 +42,7 @@ import (
 	"github.com/phoban01/battery-operator/internal/battery"
 	"github.com/phoban01/battery-operator/internal/batterysidecar"
 	"github.com/phoban01/battery-operator/internal/controller"
+	"github.com/phoban01/battery-operator/internal/controller/inventory"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -73,6 +75,7 @@ func main() {
 	var poolResync time.Duration
 	flag.DurationVar(&poolResync, "pool-resync-interval", controller.DefaultPoolResync,
 		"How often every Pool's status is refreshed from battery while the subscription to battery's events is down.")
+	var inventoryOptions inventory.Options
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
@@ -93,6 +96,7 @@ func main() {
 	signerConfig.BindFlags(flag.CommandLine)
 	batteryConfig.BindFlags(flag.CommandLine)
 	sidecarConfig.BindFlags(flag.CommandLine)
+	inventoryOptions.BindFlags(flag.CommandLine)
 	opts := zap.Options{
 		Development: true,
 	}
@@ -247,6 +251,23 @@ func main() {
 		Battery:   batteryClient,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "microvmclaim")
+		os.Exit(1)
+	}
+	// hosts is the Hosts battery runs with, which the Inventory Controller
+	// publishes after each restart of battery, for the Pool Controller.
+	hosts := inventory.NewHostSet()
+	if err := (&controller.InventoryReconciler{
+		Client: mgr.GetClient(),
+		Store: inventory.ConfigMapStore{
+			Reader: mgr.GetAPIReader(),
+			Writer: mgr.GetClient(),
+			Key:    client.ObjectKey{Namespace: signerConfig.Namespace, Name: sidecarConfig.ConfigMap},
+		},
+		Restarter: restarter,
+		Hosts:     hosts,
+		Options:   inventoryOptions,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "Failed to create controller", "controller", "inventory")
 		os.Exit(1)
 	}
 	// +kubebuilder:scaffold:builder

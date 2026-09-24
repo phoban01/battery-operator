@@ -228,9 +228,8 @@ consequence 1). The steps are:
   promptly: time does not pass while a restart window is waiting to open
   or close, or while battery is restarting.
 
-The requirements do not define the restart window (#74). The model's
-reading is above: restarts are at least a window apart, and every change
-settled in a window goes into its restart.
+IN-012 defines the restart window this way (#74): restarts are at least a
+window apart, and every change settled in a window goes into its restart.
 
 Invariants, all in `safety`:
 
@@ -246,7 +245,7 @@ Invariants, all in `safety`:
 
 The bound in `hostsFollowNodes` and `noNewVMOnFormerHost`, the settle time
 plus one restart window, is tight: one tick less fails. Until then a
-cordoned Host still gets new MicroVMs (#74).
+cordoned Host still gets new MicroVMs, as 04-inventory.md says.
 
 Two properties do not hold, and are not in `safety`; a scenario test in
 `pools_test.qnt` reaches each:

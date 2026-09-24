@@ -46,9 +46,8 @@ module pools {
 
   // The configured settle time (IN-011) and restart window (IN-012), in
   // ticks. Different values, so that a model that confuses them fails.
-  // The requirements do not define the restart window (#74); the model
-  // opens one when the first settled change is waiting, and applies every
-  // change settled by the time it closes.
+  // A restart window opens when the first settled change is waiting, and
+  // every change settled by the time it closes is applied (IN-012).
   pure val SETTLE: Time = 2
   pure val WINDOW: Time = 3
 
@@ -398,8 +397,10 @@ module pools {
   }
 
   //@= docs/requirements/04-inventory.md#applying
-  //@# The Inventory Controller SHALL apply every change that has
-  //@# settled within one restart window in a single restart of battery.
+  //@# When a change has settled and no restart window is open, the
+  //@# Inventory Controller SHALL open a restart window of the configured
+  //@# length, and SHALL apply every change that has settled by the time the
+  //@# window closes in a single restart of battery.
   //
   // The window closes: every change that has settled by now goes into one
   // restart. If the changes flapped back meanwhile, there is nothing to

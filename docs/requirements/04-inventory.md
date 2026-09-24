@@ -23,8 +23,10 @@ the list means rewriting its configuration and restarting it
 A Host joins only after its own Exec Agent has checked it (decision 10), so
 the Inventory Controller never admits a Node that could not run MicroVMs.
 A cordoned Host leaves battery's list so that battery places nothing new
-there; claims already Bound on it keep running, and the Exec Agent holds the
-Node's drain open until they end (EA-040).
+there, once the change has settled and its restart window has closed
+(IN-011, IN-012); until then battery can still place MicroVMs on it. Claims
+already Bound on it keep running, and the Exec Agent holds the Node's drain
+open until they end (EA-040).
 
 ## Applying the list {#applying}
 
@@ -32,13 +34,28 @@ Node's drain open until they end (EA-040).
   write the new list to battery's configuration and restart battery.
 - **IN-011** The Inventory Controller SHALL act on a change in whether a Node
   is a Host only after the change has held for the configured settle time.
-- **IN-012** The Inventory Controller SHALL apply every change that has
-  settled within one restart window in a single restart of battery.
+- **IN-012** When a change has settled and no restart window is open, the
+  Inventory Controller SHALL open a restart window of the configured
+  length, and SHALL apply every change that has settled by the time the
+  window closes in a single restart of battery.
 
 Every change restarts battery, so IN-011 and IN-012 keep a Host whose report
 flaps between ready and not ready, or a burst of Nodes joining, from
-restarting it over and over. A Host registration call or a configuration
-reload in battery would remove the restarts; it is one of the upstream asks.
+restarting it over and over. They also keep short the back-off with which
+the kubelet restarts battery, which grows while battery keeps exiting soon
+after starting.
+
+The restart window opens when the first settled change is waiting, not at
+a restart. A change still settling when the window closes waits for a
+window of its own, and a window whose changes all flapped back closes
+without a restart. Restarts are therefore at least one restart window
+apart, and a change reaches battery at least the settle time and at most
+the settle time plus one restart window after it happens. The settle time
+and the restart window are the Operator's flags `--inventory-settle-time`
+and `--inventory-restart-window`, 30 seconds and one minute by default.
+
+A Host registration call or a configuration reload in battery would remove
+the restarts; it is one of the upstream asks.
 
 How the Operator restarts battery is decided with the Manifests
 (`06-deployment.md#battery-sidecar`).
