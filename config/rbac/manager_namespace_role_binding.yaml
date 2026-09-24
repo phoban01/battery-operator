@@ -1,6 +1,20 @@
 # Binds the namespaced manager-role, which controller-gen generates from the
 # RBAC markers that name the Operator's namespace: read access to the CA
-# Secrets and write access to the CA bundle ConfigMap.
+# Secrets, write access to the CA bundle ConfigMap and to battery's
+# ConfigMap.
+#
+# This is the Operator's only access to Secrets: a Role in its own
+# namespace, naming the two CA Secrets. Its ClusterRole grants none.
+#= docs/requirements/06-deployment.md#access
+#/ The Manifests SHALL grant the Operator's identity no access to
+#/ Secrets outside its own namespace.
+#
+# No other binding the Manifests create grants access to the CA Secrets, and
+# in the Operator's pod only the manager container holds the Operator's
+# token (config/manager/manager.yaml).
+#= docs/requirements/09-certificates.md#spiffe-identity
+#/ The Manifests SHALL grant read access to the Secrets of the
+#/ serving CA and the `flintlockd` client CA to the Operator's identity only.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:

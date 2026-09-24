@@ -1,0 +1,67 @@
+# The serving CA signs the Hosts' flintlockd serving certificates and the
+# Exec Agents' serving certificates; the flintlockd client CA signs battery's
+# and the Exec Agents' client certificates. The Operator signs with both
+# (CT-002) and publishes their certificates (CT-005); only the Operator's
+# identity may read their Secrets (config/rbac, CT-022).
+#
+# CA rotation is not designed yet (ADR 0003, consequence 3). So that
+# renewal never invalidates what a CA has signed, each keeps its key across
+# renewals (rotationPolicy: Never), and lives ten years; cert-manager
+# renews it with the same key after two thirds of that.
+#= docs/requirements/09-certificates.md#spiffe-identity
+#/ The Manifests SHALL create the serving CA and the `flintlockd`
+#/ client CA as cert-manager CA certificates in the Operator's namespace.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: flintlockd-serving-ca
+  namespace: system
+  labels:
+    app.kubernetes.io/name: battery-operator
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  isCA: true
+  commonName: battery-operator flintlockd serving CA
+  secretName: flintlockd-serving-ca
+  duration: 87600h
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Never
+  usages:
+  - cert sign
+  - crl sign
+  - digital signature
+  issuerRef:
+    group: cert-manager.io
+    kind: Issuer
+    name: selfsigned
+---
+#= docs/requirements/09-certificates.md#spiffe-identity
+#/ The Manifests SHALL create the serving CA and the `flintlockd`
+#/ client CA as cert-manager CA certificates in the Operator's namespace.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: flintlockd-client-ca
+  namespace: system
+  labels:
+    app.kubernetes.io/name: battery-operator
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  isCA: true
+  commonName: battery-operator flintlockd client CA
+  secretName: flintlockd-client-ca
+  duration: 87600h
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Never
+  usages:
+  - cert sign
+  - crl sign
+  - digital signature
+  issuerRef:
+    group: cert-manager.io
+    kind: Issuer
+    name: selfsigned

@@ -18,6 +18,9 @@ resources:
 - ../crd
 - ../rbac
 - ../manager
+# The CAs and battery's client certificate, issued by cert-manager, which
+# has to be installed first.
+- ../certificates
 # [WEBHOOK] To enable webhook, uncomment all the sections with [WEBHOOK] prefix including the one in
 # crd/kustomization.yaml
 #- ../webhook

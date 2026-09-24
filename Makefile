@@ -6,7 +6,8 @@ IMAGE_TAG ?= latest
 # Image URL to use all building/pushing image targets
 IMG ?= $(IMAGE_REPO):$(IMAGE_TAG)
 EXEC_AGENT_IMG ?= $(IMAGE_REPO)/exec-agent:$(IMAGE_TAG)
-# battery's poolmgrd image, the Operator's sidecar in the e2e suite. Its tag is
+# battery's poolmgrd image, the Operator's sidecar (config/manager; `make
+# deploy` and `make build-installer` set it there). Its tag is
 # the battery version go.mod pins, without the leading v, so the sidecar and
 # the client's protos cannot drift apart.
 BATTERY_VERSION ?= $(shell awk '$$1 == "github.com/liquidmetal-dev/battery" { print $$2 }' go.mod)
@@ -67,8 +68,8 @@ vet: ## Run go vet against code.
 	go vet ./...
 
 .PHONY: test
-test: manifests generate fmt vet setup-envtest ## Run tests.
-	KUBEBUILDER_ASSETS="$(shell "$(ENVTEST)" use $(ENVTEST_K8S_VERSION) --bin-dir "$(LOCALBIN)" -p path)" go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out
+test: manifests generate fmt vet setup-envtest kustomize ## Run tests.
+	KUSTOMIZE="$(KUSTOMIZE)" KUBEBUILDER_ASSETS="$(shell "$(ENVTEST)" use $(ENVTEST_K8S_VERSION) --bin-dir "$(LOCALBIN)" -p path)" go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out
 
 # TODO(user): To use a different vendor for e2e tests, modify the setup under 'tests/e2e'.
 # The default setup assumes Kind is pre-installed and builds/loads the Manager Docker image locally.
@@ -141,7 +142,7 @@ docker-push: ## Build both images for linux/amd64 and linux/arm64 with Dagger an
 .PHONY: build-installer
 build-installer: manifests generate kustomize ## Generate a consolidated YAML with CRDs and deployment.
 	mkdir -p dist
-	cd config/manager && "$(KUSTOMIZE)" edit set image ghcr.io/phoban01/battery-operator=${IMG}
+	cd config/manager && "$(KUSTOMIZE)" edit set image ghcr.io/phoban01/battery-operator=${IMG} ghcr.io/liquidmetal-dev/poolmgrd=${POOLMGRD_IMG}
 	"$(KUSTOMIZE)" build config/default > dist/install.yaml
 
 ##@ Deployment
@@ -162,7 +163,7 @@ uninstall: manifests kustomize ## Uninstall CRDs from the K8s cluster specified 
 
 .PHONY: deploy
 deploy: manifests kustomize ## Deploy controller to the K8s cluster specified in ~/.kube/config.
-	cd config/manager && "$(KUSTOMIZE)" edit set image ghcr.io/phoban01/battery-operator=${IMG}
+	cd config/manager && "$(KUSTOMIZE)" edit set image ghcr.io/phoban01/battery-operator=${IMG} ghcr.io/liquidmetal-dev/poolmgrd=${POOLMGRD_IMG}
 	"$(KUSTOMIZE)" build config/default | "$(KUBECTL)" apply -f -
 
 .PHONY: undeploy

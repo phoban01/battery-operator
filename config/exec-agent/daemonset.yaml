@@ -73,7 +73,7 @@ spec:
             # containerd's devmapper pool_name on the Host.
             - --thin-pool=flintlock-thinpool
             # The Operator's trust domain: set it to your own.
-            - --trust-domain=cluster.local
+            - --trust-domain=battery.liquidmetal-x.dev
             - --flintlockd-cert-dir=/etc/battery/flintlockd
             # The Operator's CA bundle ConfigMap is in the agent's own
             # namespace, $POD_NAMESPACE, under its default name.

@@ -1,0 +1,50 @@
+# battery's configuration file (poolmgrd v0.3.3's JSON schema), mounted into
+# both the manager and battery at /etc/battery/config/config.json.
+#
+# The Inventory Controller replaces config.json with
+# internal/batterysidecar.Render's output for the Hosts it admits, then
+# restarts battery (DP-006); the Operator's RBAC lets it update this
+# ConfigMap by name (battery-operator-battery-config, after kustomize's
+# namePrefix). What ships here is Render with no Hosts, which
+# internal/batterysidecar's tests check byte for byte: poolmgrd v0.3.3
+# refuses to start with an empty Hosts list, so it holds one placeholder
+# Host that no Pool names and whose address never resolves.
+#
+# Every Host is reached over mutual TLS with battery's client certificate,
+# verified against the serving CA, at the paths the battery-tls volume
+# mounts them on. battery's own API is plaintext on loopback, which only
+# this pod's containers can reach.
+#= docs/requirements/06-deployment.md#battery-sidecar
+#/ The Manifests SHALL supply battery's configuration, its Hosts
+#/ included, from an object the Operator may write.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: battery-config
+  namespace: system
+  labels:
+    app.kubernetes.io/name: battery-operator
+    app.kubernetes.io/component: battery
+    app.kubernetes.io/managed-by: kustomize
+data:
+  config.json: |
+    {
+      "hosts": [
+        {
+          "name": "_no-hosts",
+          "address": "no-hosts.invalid:9090",
+          "tls": {
+            "cert_file": "/etc/battery/tls/tls.crt",
+            "key_file": "/etc/battery/tls/tls.key",
+            "ca_file": "/etc/battery/tls/serving-ca.crt"
+          }
+        }
+      ],
+      "api_server": {
+        "addr": "127.0.0.1:50051",
+        "tls": {
+          "insecure": true
+        }
+      },
+      "metrics_addr": "127.0.0.1:9090"
+    }

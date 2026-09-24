@@ -1,0 +1,21 @@
+# battery's SQLite database. Losing it would orphan the MicroVMs battery
+# created on the Hosts, so it outlives the pod; the Deployment's Recreate
+# strategy frees it before the next pod mounts it.
+#= docs/requirements/06-deployment.md#battery-sidecar
+#/ The Manifests SHALL keep battery's database on a persistent
+#/ volume.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: battery-data
+  namespace: system
+  labels:
+    app.kubernetes.io/name: battery-operator
+    app.kubernetes.io/component: battery
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
