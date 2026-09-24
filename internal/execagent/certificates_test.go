@@ -31,23 +31,21 @@ import (
 	"testing"
 	"time"
 
-	authorizationv1 "k8s.io/api/authorization/v1"
 	certificatesv1 "k8s.io/api/certificates/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/phoban01/battery-operator/internal/clock"
-	"github.com/phoban01/battery-operator/internal/controller"
 	"github.com/phoban01/battery-operator/internal/execagent"
-	"github.com/phoban01/battery-operator/internal/execagent/execagenttest"
 	"github.com/phoban01/battery-operator/internal/fakeflintlock"
 	"github.com/phoban01/battery-operator/internal/hostcert"
 )
 
-// The tests here run the Exec Agent against the Operator's real signer
-// (internal/controller), which execagenttest runs in-process with throwaway
-// CAs. The agent's CertificateSigningRequests are made with its real bound
-// ServiceAccount token, which carries its Node, so the signer approves them
-// exactly as it would in a cluster.
+// The tests here run the Exec Agent against a fake API server whose
+// signer approves and signs every CertificateSigningRequest at once, from
+// throwaway CAs, recording the requester as the API server does. Whether
+// the Operator signs a request is internal/controller's to test; the e2e
+// suite has the Operator sign the agent's real requests (test/e2e,
+// TestHostCertificates).
 
 //= docs/requirements/05-exec-agent.md#certificates
 //= type=test
@@ -87,12 +85,11 @@ import (
 // exec API with the certificate it obtained.
 func TestAgentRequestsItsCertificates(t *testing.T) {
 	t.Parallel()
-	needEnv(t)
-	h := env.NewHost(t, execagenttest.HostOptions{})
+	h := newHost(t, hostOptions{})
 	leaves := h.Certificates().Current()
 	flintlockdKey := readKey(t, filepath.Join(h.CertDir, execagent.FlintlockdKeyFile))
 
-	requests := agentRequests(t, h.Node)
+	requests := agentRequests(t, h)
 	want := map[string]struct {
 		uri    string
 		ip     bool
@@ -100,15 +97,15 @@ func TestAgentRequestsItsCertificates(t *testing.T) {
 		public crypto.PublicKey
 	}{
 		hostcert.ServingSigner: {
-			uri: hostcert.HostID(execagenttest.TrustDomain, h.Node), ip: true,
+			uri: hostcert.HostID(trustDomain, h.Node), ip: true,
 			usages: serverUsages, public: flintlockdKey.Public(),
 		},
 		hostcert.ClientSigner: {
-			uri:    hostcert.ExecAgentID(execagenttest.TrustDomain, h.Node),
+			uri:    hostcert.ExecAgentID(trustDomain, h.Node),
 			usages: clientUsages, public: leaves.FlintlockdClient.PublicKey,
 		},
 		hostcert.ExecAgentServingSigner: {
-			uri: hostcert.ExecAgentID(execagenttest.TrustDomain, h.Node), ip: true,
+			uri: hostcert.ExecAgentID(trustDomain, h.Node), ip: true,
 			usages: serverUsages, public: leaves.Serving.PublicKey,
 		},
 	}
@@ -143,7 +140,7 @@ func TestAgentRequestsItsCertificates(t *testing.T) {
 		if w.ip {
 			wantIPs = 1
 		}
-		if len(req.IPAddresses) != wantIPs || w.ip && req.IPAddresses[0].String() != execagenttest.HostAddress {
+		if len(req.IPAddresses) != wantIPs || w.ip && req.IPAddresses[0].String() != hostAddress {
 			t.Errorf("%s: the request names the addresses %v", csr.Spec.SignerName, req.IPAddresses)
 		}
 		if !slices.Equal(csr.Spec.Usages, w.usages) {
@@ -160,7 +157,7 @@ func TestAgentRequestsItsCertificates(t *testing.T) {
 	// The exec API serves the certificate from exec-agent-serving, which a
 	// consumer verifies against the published serving CA for the Host's
 	// address.
-	caPEM, err := os.ReadFile(env.ServingCAFile)
+	caPEM, err := os.ReadFile(h.ServingCAFile)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -203,8 +200,7 @@ func TestAgentRequestsItsCertificates(t *testing.T) {
 // restarted with it, and obtains a new client certificate.
 func TestAgentDeliversFlintlockdCertificates(t *testing.T) {
 	t.Parallel()
-	needEnv(t)
-	h := env.NewHost(t, execagenttest.HostOptions{})
+	h := newHost(t, hostOptions{})
 	awaitReady(t, h)
 
 	entries, err := os.ReadDir(h.CertDir)
@@ -236,7 +232,7 @@ func TestAgentDeliversFlintlockdCertificates(t *testing.T) {
 	if !leaf.Equal(h.Certificates().Current().FlintlockdServing) {
 		t.Error("flintlockd's certificate on the Host is not the one the agent obtained")
 	}
-	cm, err := env.Admin.CoreV1().ConfigMaps(execagenttest.AgentNamespace).Get(context.Background(), controller.DefaultCABundleConfigMap, metav1.GetOptions{})
+	cm, err := h.Kube.CoreV1().ConfigMaps(agentNamespace).Get(context.Background(), hostcert.CABundleConfigMap, metav1.GetOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -244,7 +240,7 @@ func TestAgentDeliversFlintlockdCertificates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(bundle) != cm.Data[controller.ClientCAKey] {
+	if string(bundle) != cm.Data[hostcert.ClientCAKey] {
 		t.Error("the client CA bundle on the Host is not the one the Operator publishes")
 	}
 
@@ -282,15 +278,14 @@ func TestAgentDeliversFlintlockdCertificates(t *testing.T) {
 // reported not ready.
 func TestAgentRefusesFlintlockdFromAnotherCA(t *testing.T) {
 	t.Parallel()
-	needEnv(t)
 	impostor, err := fakeflintlock.WriteTestCerts(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
 	// The impostor asks for no client certificate, so only the agent's own
 	// verification can refuse it.
-	h := env.NewHost(t, execagenttest.HostOptions{FlintlockdTLS: impostor.ServerTLS(false)})
-	execagenttest.Eventually(t, "the agent refusing flintlockd's certificate", func() bool {
+	h := newHost(t, hostOptions{FlintlockdTLS: impostor.ServerTLS(false)})
+	eventually(t, "the agent refusing flintlockd's certificate", func() bool {
 		a := h.ReadNode().Annotations
 		return a[execagent.AnnotationReady] == "false" && a[execagent.AnnotationReason] == execagent.ReasonFlintlockdNotReady &&
 			strings.Contains(a[execagent.AnnotationMessage], "certificate")
@@ -308,9 +303,8 @@ func TestAgentRefusesFlintlockdFromAnotherCA(t *testing.T) {
 // Host stays ready.
 func TestAgentRenewsBeforeTwoThirds(t *testing.T) {
 	t.Parallel()
-	needEnv(t)
 	clk := clock.NewFake(time.Now())
-	h := env.NewHost(t, execagenttest.HostOptions{CertificateClock: clk})
+	h := newHost(t, hostOptions{CertificateClock: clk})
 	awaitReady(t, h)
 	first := h.Certificates().Current()
 	firstFile, err := os.ReadFile(filepath.Join(h.CertDir, execagent.FlintlockdCertFile))
@@ -330,24 +324,24 @@ func TestAgentRenewsBeforeTwoThirds(t *testing.T) {
 	}
 	waitCtx, cancel := context.WithTimeout(context.Background(), testTimeout)
 	defer cancel()
-	requests := len(agentRequests(t, h.Node))
+	requests := len(agentRequests(t, h))
 
 	if err := clk.BlockUntil(waitCtx, 1); err != nil {
 		t.Fatal(err)
 	}
 	clk.Set(at(0.5, time.Time.Before))
 	time.Sleep(500 * time.Millisecond)
-	if n := len(agentRequests(t, h.Node)); n != requests {
+	if n := len(agentRequests(t, h)); n != requests {
 		t.Errorf("halfway through their validity the agent made %d new requests, want none", n-requests)
 	}
 
 	clk.Set(at(2.0/3, time.Time.After))
-	execagenttest.Eventually(t, "every certificate renewed", func() bool {
+	eventually(t, "every certificate renewed", func() bool {
 		now := h.Certificates().Current()
 		return !now.FlintlockdServing.Equal(first.FlintlockdServing) &&
 			!now.FlintlockdClient.Equal(first.FlintlockdClient) && !now.Serving.Equal(first.Serving)
 	})
-	if n := len(agentRequests(t, h.Node)); n != requests+3 {
+	if n := len(agentRequests(t, h)); n != requests+3 {
 		t.Errorf("the agent made %d new requests to renew three certificates", n-requests)
 	}
 	now, err := os.ReadFile(filepath.Join(h.CertDir, execagent.FlintlockdCertFile))
@@ -363,74 +357,6 @@ func TestAgentRenewsBeforeTwoThirds(t *testing.T) {
 	awaitReady(t, h)
 }
 
-//= docs/requirements/05-exec-agent.md#certificates
-//= type=test
-//# The Manifests SHALL grant the Exec Agent's identity permission
-//# to create and read `CertificateSigningRequest`s, and no other permission
-//# on them.
-
-// TestAgentMayOnlyCreateAndReadRequests asks the API server, with the
-// shipped RBAC applied, what the Exec Agent's identity may do with
-// CertificateSigningRequests and the signers: create and get, and nothing
-// else. Its one other certificate grant, get on the Operator's CA bundle
-// ConfigMap and no other ConfigMap, is checked too.
-func TestAgentMayOnlyCreateAndReadRequests(t *testing.T) {
-	t.Parallel()
-	needEnv(t)
-	allowed := func(attrs authorizationv1.ResourceAttributes) bool {
-		t.Helper()
-		review, err := env.Admin.AuthorizationV1().SubjectAccessReviews().Create(context.Background(), &authorizationv1.SubjectAccessReview{
-			Spec: authorizationv1.SubjectAccessReviewSpec{
-				User:               execagenttest.AgentUser,
-				Groups:             []string{"system:serviceaccounts", "system:serviceaccounts:" + execagenttest.AgentNamespace, "system:authenticated"},
-				ResourceAttributes: &attrs,
-			},
-		}, metav1.CreateOptions{})
-		if err != nil {
-			t.Fatal(err)
-		}
-		return review.Status.Allowed
-	}
-	csrs := func(verb, sub string) authorizationv1.ResourceAttributes {
-		return authorizationv1.ResourceAttributes{Group: certificatesv1.GroupName, Resource: "certificatesigningrequests", Subresource: sub, Verb: verb}
-	}
-	for _, verb := range []string{"create", "get"} {
-		if !allowed(csrs(verb, "")) {
-			t.Errorf("the agent may not %s CertificateSigningRequests", verb)
-		}
-	}
-	for _, verb := range []string{"list", "watch", "update", "patch", "delete", "deletecollection"} {
-		if allowed(csrs(verb, "")) {
-			t.Errorf("the agent may %s CertificateSigningRequests", verb)
-		}
-	}
-	for _, sub := range []string{"approval", "status"} {
-		if allowed(csrs("update", sub)) {
-			t.Errorf("the agent may update CertificateSigningRequests/%s", sub)
-		}
-	}
-	for _, signer := range []string{hostcert.ServingSigner, hostcert.ClientSigner, hostcert.ExecAgentServingSigner} {
-		for _, verb := range []string{"approve", "sign"} {
-			if allowed(authorizationv1.ResourceAttributes{Group: certificatesv1.GroupName, Resource: "signers", Name: signer, Verb: verb}) {
-				t.Errorf("the agent may %s for %s", verb, signer)
-			}
-		}
-	}
-	configMap := func(verb, name string) authorizationv1.ResourceAttributes {
-		return authorizationv1.ResourceAttributes{Namespace: execagenttest.AgentNamespace, Resource: "configmaps", Name: name, Verb: verb}
-	}
-	if !allowed(configMap("get", controller.DefaultCABundleConfigMap)) {
-		t.Error("the agent may not read the Operator's CA bundle ConfigMap")
-	}
-	for _, attrs := range []authorizationv1.ResourceAttributes{
-		configMap("get", "other"), configMap("list", ""), configMap("update", controller.DefaultCABundleConfigMap),
-	} {
-		if allowed(attrs) {
-			t.Errorf("the agent may %s ConfigMap %q", attrs.Verb, attrs.Name)
-		}
-	}
-}
-
 var (
 	serverUsages = []certificatesv1.KeyUsage{
 		certificatesv1.UsageDigitalSignature, certificatesv1.UsageKeyEncipherment, certificatesv1.UsageServerAuth,
@@ -440,17 +366,13 @@ var (
 	}
 )
 
-// agentRequests are the CertificateSigningRequests the Exec Agent of node
+// agentRequests are the CertificateSigningRequests the Exec Agent of h
 // has made.
-func agentRequests(t *testing.T, node string) []certificatesv1.CertificateSigningRequest {
+func agentRequests(t *testing.T, h *testHost) []certificatesv1.CertificateSigningRequest {
 	t.Helper()
-	list, err := env.Admin.CertificatesV1().CertificateSigningRequests().List(context.Background(), metav1.ListOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
 	var out []certificatesv1.CertificateSigningRequest
-	for _, csr := range list.Items {
-		if csr.Spec.Username == execagenttest.AgentUser && slices.Equal(csr.Spec.Extra[hostcert.NodeNameExtra], certificatesv1.ExtraValue{node}) {
+	for _, csr := range h.Requests(t) {
+		if csr.Spec.Username == agentUser && slices.Equal(csr.Spec.Extra[hostcert.NodeNameExtra], certificatesv1.ExtraValue{h.Node}) {
 			out = append(out, csr)
 		}
 	}
@@ -458,9 +380,9 @@ func agentRequests(t *testing.T, node string) []certificatesv1.CertificateSignin
 }
 
 // awaitReady waits until the Host's Node report says it is ready.
-func awaitReady(t *testing.T, h *execagenttest.Host) {
+func awaitReady(t *testing.T, h *testHost) {
 	t.Helper()
-	execagenttest.Eventually(t, "the Host reported ready", func() bool {
+	eventually(t, "the Host reported ready", func() bool {
 		return h.ReadNode().Annotations[execagent.AnnotationReason] == execagent.ReasonReady
 	})
 }

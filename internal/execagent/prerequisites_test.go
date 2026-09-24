@@ -29,7 +29,7 @@ import (
 )
 
 // fakePrerequisites points cfg at stand-ins for KVM and the thin pool, as
-// execagenttest.FakeHostPrerequisites does for the envtest Hosts: /dev/null
+// fakeHostPrerequisites does for the Hosts of package execagent_test: /dev/null
 // as the KVM device node, since a test cannot make a character device, a
 // sysfs directory listing the KVM device, and a sysfs block directory whose
 // one device-mapper device is the thin pool under its default name.
@@ -171,7 +171,7 @@ func TestPrerequisiteDefaults(t *testing.T) {
 //# `battery.liquidmetal-x.dev/flintlockd-address`.
 
 // TestNodeReportCarriesFlintlockdAddress checks the Node report's
-// flintlockd address by its literal key. node_envtest_test.go's
+// flintlockd address by its literal key. node_test.go's
 // TestNodeReport checks it on a Node, through Run.
 func TestNodeReportCarriesFlintlockdAddress(t *testing.T) {
 	t.Parallel()

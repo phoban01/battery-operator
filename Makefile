@@ -67,9 +67,12 @@ fmt: ## Run go fmt against code.
 vet: ## Run go vet against code.
 	go vet ./...
 
+# No test needs the envtest binaries (ADR 0006, TD-027): the unit tests use
+# fakes, and what needs an API server is in the e2e suite. setup-envtest
+# stays for a use that TD-027 justifies.
 .PHONY: test
-test: manifests generate fmt vet setup-envtest kustomize ## Run tests.
-	KUSTOMIZE="$(KUSTOMIZE)" KUBEBUILDER_ASSETS="$(shell "$(ENVTEST)" use $(ENVTEST_K8S_VERSION) --bin-dir "$(LOCALBIN)" -p path)" go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out
+test: manifests generate fmt vet kustomize ## Run tests.
+	KUSTOMIZE="$(KUSTOMIZE)" go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out
 
 # The e2e suite (test/e2e/README.md, ADR 0006): sigs.k8s.io/e2e-framework
 # creates a kind cluster from test/e2e/kind-config.yaml, loads the images

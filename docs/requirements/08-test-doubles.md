@@ -61,5 +61,5 @@ The tests are in two layers ([ADR 0006](../adr/0006-unit-tests-and-kind-e2e.md))
 Logic is unit-tested with fakes, which the scope and subreconciler structure
 of CLAUDE.md makes possible, and anything that needs a real API server is
 tested end to end in kind, with the real battery. TD-020 to TD-022 required
-envtest and are withdrawn; the envtest suites that remain are to be moved
+envtest and are withdrawn; the envtest suites of the first waves have moved
 onto the two layers.

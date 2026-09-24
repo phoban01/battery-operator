@@ -14,74 +14,23 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Package layers checks that the tests keep to their two layers (ADR 0006,
-// docs/requirements/08-test-doubles.md#test-environments): unit tests with
-// fakes, and the e2e suite on kind, with envtest only where a file says why.
 package layers
 
 import (
-	"go/parser"
-	"go/token"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"testing"
 )
 
-const (
-	// envtestPackage starts a kube-apiserver and etcd in the test process.
-	envtestPackage = "sigs.k8s.io/controller-runtime/pkg/envtest"
-	// td027 is the citation a file that imports envtest carries, beside the
-	// reason it cannot use a fake or the kind cluster instead.
-	td027 = "//" + "# The unit tests and the e2e suite SHALL use envtest only where"
-	// repoRoot is the repository, from this package's directory.
-	repoRoot = "../.."
-)
+// repoRoot is the repository, from this package's directory.
+const repoRoot = "../.."
 
-// skipDirs hold no sources of this project's.
-var skipDirs = []string{".git", ".gopath", ".devbox", ".run", "bin", "node_modules", "vendor"}
-
-// envtestUsers returns the Go files under root that import envtest, and of
-// those, the ones without the TD-027 citation.
+// envtestUsers is EnvtestUsers, failing t when the walk fails.
 func envtestUsers(t *testing.T, root string) (users, unexplained []string) {
 	t.Helper()
-	fset := token.NewFileSet()
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			if path != root && slices.Contains(skipDirs, d.Name()) {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(path, ".go") {
-			return nil
-		}
-		f, err := parser.ParseFile(fset, path, nil, parser.ImportsOnly)
-		if err != nil {
-			return err
-		}
-		for _, imp := range f.Imports {
-			if p, _ := strconv.Unquote(imp.Path.Value); p != envtestPackage {
-				continue
-			}
-			rel, _ := filepath.Rel(root, path)
-			users = append(users, rel)
-			src, err := os.ReadFile(path)
-			if err != nil {
-				return err
-			}
-			if !strings.Contains(string(src), td027) {
-				unexplained = append(unexplained, rel)
-			}
-		}
-		return nil
-	})
+	users, unexplained, err := EnvtestUsers(root)
 	if err != nil {
 		t.Fatalf("walking %s: %v", root, err)
 	}
@@ -130,7 +79,7 @@ func TestEnvtestUsersAreFound(t *testing.T) {
 	envtestImport := "import \"sigs.k8s.io/controller-runtime/pkg/envtest\"\n\n"
 	write("b/unexplained_test.go", "package b\n\n"+envtestImport+"var _ envtest.Environment\n")
 	write("c/explained_test.go", "package c\n\n"+envtestImport+
-		"//"+"= docs/requirements/08-test-doubles.md#test-environments\n"+td027+"\n// Why.\nvar _ envtest.Environment\n")
+		"//"+"= docs/requirements/08-test-doubles.md#test-environments\n"+TD027+"\n// Why.\nvar _ envtest.Environment\n")
 	write("bin/ignored.go", "package bin\n\n"+envtestImport)
 
 	users, unexplained := envtestUsers(t, root)

@@ -30,7 +30,6 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/phoban01/battery-operator/internal/execagent/execagenttest"
 	"github.com/phoban01/battery-operator/internal/fakeflintlock"
 )
 
@@ -50,7 +49,7 @@ import (
 // never reaches flintlockd.
 func TestExecRelaysACommand(t *testing.T) {
 	t.Parallel()
-	f := newFixture(t, execagenttest.HostOptions{})
+	f := newFixture(t, hostOptions{})
 	f.bind("claim")
 
 	stdinSeen := make(chan string, 1)
@@ -128,7 +127,7 @@ func TestExecRelaysACommand(t *testing.T) {
 // exits. A relay that held output back until the end would never finish.
 func TestExecStreamsOutputAsItIsProduced(t *testing.T) {
 	t.Parallel()
-	f := newFixture(t, execagenttest.HostOptions{})
+	f := newFixture(t, hostOptions{})
 	f.bind("claim")
 	seen := make(chan struct{})
 	f.host.Fake.SetExec(func(ctx context.Context, e *fakeflintlock.Exec) (int32, error) {
@@ -196,7 +195,7 @@ func runLong(ctx context.Context, client execv1.MicroVMExecClient, start *execv1
 // the guest.
 func TestExecCancellationAndTimeout(t *testing.T) {
 	t.Parallel()
-	f := newFixture(t, execagenttest.HostOptions{})
+	f := newFixture(t, hostOptions{})
 	f.bind("claim")
 	cancelled := make(chan struct{}, 1)
 	f.host.Fake.SetExec(blockUntilCancelled(cancelled))
@@ -251,7 +250,7 @@ func TestExecCancellationAndTimeout(t *testing.T) {
 // the restart the agent serves again.
 func TestACutResponseIsNeverASuccess(t *testing.T) {
 	t.Parallel()
-	f := newFixture(t, execagenttest.HostOptions{})
+	f := newFixture(t, hostOptions{})
 	f.bind("claim")
 
 	t.Run("flintlockd drops the stream before the exit code", func(t *testing.T) {
@@ -298,7 +297,7 @@ func TestACutResponseIsNeverASuccess(t *testing.T) {
 		}
 		f.host.Fake.SetExec(nil)
 		f.host.StartAgent()
-		execagenttest.Eventually(t, "the restarted agent to serve", func() bool {
+		eventually(t, "the restarted agent to serve", func() bool {
 			r := exchange(ctx, client, f.start("after-restart"), "", nil)
 			return r.err == nil && r.gotExit && r.exitCode == 0
 		})
@@ -310,7 +309,7 @@ func TestACutResponseIsNeverASuccess(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*testTimeout)
 		defer cancel()
 		proxy := newCutProxy(t, f.host.Address)
-		client := execv1.NewMicroVMExecClient(conn(t, proxy.addr(), env.ServingCAFile, f.holder.Token))
+		client := execv1.NewMicroVMExecClient(conn(t, proxy.addr(), f.host.ServingCAFile, f.holder.Token))
 		started, done := runLong(ctx, client, f.start("cut-connection"))
 		select {
 		case <-started:
@@ -347,7 +346,7 @@ func TestACutResponseIsNeverASuccess(t *testing.T) {
 // flintlockd.
 func TestAHungFlintlockdFailsWithinTheDeadline(t *testing.T) {
 	t.Parallel()
-	f := newFixture(t, execagenttest.HostOptions{ExecOpenTimeout: time.Second})
+	f := newFixture(t, hostOptions{ExecOpenTimeout: time.Second})
 	f.bind("claim")
 	f.host.Fake.SetFaults(fakeflintlock.Faults{Unresponsive: true})
 	defer f.host.Fake.SetFaults(fakeflintlock.Faults{})

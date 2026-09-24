@@ -23,13 +23,11 @@ import (
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	authenticationv1 "k8s.io/api/authentication/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	batteryv1alpha1 "github.com/phoban01/battery-operator/api/v1alpha1"
 	"github.com/phoban01/battery-operator/internal/execagent"
-	"github.com/phoban01/battery-operator/internal/execagent/execagenttest"
 )
 
 //= docs/requirements/05-exec-agent.md#authorization
@@ -58,44 +56,35 @@ import (
 
 // TestExecOnlyWithAClaimTokenOfABoundClaim tries to run a command once for
 // each way one of the four checks of EA-010 to EA-013 can fail with the
-// other three passing, and once with all four passing. Every token is a
-// real ServiceAccount token from TokenRequest, which the agent reviews with
-// a real TokenReview, every claim is a real MicroVMClaim, and every claim
-// token is bound to a real Secret. Each refusal is checked to be the right
-// status and never to have reached flintlockd; the Holder's claim token of
-// a Bound, unexpired claim on this MicroVM and this Host runs its command.
+// other three passing, and once with all four passing. The fake API server
+// reviews each token as the API server does: for the audiences it was
+// issued for, and while the Secret it is bound to has the uid it had. Every
+// claim is a MicroVMClaim that the agent reads through its claim lookup.
+// Each refusal is checked to be the right status and never to have reached
+// flintlockd; the Holder's claim token of a Bound, unexpired claim on this
+// MicroVM and this Host runs its command. The e2e suite has real tokens
+// reviewed by a real API server (test/e2e, TestExecAgentAuthentication).
 func TestExecOnlyWithAClaimTokenOfABoundClaim(t *testing.T) {
 	t.Parallel()
-	f := newFixture(t, execagenttest.HostOptions{})
-	other := newFixture(t, execagenttest.HostOptions{})
-	stranger := env.ServiceAccountToken(t, f.ns, "stranger")
+	f := newFixture(t, hostOptions{})
+	stranger := f.host.serviceAccountToken(f.ns, "stranger")
 	hour := time.Now().Add(time.Hour)
 
 	// claim writes a claim of the holder that passes EA-013 unless change
 	// says otherwise, with its Secret.
-	claim := func(name string, change func(*execagenttest.ClaimStatus)) {
-		st := execagenttest.ClaimStatus{Phase: batteryv1alpha1.MicroVMClaimBound, VMUID: f.host.VMUID, HostNode: f.host.Node, ExpiresAt: hour}
+	claim := func(name string, change func(*claimStatus)) {
+		st := claimStatus{Phase: batteryv1alpha1.MicroVMClaimBound, VMUID: f.host.VMUID, HostNode: f.host.Node, ExpiresAt: hour}
 		if change != nil {
 			change(&st)
 		}
-		env.PutClaim(t, f.ns, name, f.holder.Name, st)
+		f.host.PutClaim(t, f.ns, name, f.holder.Name, st)
 	}
 	// claimToken is the holder's claim token for claim name.
 	claimToken := func(name string) string {
-		return env.ClaimToken(t, f.ns, f.holder.Name, name+execagent.ExecSecretSuffix)
+		return f.host.ClaimToken(t, f.ns, f.holder.Name, name+execagent.ExecSecretSuffix)
 	}
 	// secret makes a Secret of the consumer's namespace.
-	secret := func(name string) *corev1.Secret {
-		s, err := env.Admin.CoreV1().Secrets(f.ns).Create(context.Background(),
-			&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name}}, metav1.CreateOptions{})
-		if err != nil {
-			t.Fatal(err)
-		}
-		return s
-	}
-	bindTo := func(s *corev1.Secret) *authenticationv1.BoundObjectReference {
-		return &authenticationv1.BoundObjectReference{Kind: "Secret", APIVersion: "v1", Name: s.Name, UID: s.UID}
-	}
+	secret := func(name string) *corev1.Secret { return f.host.CreateSecret(t, f.ns, name) }
 	agentAudience := []string{execagent.DefaultTokenAudience}
 
 	cases := []struct {
@@ -116,27 +105,27 @@ func TestExecOnlyWithAClaimTokenOfABoundClaim(t *testing.T) {
 		}},
 		{name: "EA-010: a claim token for the API server's audience", want: codes.Unauthenticated, token: func(name string) string {
 			claim(name, nil)
-			s, err := env.Admin.CoreV1().Secrets(f.ns).Get(context.Background(), name+execagent.ExecSecretSuffix, metav1.GetOptions{})
+			s, err := f.host.Kube.CoreV1().Secrets(f.ns).Get(context.Background(), name+execagent.ExecSecretSuffix, metav1.GetOptions{})
 			if err != nil {
 				t.Fatal(err)
 			}
-			return env.Token(t, f.ns, f.holder.Name, nil, bindTo(s))
+			return f.host.Token(f.ns, f.holder.Name, nil, s)
 		}},
 
 		// EA-011: the token is the Holder's.
 		{name: "EA-011: another account's token bound to the claim's secret", want: codes.PermissionDenied, token: func(name string) string {
 			claim(name, nil)
-			return env.ClaimToken(t, f.ns, stranger.Name, name+execagent.ExecSecretSuffix)
+			return f.host.ClaimToken(t, f.ns, stranger.Name, name+execagent.ExecSecretSuffix)
 		}},
 
 		// EA-012: the token is bound to the claim's Secret, by name and uid.
 		{name: "EA-012: the holder's token bound to nothing", want: codes.PermissionDenied, token: func(name string) string {
 			claim(name, nil)
-			return env.Token(t, f.ns, f.holder.Name, agentAudience, nil)
+			return f.host.Token(f.ns, f.holder.Name, agentAudience, nil)
 		}},
 		{name: "EA-012: the holder's token bound to a secret of another name", want: codes.PermissionDenied, token: func(name string) string {
 			claim(name, nil)
-			return env.Token(t, f.ns, f.holder.Name, agentAudience, bindTo(secret(name+"-other")))
+			return f.host.Token(f.ns, f.holder.Name, agentAudience, secret(name+"-other"))
 		}},
 		{name: "EA-012: a token bound to an earlier secret of the same name", want: codes.Unauthenticated, token: func(name string) string {
 			claim(name, nil)
@@ -144,7 +133,7 @@ func TestExecOnlyWithAClaimTokenOfABoundClaim(t *testing.T) {
 			// The Secret is made again: same name, another uid. The
 			// token names the old uid, and the API server's review, which
 			// has not seen this token yet, refuses it.
-			if err := env.Admin.CoreV1().Secrets(f.ns).Delete(context.Background(), name+execagent.ExecSecretSuffix, metav1.DeleteOptions{}); err != nil {
+			if err := f.host.Kube.CoreV1().Secrets(f.ns).Delete(context.Background(), name+execagent.ExecSecretSuffix, metav1.DeleteOptions{}); err != nil {
 				t.Fatal(err)
 			}
 			secret(name + execagent.ExecSecretSuffix)
@@ -154,25 +143,25 @@ func TestExecOnlyWithAClaimTokenOfABoundClaim(t *testing.T) {
 		// EA-013: the claim is Bound, unexpired, and names this MicroVM and
 		// this Host.
 		{name: "EA-013: a pending claim", want: codes.PermissionDenied, token: func(name string) string {
-			claim(name, func(st *execagenttest.ClaimStatus) {
-				*st = execagenttest.ClaimStatus{Phase: batteryv1alpha1.MicroVMClaimPending}
+			claim(name, func(st *claimStatus) {
+				*st = claimStatus{Phase: batteryv1alpha1.MicroVMClaimPending}
 			})
 			return claimToken(name)
 		}},
 		{name: "EA-013: an expired claim", want: codes.PermissionDenied, token: func(name string) string {
-			claim(name, func(st *execagenttest.ClaimStatus) { st.Phase = batteryv1alpha1.MicroVMClaimExpired })
+			claim(name, func(st *claimStatus) { st.Phase = batteryv1alpha1.MicroVMClaimExpired })
 			return claimToken(name)
 		}},
 		{name: "EA-013: a bound claim whose lease has run out", want: codes.PermissionDenied, token: func(name string) string {
-			claim(name, func(st *execagenttest.ClaimStatus) { st.ExpiresAt = time.Now().Add(-time.Minute) })
+			claim(name, func(st *claimStatus) { st.ExpiresAt = time.Now().Add(-time.Minute) })
 			return claimToken(name)
 		}},
 		{name: "EA-013: a claim for another microvm", want: codes.PermissionDenied, token: func(name string) string {
-			claim(name, func(st *execagenttest.ClaimStatus) { st.VMUID = other.host.VMUID })
+			claim(name, func(st *claimStatus) { st.VMUID = "another-microvm" })
 			return claimToken(name)
 		}},
 		{name: "EA-013: a claim for another host", want: codes.PermissionDenied, token: func(name string) string {
-			claim(name, func(st *execagenttest.ClaimStatus) { st.HostNode = other.host.Node })
+			claim(name, func(st *claimStatus) { st.HostNode = "another-host" })
 			return claimToken(name)
 		}},
 
@@ -219,7 +208,7 @@ func TestExecOnlyWithAClaimTokenOfABoundClaim(t *testing.T) {
 	if r := exchange(ctx, client, f.start("before-release"), "", nil); r.err != nil || !r.gotExit {
 		t.Fatalf("exec with a bound claim = (%v, %v)", r.gotExit, r.err)
 	}
-	env.DeleteClaim(t, f.ns, "released-later")
+	f.host.DeleteClaim(t, f.ns, "released-later")
 	if r := exchange(ctx, client, f.start("after-release"), "", nil); status.Code(r.err) != codes.PermissionDenied {
 		t.Errorf("exec after the claim was deleted = %v, want permission denied", r.err)
 	}

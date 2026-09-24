@@ -21,7 +21,6 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"os"
@@ -36,44 +35,30 @@ import (
 
 	batteryv1alpha1 "github.com/phoban01/battery-operator/api/v1alpha1"
 	"github.com/phoban01/battery-operator/internal/execagent"
-	"github.com/phoban01/battery-operator/internal/execagent/execagenttest"
 )
 
-// The tests of this package's _test files run the Exec Agent against a real
-// kube-apiserver serving this project's CRDs, with the agent's
-// shipped RBAC and admission policy, and a fake flintlockd served over
-// mutual TLS (execagenttest). Callers are real ServiceAccounts with real
-// tokens, which the agent reviews with real TokenReviews. Without the
-// envtest binaries, which `make test` provides, they skip.
+// consumerNamespace is the namespace of a fixture's consumer.
+const consumerNamespace = "consumer"
 
-// env is the shared API server, nil when there is none.
-var env *execagenttest.Env
-
-func TestMain(m *testing.M) {
-	e, err := execagenttest.Start()
-	switch {
-	case errors.Is(err, execagenttest.ErrNoAssets):
-	case err != nil:
-		_, _ = fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	default:
-		env = e
-	}
-	code := m.Run()
-	if env != nil {
-		_ = env.Stop()
-	}
-	os.Exit(code)
+// identity is a ServiceAccount with a token of its own.
+type identity struct {
+	// Namespace and Name are the ServiceAccount's.
+	Namespace string
+	Name      string
+	// User is the user name the token authenticates as.
+	User string
+	// Token is the token.
+	Token string
 }
 
-// testTimeout bounds every wait in these tests; hitting it means a hang.
-const testTimeout = 30 * time.Second
-
-// needEnv skips a test without an API server.
-func needEnv(t *testing.T) {
-	t.Helper()
-	if env == nil {
-		t.Skip(execagenttest.ErrNoAssets)
+// serviceAccountToken is an identity of the ServiceAccount namespace/name,
+// with a token for the API server's own audience and bound to no object,
+// as a consumer's projected token is. The Exec Agent refuses it (EA-010);
+// a claim token is for the agent's audience.
+func (c *fakeCluster) serviceAccountToken(namespace, name string) identity {
+	return identity{
+		Namespace: namespace, Name: name, User: "system:serviceaccount:" + namespace + ":" + name,
+		Token: c.Token(namespace, name, nil, nil),
 	}
 }
 
@@ -81,16 +66,15 @@ func needEnv(t *testing.T) {
 // consumer's, and the consumer's identity in it.
 type fixture struct {
 	t      *testing.T
-	host   *execagenttest.Host
+	host   *testHost
 	ns     string
-	holder execagenttest.Identity
+	holder identity
 }
 
-func newFixture(t *testing.T, opts execagenttest.HostOptions) *fixture {
+func newFixture(t *testing.T, opts hostOptions) *fixture {
 	t.Helper()
-	needEnv(t)
-	ns := env.Namespace(t)
-	return &fixture{t: t, host: env.NewHost(t, opts), ns: ns, holder: env.ServiceAccountToken(t, ns, "holder")}
+	h := newHost(t, opts)
+	return &fixture{t: t, host: h, ns: consumerNamespace, holder: h.serviceAccountToken(consumerNamespace, "holder")}
 }
 
 // bind writes a Bound claim of the holder on the Host's MicroVM, as the
@@ -98,10 +82,10 @@ func newFixture(t *testing.T, opts execagenttest.HostOptions) *fixture {
 // its Secret, and gives the holder a claim token bound to that Secret.
 func (f *fixture) bind(name string) {
 	f.t.Helper()
-	env.PutClaim(f.t, f.ns, name, f.holder.Name, execagenttest.ClaimStatus{
+	f.host.PutClaim(f.t, f.ns, name, f.holder.Name, claimStatus{
 		Phase: batteryv1alpha1.MicroVMClaimBound, VMUID: f.host.VMUID, HostNode: f.host.Node, ExpiresAt: time.Now().Add(time.Hour),
 	})
-	f.holder.Token = env.ClaimToken(f.t, f.ns, f.holder.Name, name+execagent.ExecSecretSuffix)
+	f.holder.Token = f.host.ClaimToken(f.t, f.ns, f.holder.Name, name+execagent.ExecSecretSuffix)
 }
 
 // bearer is a static bearer token.
@@ -139,7 +123,7 @@ func conn(t *testing.T, address, caFile, token string) *grpc.ClientConn {
 // status the agent answers with.
 func (f *fixture) rawExec(token string) execv1.MicroVMExecClient {
 	f.t.Helper()
-	return execv1.NewMicroVMExecClient(conn(f.t, f.host.Address, env.ServingCAFile, token))
+	return execv1.NewMicroVMExecClient(conn(f.t, f.host.Address, f.host.ServingCAFile, token))
 }
 
 // result is how one exchange ended.
@@ -234,7 +218,7 @@ type cutProxy struct {
 
 func newCutProxy(t *testing.T, to string) *cutProxy {
 	t.Helper()
-	l, err := net.Listen("tcp", net.JoinHostPort(execagenttest.HostAddress, "0"))
+	l, err := net.Listen("tcp", net.JoinHostPort(hostAddress, "0"))
 	if err != nil {
 		t.Fatal(err)
 	}

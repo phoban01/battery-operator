@@ -54,7 +54,8 @@ const trustDomain = "battery.liquidmetal-x.dev"
 // certificates through CertificateSigningRequests that the Operator
 // approves and signs, writes flintlockd's to the Host, and the fake
 // flintlockd serves with them, which the agent verifies against the serving
-// CA the Operator publishes before it reports the Host ready.
+// CA the Operator publishes before it reports the Host ready. The agent's
+// RBAC lets it create and read its requests, and no more.
 func TestHostCertificates(t *testing.T) {
 	//= docs/requirements/08-test-doubles.md#test-environments
 	//= type=test
@@ -123,6 +124,68 @@ func TestHostCertificates(t *testing.T) {
 							execagent.AnnotationMessage, n.Annotations[execagent.AnnotationMessage])
 					}
 				})
+			}
+			return ctx
+		}).
+		Assess("the Exec Agent may create and read its requests, and nothing else of them", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+			//= docs/requirements/05-exec-agent.md#certificates
+			//= type=test
+			//# The Manifests SHALL grant the Exec Agent's identity permission
+			//# to create and read `CertificateSigningRequest`s, and no other permission
+			//# on them.
+			c := mustClient(t, cfg)
+			agent := fmt.Sprintf("system:serviceaccount:%s:%s", namespace, execAgentServiceAccount)
+			allowed := func(attrs authorizationv1.ResourceAttributes) bool {
+				t.Helper()
+				sar := &authorizationv1.SubjectAccessReview{Spec: authorizationv1.SubjectAccessReviewSpec{
+					User:               agent,
+					Groups:             []string{"system:serviceaccounts", "system:serviceaccounts:" + namespace, "system:authenticated"},
+					ResourceAttributes: &attrs,
+				}}
+				if err := c.Create(ctx, sar); err != nil {
+					t.Fatal(err)
+				}
+				return sar.Status.Allowed
+			}
+			csrs := func(verb, sub string) authorizationv1.ResourceAttributes {
+				return authorizationv1.ResourceAttributes{Group: certificatesv1.GroupName, Resource: "certificatesigningrequests", Subresource: sub, Verb: verb}
+			}
+			for _, verb := range []string{"create", "get"} {
+				if !allowed(csrs(verb, "")) {
+					t.Errorf("the agent may not %s CertificateSigningRequests", verb)
+				}
+			}
+			for _, verb := range []string{"list", "watch", "update", "patch", "delete", "deletecollection"} {
+				if allowed(csrs(verb, "")) {
+					t.Errorf("the agent may %s CertificateSigningRequests", verb)
+				}
+			}
+			for _, sub := range []string{"approval", "status"} {
+				if allowed(csrs("update", sub)) {
+					t.Errorf("the agent may update CertificateSigningRequests/%s", sub)
+				}
+			}
+			for _, signer := range []string{hostcert.ServingSigner, hostcert.ClientSigner, hostcert.ExecAgentServingSigner} {
+				for _, verb := range []string{"approve", "sign"} {
+					if allowed(authorizationv1.ResourceAttributes{Group: certificatesv1.GroupName, Resource: "signers", Name: signer, Verb: verb}) {
+						t.Errorf("the agent may %s for %s", verb, signer)
+					}
+				}
+			}
+			// Its one other certificate grant: reading the Operator's CA
+			// bundle ConfigMap, and no other ConfigMap.
+			configMap := func(verb, name string) authorizationv1.ResourceAttributes {
+				return authorizationv1.ResourceAttributes{Namespace: namespace, Resource: "configmaps", Name: name, Verb: verb}
+			}
+			if !allowed(configMap("get", controller.DefaultCABundleConfigMap)) {
+				t.Error("the agent may not read the Operator's CA bundle ConfigMap")
+			}
+			for _, attrs := range []authorizationv1.ResourceAttributes{
+				configMap("get", "other"), configMap("list", ""), configMap("update", controller.DefaultCABundleConfigMap),
+			} {
+				if allowed(attrs) {
+					t.Errorf("the agent may %s ConfigMap %q", attrs.Verb, attrs.Name)
+				}
 			}
 			return ctx
 		}).
