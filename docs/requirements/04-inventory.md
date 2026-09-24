@@ -38,6 +38,10 @@ open until they end (EA-040).
   Inventory Controller SHALL open a restart window of the configured
   length, and SHALL apply every change that has settled by the time the
   window closes in a single restart of battery.
+- **IN-013** When a restart of battery would remove a Host, the Inventory
+  Controller SHALL first give the Pool Controller the Hosts that remain,
+  and SHALL restart battery only once no Pool in battery names the removed
+  Host in its `flintlock_hosts` or the configured drain timeout has passed.
 
 Every change restarts battery, so IN-011 and IN-012 keep a Host whose report
 flaps between ready and not ready, or a burst of Nodes joining, from
@@ -50,9 +54,24 @@ a restart. A change still settling when the window closes waits for a
 window of its own, and a window whose changes all flapped back closes
 without a restart. Restarts are therefore at least one restart window
 apart, and a change reaches battery at least the settle time and at most
-the settle time plus one restart window after it happens. The settle time
-and the restart window are the Operator's flags `--inventory-settle-time`
-and `--inventory-restart-window`, 30 seconds and one minute by default.
+the settle time plus one restart window after it happens, and a Host
+leaving waits at most the drain timeout more (IN-013). A change that
+settles while a restart waits for the Pools goes into that restart. The
+settle time, the restart window and the drain timeout are the Operator's
+flags `--inventory-settle-time`, `--inventory-restart-window` and
+`--inventory-drain-timeout`, 30 seconds, one minute and 30 seconds by
+default.
+
+battery's Pools survive its restarts in its database, and battery v0.3.3
+does not check a Pool's `flintlock_hosts` against its Hosts: it replenishes
+a Pool on the Host in `flintlock_hosts` with the fewest of the Pool's
+MicroVMs, which for a removed Host is none, and provisioning there fails
+(#73). IN-013 has the Pools drop a leaving Host while battery still knows
+it. The other way round, the Pool Controller learns of a Host joining only
+once battery has restarted with it and answers again, so no Pool names a
+Host battery does not know. The drain timeout bounds the wait for a Pool
+the Pool Controller cannot update: one whose spec battery refuses, one
+battery refuses to delete, or one battery holds that the cluster does not.
 
 A Host registration call or a configuration reload in battery would remove
 the restarts; it is one of the upstream asks.

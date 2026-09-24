@@ -15,10 +15,12 @@ module pools_test {
       .then(ctlAddFinalizer(p))
       .then(ctlCreatePool(p))
 
-  // A change that has settled goes through one restart window.
+  // A change that removes a Host, once settled, goes through one restart
+  // window and the drain (IN-013); no Pool names the Host in these uses.
   run applySettled: bool =
     invOpenWindow
       .then(ticks(WINDOW))
+      .then(invDrain)
       .then(invRestart)
       .then(batteryStart)
 
@@ -108,6 +110,7 @@ module pools_test {
       .expect(and { battery.hosts.contains("h1"), age("h1") == MAX_LAG - 1 })
       .then(tick)
       .expect(and { canCloseWindow, age("h1") == MAX_LAG, safety })
+      .then(invDrain)
       .then(invRestart)
       .expect(and { not(battery.up), inv.config == Set("h2", "h3") })
       .then(batteryStart)
@@ -138,6 +141,7 @@ module pools_test {
       .then(tick)
       .then(invOpenWindow)
       .then(ticks(WINDOW))
+      .then(invDrain)
       .then(invRestart)
       .then(batteryStart)
       .expect(and {
@@ -158,6 +162,7 @@ module pools_test {
       .then(ticks(WINDOW - 1))
       .then(cordon("h2"))
       .then(tick)
+      .then(invDrain)
       .then(invRestart)
       .then(batteryStart)
       .expect(and { battery.hosts == Set("h2", "h3"), not(canOpenWindow) })
@@ -201,27 +206,106 @@ module pools_test {
         safety,
       })
 
-  // #73: battery restarts without a Host while a Pool still names
-  // it. PickHost picks the removed Host, which has none of the Pool's
-  // MicroVMs, and provisioning fails until the Pool Controller's
-  // UpdatePool drops it.
-  run removedHostStallsPoolTest =
+  // ---------------------------------------------------------------------
+  // IN-013 (#73): the Pools drop a leaving Host before the restart that
+  // removes it, and gain a joining Host only after the restart that adds
+  // it.
+
+  // p1 selects h1 and h2 and has a MicroVM on h1; h2 is cordoned, and its
+  // change has settled and its window closed.
+  run cordonNamedHost: bool =
     init
       .then(declare("p1", Set(ZONE_A), 2))
       .then(batteryProvision("p1", "h1"))
       .then(cordon("h2"))
       .then(ticks(SETTLE))
-      .then(applySettled)
+      .then(invOpenWindow)
+      .then(ticks(WINDOW))
+
+  // battery does not restart without h2 while p1 names it: first the
+  // Hosts that remain are published, and even then not before the Pool
+  // Controller has updated p1. Nor may the drain timeout pass while the
+  // Pool Controller still has p1 to update.
+  run restartWaitsForThePoolsTest =
+    cordonNamedHost
+      .then(invRestart)
+      .fail()
+
+  run drainedToPoolsNamingLeaving: bool =
+    cordonNamedHost
+      .then(invDrain)
+      .expect(and { inv.published == Set("h1", "h3"), hostsChanged("p1"), poolsNamingLeaving == Set("p1") })
+
+  run restartWaitsForThePoolsAfterDrainTest =
+    drainedToPoolsNamingLeaving
+      .then(invRestart)
+      .fail()
+
+  run drainTimeoutWaitsForThePoolControllerTest =
+    drainedToPoolsNamingLeaving
+      .then(invRestartPastDrain)
+      .fail()
+
+  // The Pool Controller drops h2, battery restarts without it, and p1
+  // replenishes on h1: battery never picks a Host it does not know.
+  // This is the scenario #73 found stalling the Pool.
+  run removedHostDrainedTest =
+    cordonNamedHost
+      .then(invDrain)
+      .then(ctlUpdatePool("p1"))
+      .expect(and { battery.pools.get("p1").flintlockHosts == Set("h1"), poolsNamingLeaving == Set() })
+      .then(invRestart)
+      .then(batteryStart)
       .expect(and {
         battery.hosts == Set("h1", "h3"),
-        battery.pools.get("p1").flintlockHosts == Set("h1", "h2"),
-        leastLoaded("p1") == Set("h2"),
-        not(poolsNameKnownHosts),
+        leastLoaded("p1") == Set("h1"),
+        poolsNameKnownHosts,
+        witnessDrainedForPool,
         safety,
       })
-      .then(batteryProvisionUnknownHost("p1", "h2"))
-      .expect(battery.vms.size() == 1)
-      .then(ctlUpdatePool("p1"))
       .then(batteryProvision("p1", "h1"))
-      .expect(and { battery.vms.size() == 2, poolsNameKnownHosts, safety })
+      .expect(and { battery.vms.size() == 2, safety })
+
+  // h2 is deleted and comes back: p1 names it again only after battery
+  // has restarted with it.
+  run joiningHostAfterRestartTest =
+    init
+      .then(declare("p1", Set(ZONE_A), 1))
+      .then(deleteNode("h2"))
+      .then(ctlUpdatePool("p1"))
+      .then(ticks(SETTLE))
+      .then(applySettled)
+      .then(createNode("h2", Set(ZONE_A), true))
+      .then(ticks(SETTLE))
+      .then(invOpenWindow)
+      .then(ticks(WINDOW))
+      .expect(and { inv.published == Set("h1", "h3"), not(hostsChanged("p1")) })
+      .then(invRestart)
+      .expect(and { not(battery.up), battery.pools.get("p1").flintlockHosts == Set("h1") })
+      .then(batteryStart)
+      .expect(and { hostsChanged("p1"), poolsNameKnownHosts, safety })
+      .then(ctlUpdatePool("p1"))
+      .expect(and { battery.pools.get("p1").flintlockHosts == Set("h1", "h2"), safety })
+
+  // The drain timeout: a Pool battery holds that the cluster does not
+  // (#72) is one the Pool Controller cannot update, so once it has
+  // nothing else to do the restart goes ahead, and battery can pick the
+  // removed Host for that Pool. poolsNameKnownHosts holds for every other
+  // Pool.
+  run orphanPastDrainTest =
+    init
+      .then(createPool("p1", Set(ZONE_A), 1))
+      .then(ctlCreatePool("p1"))
+      .then(deletePool("p1"))
+      .then(cordon("h2"))
+      .then(ticks(SETTLE))
+      .then(invOpenWindow)
+      .then(ticks(WINDOW))
+      .then(invDrain)
+      .expect(and { poolControllerIdle, poolsNamingLeaving == Set("p1") })
+      .then(invRestartPastDrain)
+      .then(batteryStart)
+      .expect(and { hist.staleAfterDrain == Set("p1"), poolsNameKnownHosts, safety })
+      .then(batteryProvisionUnknownHost("p1", "h2"))
+      .expect(and { witnessUnknownHostPicked, safety })
 }

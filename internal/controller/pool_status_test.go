@@ -38,15 +38,15 @@ func declaredPool() *batteryv1alpha1.Pool {
 
 // holdPool puts pool in b at its spec, on hosts, with the given counts.
 func holdPool(b *stubBattery, pool *batteryv1alpha1.Pool, hosts []string, st battery.PoolStatus) {
-	spec := poolSpecToBattery(pool)
+	spec := poolSpecToBattery(pool, nil)
 	spec.FlintlockHosts = hosts
 	b.pools[spec.Ref] = spec
 	b.status[spec.Ref] = st
 }
 
-func runStatusChain(t *testing.T, pool *batteryv1alpha1.Pool, b *stubBattery) *poolScope {
+func runStatusChain(t *testing.T, pool *batteryv1alpha1.Pool, b *stubBattery, hosts ...string) *poolScope {
 	t.Helper()
-	s := newTestPoolScope(pool, b)
+	s := newTestPoolScope(pool, b, hosts...)
 	if err := runPoolChain(context.Background(), s, poolChain()); err != nil {
 		t.Fatalf("chain: %v", err)
 	}
@@ -76,7 +76,7 @@ func TestPoolCountsComeFromBattery(t *testing.T) {
 		pool.Status.Available, pool.Status.Leased, pool.Status.Provisioning, pool.Status.Quarantined = 9, 9, 9, 9
 		holdPool(b, pool, []string{testHostA}, battery.PoolStatus{Available: 2, Leased: 1, Provisioning: 3, Quarantined: 4})
 
-		s := runStatusChain(t, pool, b)
+		s := runStatusChain(t, pool, b, testHostA)
 		st := s.Pool.Status
 		if st.Available != 2 || st.Leased != 1 || st.Provisioning != 3 || st.Quarantined != 4 {
 			t.Errorf("counts = %d available, %d leased, %d provisioning, %d quarantined; want 2, 1, 3, 4",
@@ -99,7 +99,7 @@ func TestPoolCountsComeFromBattery(t *testing.T) {
 	t.Run("CreatePool finds the Pool already there", func(t *testing.T) {
 		b := &racingStubBattery{stubBattery: newStubBattery()}
 		pool := declaredPool()
-		b.created = poolSpecToBattery(pool)
+		b.created = poolSpecToBattery(pool, nil)
 		b.status[poolRef(pool)] = battery.PoolStatus{Available: 1}
 
 		s := newTestPoolScope(pool, b)
@@ -153,7 +153,7 @@ func TestPoolExhaustedFollowsAvailable(t *testing.T) {
 			pool.Spec.Size = tc.size
 			holdPool(b, pool, []string{testHostA}, battery.PoolStatus{Available: tc.available, Leased: 3})
 
-			s := runStatusChain(t, pool, b)
+			s := runStatusChain(t, pool, b, testHostA)
 			wantCondition(t, s.Pool, batteryv1alpha1.PoolConditionExhausted, tc.wantStatus, tc.wantReason)
 		})
 	}
@@ -166,8 +166,7 @@ func TestPoolExhaustedFollowsAvailable(t *testing.T) {
 //# its available, leased and provisioning MicroVMs is at least its size.
 
 // TestPoolReadyNeedsBatteryAHostAndItsSize covers PO-022, each clause on
-// its own. Until #20, "its selector matches a Host" is read as battery's
-// Pool listing a Host (poolHostsMatched).
+// its own. "Its selector matches a Host" is what poolPlacement resolved.
 func TestPoolReadyNeedsBatteryAHostAndItsSize(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
@@ -190,13 +189,14 @@ func TestPoolReadyNeedsBatteryAHostAndItsSize(t *testing.T) {
 			pool := declaredPool()
 			holdPool(b, pool, tc.hosts, tc.counts)
 
-			s := runStatusChain(t, pool, b)
+			s := runStatusChain(t, pool, b, tc.hosts...)
 			wantCondition(t, s.Pool, batteryv1alpha1.PoolConditionReady, tc.wantStatus, tc.wantReason)
 		})
 	}
 
 	t.Run("battery does not hold the Pool", func(t *testing.T) {
-		s := newTestPoolScope(declaredPool(), newStubBattery())
+		s := newTestPoolScope(declaredPool(), newStubBattery(), testHostA)
+		s.hosts = []string{testHostA}
 		if _, err := (poolReadiness{}).Reconcile(context.Background(), s); err != nil {
 			t.Fatal(err)
 		}

@@ -63,6 +63,8 @@ type Scope struct {
 	State *State
 	// HostSet is where the Hosts battery runs with are published.
 	HostSet *HostSet
+	// Pools lists the Pools battery holds, for Drain.
+	Pools PoolLister
 
 	Store     Store
 	Restarter Restarter
@@ -82,6 +84,9 @@ type State struct {
 	// windowOpened is when the open restart window opened; zero while none
 	// is open.
 	windowOpened time.Time
+	// drainStarted is when Drain began to wait for the Pools to drop the
+	// Hosts the next restart removes; zero while it is not waiting.
+	drainStarted time.Time
 }
 
 // seen is a Node as the Inventory Controller last saw it.
@@ -153,12 +158,17 @@ type Options struct {
 	SettleTime time.Duration
 	// RestartWindow is how long a restart window stays open (IN-012).
 	RestartWindow time.Duration
+	// DrainTimeout is the longest the controller waits, before a restart
+	// that removes Hosts, for the Pools in battery to stop naming them
+	// (IN-013).
+	DrainTimeout time.Duration
 }
 
 // Defaults for Options.
 const (
 	DefaultSettleTime    = 30 * time.Second
 	DefaultRestartWindow = time.Minute
+	DefaultDrainTimeout  = 30 * time.Second
 )
 
 // BindFlags binds o to the Operator's command line flags, with the
@@ -169,6 +179,9 @@ func (o *Options) BindFlags(fs *flag.FlagSet) {
 	fs.DurationVar(&o.RestartWindow, "inventory-restart-window", DefaultRestartWindow,
 		"How long the Inventory Controller gathers settled changes to battery's Hosts before it restarts battery "+
 			"once with all of them.")
+	fs.DurationVar(&o.DrainTimeout, "inventory-drain-timeout", DefaultDrainTimeout,
+		"How long the Inventory Controller waits, before a restart of battery that removes Hosts, for battery's Pools "+
+			"to stop naming them.")
 }
 
 // Validate reports an Options the controller cannot run with.
@@ -178,6 +191,9 @@ func (o Options) Validate() error {
 	}
 	if o.RestartWindow < 0 {
 		return fmt.Errorf("inventory restart window %s is negative", o.RestartWindow)
+	}
+	if o.DrainTimeout < 0 {
+		return fmt.Errorf("inventory drain timeout %s is negative", o.DrainTimeout)
 	}
 	return nil
 }
@@ -189,6 +205,7 @@ func NewChain(o Options) Chain {
 		Admit{},
 		Settle{Time: o.SettleTime},
 		Window{Length: o.RestartWindow},
+		Drain{Timeout: o.DrainTimeout},
 		Apply{},
 	}
 }

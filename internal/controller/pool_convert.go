@@ -40,22 +40,21 @@ func poolRef(pool *batteryv1alpha1.Pool) battery.PoolRef {
 //   - The template's flintlock namespace is the Pool's own namespace, so
 //     that a MicroVM in flintlock shows which Pool's namespace it serves.
 //     Its id stays empty: battery v0.3.3 names each MicroVM itself.
-//   - flintlock_hosts is left empty. Resolving spec.placement.nodeSelector
-//     to Host names is #20's job (PO-010). battery v0.3.3 does not validate
-//     flintlock_hosts, so an empty list is a valid PoolSpec: battery holds
-//     the Pool and places no MicroVM until #20 fills the list in.
+//   - flintlock_hosts is hosts: the names of the Hosts the Pool's
+//     spec.placement.nodeSelector matches, as poolPlacement resolves them
+//     (PO-010). battery v0.3.3 does not validate flintlock_hosts, so an
+//     empty list is a valid PoolSpec: battery holds the Pool and places no
+//     MicroVM.
 //
 // An enumeration value the CRD does not define becomes battery's
 // UNSPECIFIED, which battery refuses (PO-004).
-func poolSpecToBattery(pool *batteryv1alpha1.Pool) battery.PoolSpec {
+func poolSpecToBattery(pool *batteryv1alpha1.Pool, hosts []string) battery.PoolSpec {
 	spec := pool.Spec
 	out := battery.PoolSpec{
-		Ref:      poolRef(pool),
-		Template: templateToFlintlock(spec.Template, pool.Namespace),
-		Size:     spec.Size,
-		// TODO(#20): the names of the Hosts that spec.placement.nodeSelector
-		// selects (PO-010). Empty is valid in battery v0.3.3.
-		FlintlockHosts: []string{},
+		Ref:            poolRef(pool),
+		Template:       templateToFlintlock(spec.Template, pool.Namespace),
+		Size:           spec.Size,
+		FlintlockHosts: append([]string{}, hosts...),
 		Replenishment: battery.ReplenishmentStrategy{
 			Type:    replenishmentToBattery(spec.Replenishment.Type),
 			MinSize: clonePtr(spec.Replenishment.MinSize),

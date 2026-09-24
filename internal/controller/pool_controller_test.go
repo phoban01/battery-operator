@@ -32,8 +32,8 @@ import (
 	"github.com/phoban01/battery-operator/internal/fakebattery"
 )
 
-// startPoolFakeBattery serves the fake battery on loopback until the test
-// ends and returns the Operator's client for it. The fake knows no Host,
+// ends and returns the Operator's client for it. The fake knows no Host:
+// it holds Pools and their flintlock_hosts, and provisions nothing.
 // as battery knows none of a Pool's until #20 resolves them.
 func startPoolFakeBattery(t *testing.T) battery.Client {
 	t.Helper()
@@ -82,7 +82,7 @@ func TestPoolLifecycleAgainstTheFakeBattery(t *testing.T) {
 	bc := startPoolFakeBattery(t)
 	pool := testPool()
 	k8s := newPoolFakeClient(t, pool)
-	r := &PoolReconciler{Client: k8s, Battery: bc, Clock: clock.NewFake(poolTestEpoch)}
+	r := &PoolReconciler{Client: k8s, Battery: bc, Hosts: newStubHosts(), Clock: clock.NewFake(poolTestEpoch)}
 	key := types.NamespacedName{Namespace: testPoolNamespace, Name: testPoolName}
 	ref := battery.PoolRef{Namespace: testPoolNamespace, Name: testPoolName}
 
@@ -170,7 +170,7 @@ func TestPoolScopePatchesStatusAndFinalizerOnce(t *testing.T) {
 	if err := k8s.Get(ctx, client.ObjectKeyFromObject(pool), fetched); err != nil {
 		t.Fatal(err)
 	}
-	s := newPoolScope(fetched, k8s, newStubBattery(), ctrl.Log, clock.NewFake(poolTestEpoch))
+	s := newPoolScope(fetched, k8s, newStubBattery(), newStubHosts(), ctrl.Log, clock.NewFake(poolTestEpoch))
 	s.Pool.Finalizers = append(s.Pool.Finalizers, PoolFinalizer)
 	s.Pool.Status.ObservedGeneration = 1
 	if err := s.patch(ctx); err != nil {
@@ -195,7 +195,7 @@ func TestPoolTheFakeBatteryRefusesIsRejected(t *testing.T) {
 	pool := finalizedPool()
 	pool.Spec.Lease.ExpiryThreshold = nil
 	k8s := newPoolFakeClient(t, pool)
-	r := &PoolReconciler{Client: k8s, Battery: bc, Clock: clock.NewFake(poolTestEpoch)}
+	r := &PoolReconciler{Client: k8s, Battery: bc, Hosts: newStubHosts(), Clock: clock.NewFake(poolTestEpoch)}
 	key := client.ObjectKeyFromObject(pool)
 	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key}); err != nil {
 		t.Fatalf("Reconcile: %v", err)

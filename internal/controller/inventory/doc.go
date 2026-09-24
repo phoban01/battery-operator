@@ -32,6 +32,9 @@ limitations under the License.
 //     (IN-002).
 //   - Window batches the settled changes: the first one waiting opens a
 //     restart window, and nothing is applied until it closes (IN-012).
+//   - Drain, before a restart that removes Hosts, publishes the Hosts that
+//     remain and waits, for at most the drain timeout, until no Pool in
+//     battery names a leaving Host (IN-013).
 //   - Apply writes the Hosts to battery's configuration and restarts
 //     battery through the one restart hook (IN-010, IN-004; DP-006).
 //

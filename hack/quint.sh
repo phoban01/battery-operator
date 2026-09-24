@@ -73,4 +73,4 @@ check specs/quint/certificates.qnt safety \
 check specs/quint/pools.qnt safety \
   witnessFlapAbsorbed witnessRestart witnessBatchedRestart witnessTwoRestarts \
   witnessVMOnFormerHost witnessPlacementUpdated witnessNoEligibleHost \
-  witnessPoolDeleted witnessUnknownHostPicked
+  witnessPoolDeleted witnessDrainedForPool

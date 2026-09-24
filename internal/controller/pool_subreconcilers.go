@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -47,6 +48,7 @@ func poolChain() []poolSubreconciler {
 	return []poolSubreconciler{
 		poolDeletion{},
 		poolFinalizer{},
+		poolPlacement{},
 		poolDeclaration{},
 		poolUpdate{},
 		poolRejection{},
@@ -132,7 +134,7 @@ func (poolDeclaration) Reconcile(ctx context.Context, s *poolScope) (poolNext, e
 	//# When a Pool exists that battery does not hold, the Pool
 	//# Controller SHALL create it in battery with `CreatePool`, under the Pool's
 	//# namespace and name.
-	held, err = s.Battery.CreatePool(ctx, poolSpecToBattery(s.Pool))
+	held, err = s.Battery.CreatePool(ctx, poolSpecToBattery(s.Pool, s.hosts))
 	switch {
 	case err == nil:
 		s.held = held
@@ -151,12 +153,26 @@ func (poolDeclaration) Reconcile(ctx context.Context, s *poolScope) (poolNext, e
 }
 
 // poolUpdate sends a Pool's spec to battery when its generation has moved
-// past the one battery last accepted.
+// past the one battery last accepted, or when the Hosts its selector
+// matches are no longer the ones battery's Pool names.
 type poolUpdate struct{}
 
 func (poolUpdate) Reconcile(ctx context.Context, s *poolScope) (poolNext, error) {
-	if s.refusal != nil || s.Pool.Generation == s.Pool.Status.ObservedGeneration {
+	if s.refusal != nil {
 		return poolContinue, nil
+	}
+	ref := poolRef(s.Pool)
+	if s.held == nil {
+		// CreatePool found the Pool already there: see what battery holds.
+		held, err := s.Battery.GetPool(ctx, ref)
+		switch {
+		case err == nil:
+			s.held = held
+		case errors.Is(err, battery.ErrNotFound):
+			return poolContinue, nil
+		default:
+			return poolStop, fmt.Errorf("getting Pool %s from battery: %w", ref, err)
+		}
 	}
 
 	//= docs/requirements/03-pools.md#declaration
@@ -164,13 +180,22 @@ func (poolUpdate) Reconcile(ctx context.Context, s *poolScope) (poolNext, error)
 	//# `status.observedGeneration`, the Pool Controller SHALL send the Pool's spec
 	//# to battery with `UpdatePool` and then set `status.observedGeneration` to
 	//# that generation.
-	ref := poolRef(s.Pool)
-	held, err := s.Battery.UpdatePool(ctx, poolSpecToBattery(s.Pool))
+	moved := s.Pool.Generation != s.Pool.Status.ObservedGeneration
+
+	//= docs/requirements/03-pools.md#placement
+	//# When the set of Hosts a Pool's selector matches changes, the
+	//# Pool Controller SHALL update the Pool in battery with `UpdatePool`.
+	placed := slices.Equal(slices.Sorted(slices.Values(s.held.Spec.FlintlockHosts)), s.hosts)
+	if !moved && placed {
+		return poolContinue, nil
+	}
+
+	held, err := s.Battery.UpdatePool(ctx, poolSpecToBattery(s.Pool, s.hosts))
 	switch {
 	case err == nil:
 		s.held = held
 		s.Pool.Status.ObservedGeneration = s.Pool.Generation
-		s.Log.Info("Updated Pool in battery", "pool", ref.String(), "generation", s.Pool.Generation)
+		s.Log.Info("Updated Pool in battery", "pool", ref.String(), "generation", s.Pool.Generation, "hosts", s.hosts)
 		return poolContinue, nil
 	case errors.Is(err, battery.ErrInvalid):
 		s.refusal = err

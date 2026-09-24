@@ -84,7 +84,7 @@ func TestPoolSpecToBattery(t *testing.T) {
 		HeartbeatInterval:        10 * time.Second,
 		HeartbeatExpiryThreshold: 30 * time.Second,
 	}
-	if diff := cmp.Diff(want, poolSpecToBattery(pool), protocmp.Transform()); diff != "" {
+	if diff := cmp.Diff(want, poolSpecToBattery(pool, nil), protocmp.Transform()); diff != "" {
 		t.Errorf("poolSpecToBattery (-want +got):\n%s", diff)
 	}
 }
@@ -95,7 +95,7 @@ func TestPoolEnumsWithoutCounterpartAreUnspecified(t *testing.T) {
 	pool := testPool()
 	pool.Spec.Replenishment.Type = "Sometimes"
 	pool.Spec.Hooks.FailurePolicy = ""
-	got := poolSpecToBattery(pool)
+	got := poolSpecToBattery(pool, nil)
 	if got.Replenishment.Type != poolmgrv1.ReplenishmentStrategyType_REPLENISHMENT_STRATEGY_TYPE_UNSPECIFIED ||
 		got.HookFailurePolicy != poolmgrv1.HookFailurePolicy_HOOK_FAILURE_POLICY_UNSPECIFIED {
 		t.Errorf("enums = %v, %v; want UNSPECIFIED", got.Replenishment.Type, got.HookFailurePolicy)

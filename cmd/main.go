@@ -237,12 +237,17 @@ func main() {
 		setupLog.Error(err, "Failed to create controller", "controller", "certificatesigningrequest")
 		os.Exit(1)
 	}
+	// hosts is the Hosts the Inventory Controller has given battery and is
+	// not about to remove: it publishes them around each restart of battery,
+	// and the Pool Controller places Pools on them.
+	hosts := inventory.NewHostSet()
 	poolEvents := controller.NewPoolEvents(batteryClient, mgr.GetClient(), poolResync)
 	poolEvents.Log = ctrl.Log.WithName("pool-events")
 	if err := (&controller.PoolReconciler{
 		Client:  mgr.GetClient(),
 		Scheme:  mgr.GetScheme(),
 		Battery: batteryClient,
+		Hosts:   hosts,
 		Events:  poolEvents,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "pool")
@@ -259,9 +264,6 @@ func main() {
 		setupLog.Error(err, "Failed to create controller", "controller", "microvmclaim")
 		os.Exit(1)
 	}
-	// hosts is the Hosts battery runs with, which the Inventory Controller
-	// publishes after each restart of battery, for the Pool Controller.
-	hosts := inventory.NewHostSet()
 	if err := (&controller.InventoryReconciler{
 		Client: mgr.GetClient(),
 		Store: inventory.ConfigMapStore{
@@ -271,6 +273,7 @@ func main() {
 		},
 		Restarter: restarter,
 		Hosts:     hosts,
+		Pools:     batteryClient,
 		Options:   inventoryOptions,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "inventory")

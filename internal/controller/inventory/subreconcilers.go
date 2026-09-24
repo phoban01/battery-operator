@@ -163,6 +163,10 @@ func (w Window) Reconcile(_ context.Context, s *Scope) (Result, error) {
 			s.State.windowOpened = time.Time{}
 			s.Log.Info("Closed restart window without restarting battery")
 		}
+		// A Drain for changes that have since flapped back may have
+		// published fewer Hosts than battery runs with: give them back.
+		s.State.drainStarted = time.Time{}
+		s.HostSet.publish(s.Config.Hosts)
 		return Result{Stop: true}, nil
 	}
 
@@ -208,6 +212,7 @@ func (Apply) Reconcile(ctx context.Context, s *Scope) (Result, error) {
 	// from here on waits for a window of its own, and a failed restart is
 	// Resume's to finish.
 	s.State.windowOpened = time.Time{}
+	s.State.drainStarted = time.Time{}
 	s.Config = Config{Hosts: s.Desired, Raw: raw, Pending: true}
 	s.Log.Info("Wrote battery's configuration", "hosts", slices.Sorted(maps.Keys(s.Desired)))
 	if err := restart(ctx, s, raw); err != nil {
