@@ -78,7 +78,7 @@ warrants.
    under a trust domain the Operator is configured with:
    - `spiffe://<trust domain>/flintlock/host/<node name>` for a Host's
      `flintlockd`, alongside the Host's internal address, which battery
-     v0.1.0 verifies;
+     v0.3.3 verifies;
    - `spiffe://<trust domain>/flintlock/client/battery` for battery;
    - `spiffe://<trust domain>/flintlock/client/exec-agent/<node name>` for
      an Exec Agent.

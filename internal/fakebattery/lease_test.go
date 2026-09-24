@@ -304,3 +304,83 @@ func TestReleaseKeepsTheLeaseUntilTheHostConfirms(t *testing.T) {
 		t.Fatalf("ReleaseVM of the released lease = %v, want NOT_FOUND", err)
 	}
 }
+
+// TestListLeases reads Leases through the generated Lease client: every
+// Pool's or one Pool's, ordered by lease id, without renewing any. As in
+// battery, a Lease past its expiry is listed until the control loop sweeps
+// it, and a Heartbeat before then renews it. An unknown Pool lists none
+// without an error, a released Lease is gone, and RefuseHeartbeats hides
+// every Lease as it makes Heartbeat NOT_FOUND.
+func TestListLeases(t *testing.T) {
+	// No timer tick within the test: the fake fills Pools and handles
+	// claims on its kicks, and the Leases are never swept.
+	h := newHarness(t, Config{ReconcileInterval: time.Hour}, hostA)
+	for _, name := range []string{"one", "two"} {
+		spec := h.spec(name, 1, hostA)
+		spec.Replenishment = replenishment{Type: poolmgrv1.ReplenishmentStrategyType_REPLACE_ON_DELETE}
+		h.createPool(spec)
+	}
+	claims := map[string]*claimed{"one": h.claim("one"), "two": h.claim("two")}
+
+	list := func(pool *PoolRef) []*poolmgrv1.LeaseRecord {
+		t.Helper()
+		req := &poolmgrv1.ListLeasesRequest{}
+		if pool != nil {
+			req.PoolRef = refToProto(*pool)
+		}
+		resp, err := h.rawLease().ListLeases(h.ctx, req)
+		if err != nil {
+			t.Fatalf("ListLeases(%v): %v", pool, err)
+		}
+		return resp.GetLeases()
+	}
+
+	all := list(nil)
+	if len(all) != 2 || all[0].GetLeaseId() >= all[1].GetLeaseId() {
+		t.Fatalf("ListLeases of every Pool = %v, want both Leases ordered by lease id", all)
+	}
+	for name, c := range claims {
+		ref := h.ref(name)
+		got := list(&ref)
+		if len(got) != 1 {
+			t.Fatalf("ListLeases(%s) = %v, want one Lease", ref, got)
+		}
+		l := got[0]
+		if l.GetLeaseId() != c.LeaseID || l.GetVmUid() != c.VMUID ||
+			l.GetPoolName() != name || l.GetPoolNamespace() != testNamespace ||
+			!l.GetClaimedAt().AsTime().Equal(testEpoch) || !l.GetLastHeartbeatAt().AsTime().Equal(testEpoch) ||
+			!l.GetExpiresAt().AsTime().Equal(testEpoch.Add(30*time.Second)) {
+			t.Fatalf("ListLeases(%s) = %v, want lease %s of %s claimed at %s, expiring 30s later",
+				ref, l, c.LeaseID, c.VMUID, testEpoch)
+		}
+	}
+	unknown := h.ref("nope")
+	if got := list(&unknown); len(got) != 0 {
+		t.Fatalf("ListLeases of an unknown Pool = %v, want none", got)
+	}
+
+	// Past the expiry, with no sweep yet: still listed, and unrenewed.
+	h.clk.Advance(40 * time.Second)
+	one := h.ref("one")
+	if got := list(&one); len(got) != 1 || !got[0].GetExpiresAt().AsTime().Equal(testEpoch.Add(30*time.Second)) {
+		t.Fatalf("ListLeases past the expiry, before a sweep = %v, want the Lease with its old expiry", got)
+	}
+	expires, err := h.client.Heartbeat(h.ctx, claims["one"].LeaseID)
+	if err != nil {
+		t.Fatalf("Heartbeat of an expired Lease before a sweep: %v", err)
+	}
+	if got := list(&one); len(got) != 1 || !got[0].GetExpiresAt().AsTime().Equal(expires) {
+		t.Fatalf("ListLeases after the Heartbeat = %v, want expiry %s", got, expires)
+	}
+
+	h.b.SetFaults(Faults{RefuseHeartbeats: true})
+	if got := list(nil); len(got) != 0 {
+		t.Fatalf("ListLeases with heartbeats refused = %v, want none", got)
+	}
+	h.b.SetFaults(Faults{})
+
+	h.release(claims["one"].LeaseID)
+	if got := list(nil); len(got) != 1 || got[0].GetLeaseId() != claims["two"].LeaseID {
+		t.Fatalf("ListLeases after releasing one = %v, want only %s", got, claims["two"].LeaseID)
+	}
+}

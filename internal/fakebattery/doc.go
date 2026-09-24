@@ -16,7 +16,7 @@ limitations under the License.
 
 // Package fakebattery is the fake battery
 // (docs/requirements/08-test-doubles.md#fake-battery): a minimal but real
-// pool manager on battery v0.1.0's protos. It serves the poolmgr.v1alpha1
+// pool manager on battery v0.3.3's protos. It serves the poolmgr.v1alpha1
 // PoolAdmin, Lease and Events services over gRPC with the generated server
 // stubs, and creates, places and deletes MicroVMs only through the
 // flintlock MicroVM and MicroVMExec clients of the Hosts it is given, which
@@ -31,10 +31,12 @@ limitations under the License.
 // configured clock; RPCs work before Run starts, but provisioning waits for
 // it.
 //
-// Behaviour follows battery v0.1.0 where the two overlap: least-VM-count
+// Behaviour follows battery v0.3.3 where the two overlap: least-VM-count
 // placement per Pool, RESOURCE_EXHAUSTED from ClaimVM on a Pool with
-// nothing AVAILABLE, the host field on ClaimVMResponse, the three
-// replenishment strategies, the hook failure policies and the event types.
+// nothing AVAILABLE, the host field on ClaimVMResponse, ListLeases, the
+// MicroVM ids, the three replenishment strategies, the hook failure
+// policies and the event types.
+//
 // What the Operator assumes battery does is listed in
 // docs/requirements/10-battery.md (BA-*), from battery v0.3.3's source; the
 // fake cites each assumption where it implements it, with a test, and cites
@@ -48,10 +50,15 @@ limitations under the License.
 // The fake deliberately differs from battery in these ways:
 //
 //   - The control loop's tick tops every Pool up to its target, whatever
-//     its replenishment strategy; battery's tick does that only for
-//     MIN_SIZE_THRESHOLD and otherwise relies on the strategy's events.
-//     That is how a fresh Pool fills and how a Pool recovers from a failed
-//     create or a quarantined MicroVM.
+//     its replenishment strategy. battery's tick does that only for
+//     MIN_SIZE_THRESHOLD; for the event-driven strategies battery tops a
+//     Pool up once, when its reconciler starts (at startup, CreatePool and
+//     UpdatePool), and otherwise relies on the strategy's events. So the
+//     fake recovers from a failed create or a quarantined MicroVM on the
+//     next tick, where battery waits for the next event or restart.
+//   - The fake does not check a Host's flintlock version; battery refuses
+//     to create a MicroVM on a Host whose ServerInfo reports a version
+//     older than v0.15.2.
 //   - DeletePool deletes the Pool's idle MicroVMs and refuses only while a
 //     Lease is outstanding; battery refuses while the Pool owns any
 //     MicroVM.

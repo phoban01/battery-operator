@@ -13,7 +13,7 @@
 //   generation or a new set of matching Hosts, the NoEligibleHost
 //   condition, and DeletePool under the finalizer (PO-001 to PO-003,
 //   PO-010 to PO-012);
-// - battery v0.1.0: it reads its Hosts from its configuration only when it
+// - battery v0.3.3: it reads its Hosts from its configuration only when it
 //   starts, and replenishes each Pool on the least loaded Host in the
 //   Pool's flintlock_hosts (internal/reconciler/hostpick.go). It does not
 //   check flintlock_hosts against its Hosts: CreatePool and UpdatePool take
@@ -184,7 +184,7 @@ module pools {
   def vmCount(p: PoolName, h: HostName): int =
     battery.vms.filter(v => v.pool == p and v.host == h).size()
 
-  // battery v0.1.0's PickHost: the Host in flintlock_hosts with the fewest
+  // battery v0.3.3's PickHost: the Host in flintlock_hosts with the fewest
   // of the Pool's MicroVMs. Ties go by the order of flintlock_hosts, which
   // the model does not keep, so any of the least loaded.
   def leastLoaded(p: PoolName): Set[HostName] =
@@ -639,7 +639,7 @@ module pools {
 
   // Every Pool in battery names only Hosts battery knows. Fails from the
   // restart that removes a Host until the Pool Controller's UpdatePool;
-  // meanwhile battery v0.1.0 picks the removed Host, which has no MicroVMs,
+  // meanwhile battery v0.3.3 picks the removed Host, which has no MicroVMs,
   // and fails to provision (#73).
   val poolsNameKnownHosts: bool =
     battery.up implies battery.pools.keys().forall(p =>

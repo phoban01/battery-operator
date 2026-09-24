@@ -428,7 +428,8 @@ type Faults struct {
 	// once, then clears itself.
 	DropEventsStream bool
 	// RefuseHeartbeats makes Heartbeat return NOT_FOUND for every Lease,
-	// which is how a Lease is lost without waiting out its threshold.
+	// and ListLeases list none, which is how a Lease is lost without
+	// waiting out its threshold. Leases and ReleaseVM still see them.
 	RefuseHeartbeats bool
 }
 

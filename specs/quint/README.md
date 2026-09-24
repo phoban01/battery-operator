@@ -202,7 +202,7 @@ approved request waiting for the CA.
 
 ## The pools and inventory model
 
-`pools.qnt` has three Hosts, two Pools and battery v0.1.0 as a sidecar
+`pools.qnt` has three Hosts, two Pools and battery v0.3.3 as a sidecar
 that reads its Hosts from its configuration only when it starts (ADR 0001,
 consequence 1). The steps are:
 

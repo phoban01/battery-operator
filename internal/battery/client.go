@@ -120,7 +120,7 @@ func (c *Connection) Close() error {
 }
 
 // Ping asks battery for its Pools in a namespace no Pool can have and
-// returns the mapped error. battery v0.1.0 filters ListPools by namespace
+// returns the mapped error. battery v0.3.3 filters ListPools by namespace
 // before it counts any Pool's MicroVMs, so the answer costs it one read of
 // its Pool specs.
 func (c *Connection) Ping(ctx context.Context) error {
@@ -227,6 +227,23 @@ func (c *Connection) Heartbeat(ctx context.Context, leaseID string) (time.Time, 
 func (c *Connection) ReleaseVM(ctx context.Context, leaseID string) error {
 	_, err := c.lease.ReleaseVM(ctx, &poolmgrv1.ReleaseVMRequest{LeaseId: leaseID})
 	return mapErr(ctx, err)
+}
+
+// ListLeases implements Client.
+func (c *Connection) ListLeases(ctx context.Context, pool *PoolRef) ([]*LeaseRecord, error) {
+	req := &poolmgrv1.ListLeasesRequest{}
+	if pool != nil {
+		req.PoolRef = refToProto(*pool)
+	}
+	resp, err := c.lease.ListLeases(ctx, req)
+	if err != nil {
+		return nil, mapErr(ctx, err)
+	}
+	out := make([]*LeaseRecord, 0, len(resp.GetLeases()))
+	for _, l := range resp.GetLeases() {
+		out = append(out, leaseFromProto(l))
+	}
+	return out, nil
 }
 
 // Subscribe implements Client. The stream lives until Close, until the

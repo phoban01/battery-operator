@@ -121,8 +121,8 @@ cannot finish its cluster fleet until the real resources exist.
   internals.
 
 ### What the gRPC boundary makes hard
-
-These were found by reading battery v0.1.0. They are the price of option B,
+These were found by reading battery v0.1.0, and still hold in v0.3.3. They
+are the price of option B, and the first two are worth raising upstream.
 and the first two are worth raising upstream.
 
 1. **Hosts are static configuration.** battery reads its `hosts:` list once
@@ -161,7 +161,7 @@ and the first two are worth raising upstream.
 5. **battery's API has to be private to the operator.** A client that can
    reach battery's gRPC API directly can claim and use a VM without a
    `MicroVMClaim`, which bypasses `spec.serviceAccountName` and the Exec
-   Agent's checks. battery v0.1.0 listens on TCP only, so a unix socket
+   Agent's checks. battery v0.3.3 listens on TCP only, so a unix socket
    would take a battery change. The unchanged options are loopback
    (`127.0.0.1`) inside the operator's pod, which only containers of that
    pod can reach, or mTLS with a client certificate only the operator

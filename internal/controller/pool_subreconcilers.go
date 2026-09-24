@@ -61,7 +61,7 @@ func poolChain() []poolSubreconciler {
 // Ready turns false with the reason DeletionBlocked and battery's message,
 // and the reconcile returns the error, so that the workqueue retries it
 // with its exponential backoff (up to about 16 minutes between tries) until
-// battery accepts. battery v0.1.0 has no call to drain a Pool, so the
+// battery accepts. battery v0.3.3 has no call to drain a Pool, so the
 // Operator does not try to empty it first.
 type poolDeletion struct{}
 

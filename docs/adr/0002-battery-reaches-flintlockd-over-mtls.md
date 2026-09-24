@@ -22,7 +22,7 @@ Two ways were considered:
 2. **The Exec Agent also relays battery's MicroVM lifecycle calls** to a
    `flintlockd` that stays on loopback, for the Operator's identity only.
 
-What the two support, as of battery v0.1.0 and flintlock's current flags:
+What the two support, as of battery v0.3.3 and flintlock's current flags:
 
 - battery's per-Host configuration already has TLS towards `flintlockd`,
   with a CA to verify the server and an optional client certificate and key

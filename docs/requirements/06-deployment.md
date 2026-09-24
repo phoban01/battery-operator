@@ -22,7 +22,7 @@ How the Operator runs, how it reaches battery, and what the Manifests deploy
 
 battery's API must be private to the Operator, because a client that can
 reach it directly can claim and use a MicroVM without a claim, bypassing the
-Holder and the Exec Agent's checks. battery v0.1.0 listens on TCP only;
+Holder and the Exec Agent's checks. battery v0.3.3 listens on TCP only;
 loopback in the Operator's pod, which only that pod's containers can reach,
 keeps it private with battery unchanged (DP-001).
 

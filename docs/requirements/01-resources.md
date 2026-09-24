@@ -40,7 +40,7 @@ status and the claims give a consumer the visibility it needs, and a
 
 A Pool's name and namespace in battery are the resource's own, so `PoolSpec`'s
 `name` and `namespace` have no field in `spec`. The proposal on battery#46
-also had a placement strategy; battery v0.1.0 has no such field and places
+also had a placement strategy; battery v0.3.3 has no such field and places
 by the least number of MicroVMs on a Host, so it is left out.
 
 RS-012 moves to admission the refusals battery would otherwise give only when
@@ -76,7 +76,7 @@ Holder writes `spec.renewTime` and the Operator alone writes `status`, so the
 consumer needs no permission on the status subresource and the two writers
 never collide.
 
-The proposal on battery#46 made the claim's name its lease id. battery v0.1.0
+The proposal on battery#46 made the claim's name its lease id. battery v0.3.3
 chooses the lease id itself in `ClaimVM`, so the id is recorded in the
 status instead (ADR 0001, consequence 2).
 

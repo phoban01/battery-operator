@@ -17,6 +17,8 @@ limitations under the License.
 package fakebattery
 
 import (
+	"encoding/hex"
+	"strings"
 	"testing"
 
 	poolmgrv1 "github.com/liquidmetal-dev/battery/api/proto/poolmgr/v1alpha1"
@@ -153,4 +155,33 @@ func sameCounts(got, want map[string]int) bool {
 		}
 	}
 	return true
+}
+
+// TestMicroVMIDs checks that each MicroVM is created with an id of its own,
+// the Pool's name and eight hex digits, and in the Pool's namespace when the
+// template names none, as battery v0.3.3 creates them.
+func TestMicroVMIDs(t *testing.T) {
+	h := newHarness(t, Config{}, hostA)
+	spec := h.spec("ids", 3, hostA)
+	spec.Template.Namespace = ""
+	h.createPool(spec)
+
+	seen := map[string]bool{}
+	for _, vm := range h.stubs[hostA].fl.MicroVMs() {
+		s := vm.GetSpec()
+		id, ok := strings.CutPrefix(s.GetId(), "ids-")
+		if _, err := hex.DecodeString(id); !ok || len(id) != 8 || err != nil {
+			t.Errorf("microvm id %q, want ids- and eight hex digits", s.GetId())
+		}
+		if s.GetNamespace() != testNamespace {
+			t.Errorf("microvm %s in namespace %q, want the Pool's %q", s.GetId(), s.GetNamespace(), testNamespace)
+		}
+		if seen[s.GetId()] {
+			t.Errorf("microvm id %q given twice", s.GetId())
+		}
+		seen[s.GetId()] = true
+	}
+	if len(seen) != 3 {
+		t.Fatalf("%d microvms on the Host, want 3", len(seen))
+	}
 }
