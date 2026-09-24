@@ -152,6 +152,7 @@ Where the issues put new things:
 |------|------|-------|
 | `api/v1alpha1/` | `Pool`, `MicroVMClaim` types | #5, #6 |
 | `internal/controller/` | Controllers | #9, #13, #19, #30 |
+| `internal/reconcile/` | Shared scope, subreconciler and chain types for the controllers | #58 |
 | `internal/clock/`, `internal/fakebattery/`, `internal/fakeflintlock/` | Clock and fakes | #7 |
 | `cmd/exec-agent/`, `internal/execagent/`, `internal/hostcheck/`, `config/exec-agent/` | Exec Agent binary, package, Host checks and its manifests | #15 |
 | `pkg/claimclient/` (proposed) | Client Library | #22 |
@@ -208,7 +209,11 @@ are small, testable on their own, and composable across controllers (#58).
 - **Citations** go on the subreconciler that implements the requirement,
   and on its test.
 
-The shared building blocks (`Scope[T]`, the subreconciler interface, a way
-to chain them, and the generic subreconcilers) arrive with #58. Until then,
-a new controller keeps the same shape with local types, so that moving it
-onto the shared ones later changes no logic.
+The shared building blocks are in `internal/reconcile`: `Scope[T]` (with a
+generic `Patch`), `SubReconciler[S]` and `Func[S]`, `Chain[S]` (steps, then
+finally) and `Group[S]` (a sub-chain whose stop ends only itself, such as a
+set of checks), and the generic `EnsureFinalizer` and `SetCondition`. A
+controller's own scope embeds `*reconcile.Scope[T]` and adds its fields; the
+CertificateSigningRequest signer (`csr_scope.go`) and the CA bundle
+reconciler are examples. New controllers use these. The Claim, Pool and
+Inventory Controllers still have local types of the same shape.
