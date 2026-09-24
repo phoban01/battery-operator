@@ -30,13 +30,16 @@ import (
 	authenticationv1 "k8s.io/api/authentication/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	authenticationv1client "k8s.io/client-go/kubernetes/typed/authentication/v1"
+
+	batteryv1alpha1 "github.com/phoban01/battery-operator/api/v1alpha1"
 )
 
 // DefaultTokenAudience is the Exec Agent's audience: the audience a claim
 // token is requested with (CC-002) and the one the agent's TokenReviews ask
 // for (EA-010). A token for the API server's own audience, which every pod
-// of the namespace may hold, is not accepted.
-const DefaultTokenAudience = "battery.liquidmetal-x.dev/exec-agent"
+// of the namespace may hold, is not accepted. It is defined in the API
+// package, which the Client Library shares.
+const DefaultTokenAudience = batteryv1alpha1.ExecAgentTokenAudience
 
 // credentialIDExtra is the key under which a TokenReview reports the id of
 // a ServiceAccount token, as "JTI=<the token's jti>".

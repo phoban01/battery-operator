@@ -27,8 +27,9 @@ import (
 )
 
 // ExecSecretSuffix ends the name of a claim's Secret, `<claim name>-exec`,
-// which each claim token is bound to (CC-001, CC-002, EA-012).
-const ExecSecretSuffix = "-exec"
+// which each claim token is bound to (CC-001, CC-002, EA-012). It is
+// defined in the API package, which the Client Library shares.
+const ExecSecretSuffix = batteryv1alpha1.ExecSecretSuffix
 
 // Claim is what the Exec Agent reads of a MicroVMClaim: exactly the facts
 // the authorization and the drain guard (EA-040) turn on.
