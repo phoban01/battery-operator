@@ -13,6 +13,7 @@ rules:
 - apiGroups:
   - battery.liquidmetal-x.dev
   resources:
+  - microvmclaims
   - pools
   verbs:
   - get
@@ -23,12 +24,14 @@ rules:
 - apiGroups:
   - battery.liquidmetal-x.dev
   resources:
+  - microvmclaims/finalizers
   - pools/finalizers
   verbs:
   - update
 - apiGroups:
   - battery.liquidmetal-x.dev
   resources:
+  - microvmclaims/status
   - pools/status
   verbs:
   - get
