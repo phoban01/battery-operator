@@ -145,6 +145,17 @@ and the first two are worth raising upstream.
    after the pool's `heartbeat_expiry_threshold` and deletes the VM. The
    cost is one warm VM held for that long, not a leak.
 
+   > **Correction, 2026-09-24 (#86):** battery deletes an expired lease
+   > only in its sweep, which runs every `sweep_interval` (BA-020), so the
+   > orphan outlives the threshold. While battery runs, the orphan is gone
+   > within the pool's `heartbeat_expiry_threshold` plus one
+   > `sweep_interval` of being claimed (BA-020); if its expiry passed while
+   > battery was down, within one `sweep_interval` of battery starting
+   > again (BA-022). Both hold only while battery's database answers the
+   > sweep. The cost is still bounded, and the decision stands.
+   > [06-deployment.md](../requirements/06-deployment.md#battery-sidecar)
+   > says which `sweep_interval` the operator's manifests give battery.
+
    A client-supplied lease id upstream, so that the claim's own uid could
    be the lease id, would remove the window.
 3. **Renewal is relayed.** A client renews by patching `spec.renewTime`,

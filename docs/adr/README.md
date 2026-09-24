@@ -3,6 +3,8 @@
 Each record states one decision, why it was made and what it costs. A record
 is numbered, never renumbered, and never rewritten once accepted: a later
 decision that changes it is a new record that says which one it supersedes.
+A correction of fact that leaves the decision as it was is a dated note,
+set as a quote under the text it corrects, which stays as written.
 
 | # | Decision | Status |
 |---|----------|--------|

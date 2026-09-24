@@ -39,6 +39,15 @@ replica, and losing its database would orphan MicroVMs on the Hosts
 (DP-002, DP-003). The Operator runs one replica with it, which couples the
 Operator's lifecycle to battery's.
 
+The configuration the Manifests supply (DP-004) sets no `sweep_interval`,
+so battery uses its default, 10 seconds in battery v0.3.3
+([10-battery.md](10-battery.md#expiry)). That interval is part of the
+orphan bound (02-claims.md, Binding; ADR 0001, consequence 2): an orphan is
+gone within the Pool's `heartbeat_expiry_threshold` plus one
+`sweep_interval` of being claimed while battery runs (BA-020), and within
+one `sweep_interval` of battery starting again if its expiry passed while
+battery was down (BA-022).
+
 DP-006 leaves the mechanism open: the Operator can signal battery through a
 shared process namespace, or battery can be restarted by the kubelet when
 its configuration changes. Whichever is chosen is written down where it is
