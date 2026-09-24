@@ -113,51 +113,48 @@ func (b *Battery) updatePool(spec poolSpec) (*pool, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	//= docs/requirements/10-battery.md#delete-pool
+	//# When `UpdatePool` succeeds, battery SHALL stop the Pool's
+	//# reconciler, SHALL apply the hook failure policy of the Pool's previous
+	//# spec to each MicroVM whose provisioning that stops, and SHALL start a
+	//# reconciler with the new spec.
+	//
+	// Stopping the Pool's provisioning context makes each MicroVM still
+	// being provisioned go through the policy it was reserved under
+	// (vmState.createPolicy); the next provisioning runs under a new one.
+	b.stopReconcilerLocked(ps)
 	ps.spec = spec
 	ps.fresh = true
 	b.kickReconcile()
 	return &pool{Spec: spec, Status: b.countsLocked(ps.key).status()}, nil
 }
 
-// deletePool implements PoolAdmin.DeletePool. battery refuses while the Pool
-// owns any MicroVM; the fake refuses only while a Lease is outstanding and
-// otherwise deletes the Pool's MicroVMs from their Hosts.
-func (b *Battery) deletePool(ctx context.Context, ref PoolRef) error {
+// deletePool implements PoolAdmin.DeletePool. As in battery, it refuses
+// while the Pool owns any MicroVM, in any phase, and deletes none of them.
+func (b *Battery) deletePool(ref PoolRef) error {
 	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	//= docs/requirements/10-battery.md#delete-pool
+	//# If battery holds no Pool of the name and namespace a
+	//# `DeletePool` names, then battery SHALL answer it with `NOT_FOUND`.
 	ps, err := b.poolLocked(ref)
 	if err != nil {
-		b.mu.Unlock()
 		return err
 	}
-	for _, ls := range b.leases {
-		if keyOf(ls.rec.Pool) == ps.key {
-			b.mu.Unlock()
-			return status.Errorf(codes.FailedPrecondition, "pool %s has outstanding lease %s; release it first", ps.key, ls.rec.LeaseID)
-		}
-	}
-	delete(b.pools, ps.key)
-	var vms []*vmState
+
+	//= docs/requirements/10-battery.md#delete-pool
+	//# If a Pool owns a MicroVM in any phase, then battery SHALL
+	//# answer `DeletePool` for it with `FAILED_PRECONDITION` and keep the Pool
+	//# and its MicroVMs.
 	for _, vm := range b.vms {
 		if vm.pool == ps.key {
-			vms = append(vms, vm)
+			return status.Errorf(codes.FailedPrecondition, "pool %s still has VMs, delete or drain them first", ps.key)
 		}
 	}
-	b.mu.Unlock()
-
-	var firstErr error
-	for _, vm := range vms {
-		if vm.uid == "" {
-			// CreateMicroVM is still in flight; the provisioner sees the
-			// Pool is gone when it returns and deletes the MicroVM itself.
-			continue
-		}
-		if err := b.deleteVM(ctx, vm, 0); err != nil && firstErr == nil {
-			firstErr = err
-		}
-	}
-	if firstErr != nil {
-		return status.Errorf(codes.Unavailable, "pool %s deleted but some microvms remain pending deletion: %v", ps.key, firstErr)
-	}
+	b.stopReconcilerLocked(ps)
+	delete(b.pools, ps.key)
 	return nil
 }
 

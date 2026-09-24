@@ -53,6 +53,11 @@ use. It contains no requirements.
   Node's name.
 - **Pool**: the `Pool` resource, and the battery pool it declares. A Pool is
   identified in battery by the resource's namespace and name.
+- **Drained spec**: the spec a deleted Pool has in battery while the Pool
+  Controller empties it (03-pools.md, Deletion): the spec battery holds for
+  the Pool, with a size of 0, the replenishment strategy
+  `MIN_SIZE_THRESHOLD` with a `min_size` of 1, no pre-lease commands and
+  the hook failure policy `DELETE_AND_REPLACE`.
 - **Claim**: a `MicroVMClaim` resource: one consumer's hold on one warm
   MicroVM from a Pool.
 - **Lease**: battery's record of a claimed MicroVM, identified by the lease

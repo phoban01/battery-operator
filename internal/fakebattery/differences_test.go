@@ -72,32 +72,6 @@ func TestDocumentedDifferences(t *testing.T) {
 		}
 	})
 
-	t.Run("DeletePool deletes idle microvms and refuses while a lease is held", func(t *testing.T) {
-		h := newHarness(t, Config{}, hostA)
-		host := h.stubs[hostA]
-		spec := h.spec("pool", 2, hostA)
-		spec.Replenishment = replenishment{Type: poolmgrv1.ReplenishmentStrategyType_REPLACE_ON_DELETE}
-		h.createPool(spec)
-
-		claim := h.claim("pool")
-		if err := h.client.DeletePool(h.ctx, h.ref("pool")); statusCode(t, err) != codes.FailedPrecondition {
-			t.Fatalf("DeletePool with a lease held = %v, want FAILED_PRECONDITION", err)
-		}
-		if err := h.client.ReleaseVM(h.ctx, claim.LeaseID); err != nil {
-			t.Fatalf("ReleaseVM: %v", err)
-		}
-		h.waitEvent(poolmgrv1.EventType_VM_AVAILABLE)
-		if n := host.live(); n != 2 {
-			t.Fatalf("%d microvms on the host before DeletePool, want 2", n)
-		}
-		if err := h.client.DeletePool(h.ctx, h.ref("pool")); err != nil {
-			t.Fatalf("DeletePool with only idle microvms: %v", err)
-		}
-		if n := host.live(); n != 0 {
-			t.Fatalf("%d microvms on the host after DeletePool, want none", n)
-		}
-	})
-
 	t.Run("VM_EXPIRING_SOON fires one heartbeat interval before the expiry", func(t *testing.T) {
 		h := newHarness(t, Config{}, hostA)
 		spec := h.spec("pool", 1, hostA)

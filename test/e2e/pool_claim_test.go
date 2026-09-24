@@ -57,10 +57,11 @@ const (
 )
 
 // Reasons of the Pool's Ready condition, as the Pool Controller sets them
-// (internal/controller/pool_status.go).
+// (internal/controller/pool_status.go, pool_deletion.go).
 const (
-	poolReasonAtSize         = "AtSize"
-	poolReasonNoEligibleHost = "NoEligibleHost"
+	poolReasonAtSize          = "AtSize"
+	poolReasonNoEligibleHost  = "NoEligibleHost"
+	poolReasonDeletionBlocked = "DeletionBlocked"
 )
 
 // TestPoolPlacementAndClaim: through battery's real poolmgrd, the Inventory
@@ -134,6 +135,9 @@ func placementFeature(ns string) features.Feature {
 			// reaching its size shows it names the kind workers.
 			c := mustClient(t, cfg)
 			pool := placedPool(ns, placedPoolName, map[string]string{hostLabel: isTrue})
+			// Nothing renews the claim below, which has to outlast the
+			// Pool's deletion waiting for it.
+			pool.Spec.Lease.ExpiryThreshold = &metav1.Duration{Duration: placementTimeout}
 			if err := c.Create(ctx, pool); err != nil {
 				t.Fatalf("creating the Pool %s: %v", pool.Name, err)
 			}
@@ -205,6 +209,41 @@ func placementFeature(ns string) features.Feature {
 			}
 			return ctx
 		}).
+		Assess("a deleted Pool whose MicroVM a claim holds waits for the claim", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+			//= docs/requirements/03-pools.md#deletion
+			//= type=test
+			//# While battery refuses `DeletePool` for a deleted Pool that has
+			//# leased or quarantined MicroVMs, the Pool Controller SHALL set the Pool's
+			//# condition `Ready` false with the reason `DeletionBlocked` and a message
+			//# that gives those counts.
+
+			//= docs/requirements/03-pools.md#deletion
+			//= type=test
+			//# When battery refuses `DeletePool` for a deleted Pool whose
+			//# spec in battery is its drained spec, the Pool Controller SHALL claim each
+			//# available MicroVM of the Pool with `ClaimVM`, release it at once with
+			//# `ReleaseVM`, and then call `DeletePool` again.
+			//
+			// poolmgrd refuses DeletePool while the Pool has any MicroVM
+			// (BA-070): the Pool Controller drains the available ones and
+			// leaves the claim's.
+			c := mustClient(t, cfg)
+			pool := &batteryv1alpha1.Pool{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: placedPoolName}}
+			if err := c.Delete(ctx, pool); err != nil {
+				t.Fatalf("deleting the Pool %s: %v", placedPoolName, err)
+			}
+			waitForPoolReady(ctx, t, c, pool, metav1.ConditionFalse, poolReasonDeletionBlocked, func(p *batteryv1alpha1.Pool) bool {
+				return p.Status.Available == 0 && p.Status.Provisioning == 0 && p.Status.Leased == 1
+			})
+			claim := &batteryv1alpha1.MicroVMClaim{}
+			if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: claimName}, claim); err != nil {
+				t.Fatal(err)
+			}
+			if claim.Status.Phase != batteryv1alpha1.MicroVMClaimBound {
+				t.Fatalf("the claim is %s while its Pool waits for it, want Bound", claim.Status.Phase)
+			}
+			return ctx
+		}).
 		Assess("a deleted claim releases its Lease and goes", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
 			//= docs/requirements/02-claims.md#release
 			//= type=test
@@ -220,8 +259,17 @@ func placementFeature(ns string) features.Feature {
 			waitForGone(ctx, t, c, claim)
 			return ctx
 		}).
-		// The namespace is deleted without waiting: a Pool that battery has
-		// filled is never deleted (#81), so neither is its namespace.
+		Assess("the deleted Pool goes once the claim has", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+			//= docs/requirements/03-pools.md#declaration
+			//= type=test
+			//# The Pool Controller SHALL add a finalizer to each Pool, and when
+			//# the Pool is deleted SHALL call `DeletePool`, drain the Pool while battery
+			//# refuses it (PO-030, PO-031), and remove the finalizer only once battery
+			//# has deleted the Pool or reported it unknown.
+			c := mustClient(t, cfg)
+			waitForGone(ctx, t, c, &batteryv1alpha1.Pool{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: placedPoolName}})
+			return ctx
+		}).
 		Teardown(deleteNamespace(ns)).
 		Feature()
 }

@@ -18,6 +18,7 @@ package fakebattery
 
 import (
 	"cmp"
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
@@ -99,6 +100,11 @@ type poolState struct {
 	// fresh is true between a create or update and the next tick; the
 	// initial fill of a fresh Pool is not reported as POOL_SIZE_BELOW_TARGET.
 	fresh bool
+	// reconciler is the context of the Pool's provisioning, as battery's
+	// per-Pool reconciler is: UpdatePool cancels it (BA-074), and the next
+	// provisioning starts a new one. Nil until the Pool first provisions.
+	reconciler     context.Context
+	stopReconciler context.CancelCauseFunc
 	// warned records, per lease id, the expiry for which VM_EXPIRING_SOON
 	// was emitted; a heartbeat moves the expiry and re-arms the warning.
 	warned map[string]int64
@@ -112,6 +118,10 @@ type vmState struct {
 	host    string
 	phase   VMPhase
 	leaseID string
+	// createPolicy is the hook failure policy of the spec the MicroVM's
+	// provisioning started under, which battery's reconciler applies to a
+	// failed create even after UpdatePool (BA-074).
+	createPolicy poolmgrv1.HookFailurePolicy
 	// deleteEvent is the VM_DELETED_* event to emit once the Host confirms
 	// the deletion, or zero for a deletion that has no event of its own.
 	deleteEvent poolmgrv1.EventType

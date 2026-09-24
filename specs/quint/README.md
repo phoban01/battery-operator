@@ -14,7 +14,7 @@ code. They do not replace Go tests. How they cite requirements is in
 | `claims_replay.qnt` | The traces of `claims.qnt` that the Claim Controller's replay test replays: `claims.qnt`'s steps, weighted towards the controller's (#62) |
 | `certificates.qnt` | Certificate approval and signing (CT-001 to CT-020; EA-061, EA-062, EA-068; ADR 0003 and ADR 0004) |
 | `certificates_test.qnt` | Scenario tests for `certificates.qnt` |
-| `pools.qnt` | Pools, placement and inventory: the Pool Controller and the Inventory Controller against battery (PO-001 to PO-004, PO-010 to PO-012, IN-001 to IN-013, DP-007, DP-008, BA-061; ADR 0001, consequence 1) |
+| `pools.qnt` | Pools, placement and inventory: the Pool Controller and the Inventory Controller against battery (PO-001 to PO-004, PO-010 to PO-012, PO-030 to PO-032, IN-001 to IN-013, DP-007, DP-008, BA-061, BA-070, BA-072; ADR 0001, consequence 1) |
 | `pools_test.qnt` | Scenario tests for `pools.qnt` |
 
 ## Running them
@@ -43,7 +43,8 @@ quint run specs/quint/pools.qnt --invariant safety --max-steps 60 --max-samples 
   --witnesses witnessFlapAbsorbed witnessRestart witnessBatchedRestart witnessTwoRestarts \
   witnessRenewalRestart witnessRenewalWithHostChange \
   witnessVMOnFormerHost witnessPlacementUpdated witnessNoEligibleHost \
-  witnessPoolDeleted witnessDrainedForPool witnessRejectedWithoutHost
+  witnessPoolDeleted witnessDrainedForPool witnessRejectedWithoutHost \
+  witnessPoolDrained witnessDeletionWaitsForClaim
 ```
 
 A violation prints the trace that breaks the invariant and the seed that
@@ -273,19 +274,26 @@ only when it starts (ADR 0001, consequence 1; BA-061). The steps are:
   finalizer is stored, `UpdatePool` on a new generation or a new set of
   matching Hosts, the `Rejected` condition for a spec battery refuses, the
   `NoEligibleHost` condition, and `DeletePool` under the finalizer (PO-001
-  to PO-004, PO-010 to PO-012). It resolves a selector against the Hosts
-  the Inventory Controller has published whose Nodes exist.
-- **battery:** replenishes each Pool on the least loaded Host in its
-  `flintlock_hosts`, as its `PickHost` does. It does not check
-  `flintlock_hosts` against its Hosts, and provisioning on a Host it does
-  not know fails. It refuses a spec whose heartbeat expiry threshold is not
-  positive, which stands for every spec it refuses (PO-004).
+  to PO-004, PO-010 to PO-012). While battery refuses to delete a Pool, it
+  drains it: the drained spec, a size of 0 here, then a claim and release
+  of each available MicroVM, never one a claim holds (PO-030 to PO-032).
+  It resolves a selector against the Hosts the Inventory Controller has
+  published whose Nodes exist.
+- **battery:** replenishes each Pool up to its size on the least loaded
+  Host in its `flintlock_hosts`, as its `PickHost` does, so a Pool of size
+  0 gets none (BA-072). It does not check `flintlock_hosts` against its
+  Hosts, and provisioning on a Host it does not know fails. It refuses
+  `DeletePool` while the Pool owns a MicroVM (BA-070). It refuses a spec
+  whose heartbeat expiry threshold is not positive, which stands for every
+  spec it refuses (PO-004). The model has no replenishment strategies,
+  hooks, provisioning phase or quarantine (10-battery.md, stand-ins).
 - **the environment:** Nodes are labelled, cordoned, uncordoned, deleted
   and created again; Node reports flip; Pools are created, changed (to a
-  spec battery refuses, too) and deleted; leased MicroVMs are released;
-  cert-manager renews battery's client certificate; time passes. The
-  controllers act promptly: time does not pass while a restart window is
-  waiting to open or close, or while battery is restarting.
+  spec battery refuses, too) and deleted; claims lease available MicroVMs
+  and release them; cert-manager renews battery's client certificate;
+  time passes. The controllers act promptly: time does not pass while a
+  restart window is waiting to open or close, or while battery is
+  restarting.
 
 IN-012 defines the restart window this way (#74): restarts are at least a
 window apart, and every change settled in a window goes into its restart.
@@ -299,6 +307,8 @@ Invariants, all in `safety`:
 | `rejectedStandsOverNoEligibleHost` | once the Pool Controller is idle, a Pool whose spec battery refuses says `Rejected`, whether or not its selector matches a Host (PO-004 over PO-012, #115) |
 | `finalizerRemovedOnlyAfterDelete` | a Pool whose finalizer the controller removed is not in battery (PO-003) |
 | `goneLeavesNothing` | a Pool gone from the API server is not in battery: `CreatePool` waits for the stored finalizer (PO-001, PO-003, #72) |
+| `vmsBelongToPools` | every MicroVM battery holds belongs to a Pool battery holds: deleting a Pool never orphans its MicroVMs (BA-070, PO-003, #81) |
+| `drainLeavesLeases` | the drain of a deleted Pool never takes a MicroVM a claim holds: battery holds exactly the MicroVMs leased and not yet released (PO-032) |
 | `hostsFollowNodes` | battery's Hosts are the Nodes that are Hosts, except for a change younger than the settle time plus one restart window (IN-001, IN-002, IN-010, IN-011) |
 | `noNewVMOnFormerHost` | a cordoned, deleted or not-ready Host gets no new MicroVM once its change has settled and its window has closed (IN-001, IN-002) |
 | `restartOnlyForSettledChanges` | a restart applies only changes that have held for the settle time, or a renewed certificate, so a flapping report restarts nothing (IN-011, DP-007) |
@@ -327,13 +337,22 @@ behind. `createBeforeFinalizerTest` shows `CreatePool` refused before the
 finalizer, and `poolDeletedBeforeFinalizerTest` a Pool deleted then leaving
 nothing in battery.
 
+`vmsBelongToPools` holds because battery refuses to delete a Pool that owns
+MicroVMs (BA-070, #81). The model used to delete a Pool's MicroVMs with it,
+which battery v0.3.3 does not do, and so hid that a filled Pool could never
+be deleted. `deleteFilledPoolTest` walks a deleted Pool through its
+drained spec, the drain of its available MicroVM and the wait for the one
+a claim holds; `deleteRefusedWhileFilledTest` and `drainTakesNoLeaseTest`
+show the refusal and a drain refused a leased MicroVM.
+
 The witnesses show that the simulation reaches a flap absorbed within the
 settle time, a restart, a restart that batches two Hosts, two restarts, a
 MicroVM placed on a Host whose Node had stopped being a Host (within the
 bound), an `UpdatePool` for a changed set of Hosts, a Pool with
 `NoEligibleHost`, a Pool deleted under its finalizer, a Pool that says
-`Rejected` while its selector matches no Host, and a Pool dropping a
-leaving Host before the restart that removes it.
+`Rejected` while its selector matches no Host, a Pool dropping a
+leaving Host before the restart that removes it, a deleted Pool drained of
+an available MicroVM, and a drained Pool waiting for a claim's.
 
 ## Conventions
 

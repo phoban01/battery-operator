@@ -74,6 +74,51 @@ module pools_test {
       .then(ctlDeletePool("p1"))
       .expect(and { isGonePool(slot("p1")), not(inBattery("p1")), safety })
 
+  // PO-030 to PO-032, BA-070 (#81): battery refuses to delete a Pool that
+  // owns MicroVMs. The Pool Controller gives it its drained spec, drains
+  // the available MicroVM, and waits for the claim's; once the claim
+  // releases it, the Pool goes.
+  run deleteFilledPoolTest =
+    init
+      .then(declare("p1", Set(ZONE_A), 2))
+      .then(batteryProvision("p1", "h1"))
+      .then(batteryProvision("p1", "h2"))
+      .then(leaseVM("p1", "h1"))
+      .then(deletePool("p1"))
+      .expect(and { deletionRefused("p1"), not(canDelete("p1")), not(canDrainVM("p1")) })
+      .then(ctlDrainSpec("p1"))
+      .expect(and { battery.pools.get("p1").size == 0, not(canProvision("p1")) })
+      .then(ctlDrainVM("p1"))
+      .expect(and {
+        vmsOf("p1") == Set({ id: 1, pool: "p1", host: "h1", leased: true }),
+        deletionRefused("p1"),
+        poolControllerIdle,
+        safety,
+      })
+      .then(releaseVM("p1", "h1"))
+      .then(ctlDeletePool("p1"))
+      .expect(and { isGonePool(slot("p1")), not(inBattery("p1")), battery.vms == Set(), safety })
+
+  // BA-070: DeletePool before the drain is refused.
+  run deleteRefusedWhileFilledTest =
+    init
+      .then(declare("p1", Set(ZONE_A), 1))
+      .then(batteryProvision("p1", "h1"))
+      .then(deletePool("p1"))
+      .then(ctlDeletePool("p1"))
+      .fail()
+
+  // PO-032: the drain takes no MicroVM a claim holds.
+  run drainTakesNoLeaseTest =
+    init
+      .then(declare("p1", Set(ZONE_A), 1))
+      .then(batteryProvision("p1", "h1"))
+      .then(leaseVM("p1", "h1"))
+      .then(deletePool("p1"))
+      .then(ctlDrainSpec("p1"))
+      .then(ctlDrainVM("p1"))
+      .fail()
+
   // IN-011: a report that flaps back within the settle time restarts
   // nothing, and battery keeps the Host.
   run flapAbsorbedTest =

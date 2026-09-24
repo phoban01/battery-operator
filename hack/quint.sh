@@ -76,7 +76,8 @@ check specs/quint/pools.qnt safety \
   witnessFlapAbsorbed witnessRestart witnessBatchedRestart witnessTwoRestarts \
   witnessRenewalRestart witnessRenewalWithHostChange \
   witnessVMOnFormerHost witnessPlacementUpdated witnessNoEligibleHost \
-  witnessPoolDeleted witnessDrainedForPool witnessRejectedWithoutHost
+  witnessPoolDeleted witnessDrainedForPool witnessRejectedWithoutHost \
+  witnessPoolDrained witnessDeletionWaitsForClaim
 
 # The traces the Claim Controller's replay test replays are the ones the
 # claim model writes now (#62, hack/claims-traces.sh).

@@ -60,8 +60,9 @@ func readyCondition(pool *batteryv1alpha1.Pool) *metav1.Condition {
 //= docs/requirements/03-pools.md#declaration
 //= type=test
 //# The Pool Controller SHALL add a finalizer to each Pool, and when
-//# the Pool is deleted SHALL call `DeletePool` and remove the finalizer only
-//# once battery has deleted the Pool or reported it unknown.
+//# the Pool is deleted SHALL call `DeletePool`, drain the Pool while battery
+//# refuses it (PO-030, PO-031), and remove the finalizer only once battery
+//# has deleted the Pool or reported it unknown.
 
 // TestPoolFinalizerIsAddedBeforeBatteryHearsOfThePool covers PO-003: the
 // chain stops once it adds the finalizer, so battery is not called until
@@ -86,25 +87,23 @@ func TestPoolFinalizerIsAddedBeforeBatteryHearsOfThePool(t *testing.T) {
 //= docs/requirements/03-pools.md#declaration
 //= type=test
 //# The Pool Controller SHALL add a finalizer to each Pool, and when
-//# the Pool is deleted SHALL call `DeletePool` and remove the finalizer only
-//# once battery has deleted the Pool or reported it unknown.
+//# the Pool is deleted SHALL call `DeletePool`, drain the Pool while battery
+//# refuses it (PO-030, PO-031), and remove the finalizer only once battery
+//# has deleted the Pool or reported it unknown.
 
 // TestDeletedPoolLeavesBatteryBeforeItsFinalizer covers PO-003 for each
-// answer battery can give DeletePool.
+// answer battery can give DeletePool but a refusal, which
+// pool_deletion_test.go covers.
 func TestDeletedPoolLeavesBatteryBeforeItsFinalizer(t *testing.T) {
-	refused := fmt.Errorf("%w: pool ci/runners still has VMs, delete or drain them first", battery.ErrFailedPrecondition)
 	for _, tc := range []struct {
 		name          string
 		held          bool
 		deleteErr     error
 		wantFinalizer bool
 		wantErr       error
-		wantReason    string
 	}{
 		{name: "battery deletes it", held: true},
 		{name: "battery does not know it", held: false},
-		{name: "battery refuses while it has MicroVMs", held: true, deleteErr: refused,
-			wantFinalizer: true, wantErr: battery.ErrFailedPrecondition, wantReason: PoolReasonDeletionBlocked},
 		{name: "battery is unavailable", held: true, deleteErr: battery.ErrUnavailable,
 			wantFinalizer: true, wantErr: battery.ErrUnavailable},
 	} {
@@ -125,16 +124,8 @@ func TestDeletedPoolLeavesBatteryBeforeItsFinalizer(t *testing.T) {
 			if got := controllerutil.ContainsFinalizer(s.Pool, PoolFinalizer); got != tc.wantFinalizer {
 				t.Errorf("finalizer present = %v, want %v", got, tc.wantFinalizer)
 			}
-			ready := readyCondition(s.Pool)
-			if tc.wantReason == "" {
-				if ready != nil {
-					t.Errorf("Ready = %+v, want none", ready)
-				}
-				return
-			}
-			if ready == nil || ready.Status != metav1.ConditionFalse || ready.Reason != tc.wantReason ||
-				ready.Message != "pool ci/runners still has VMs, delete or drain them first" {
-				t.Errorf("Ready = %+v, want False/%s with battery's message", ready, tc.wantReason)
+			if ready := readyCondition(s.Pool); ready != nil {
+				t.Errorf("Ready = %+v, want none", ready)
 			}
 		})
 	}

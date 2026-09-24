@@ -15,20 +15,23 @@
 // - the Pool Controller: the finalizer, CreatePool once it is stored,
 //   UpdatePool on a new generation or a new set of matching Hosts, the
 //   Rejected condition for a spec battery refuses and the NoEligibleHost
-//   condition, and DeletePool under the finalizer (PO-001 to PO-004,
-//   PO-010 to PO-012);
+//   condition, and DeletePool under the finalizer, draining a Pool
+//   battery refuses to delete: its drained spec, then a claim and release
+//   of each available MicroVM, never one a claim holds (PO-001 to PO-004,
+//   PO-010 to PO-012, PO-030 to PO-032);
 // - battery v0.3.3: it reads its Hosts from its configuration, and its
 //   client certificate from its Secret's volume, only when it
 //   starts, and replenishes each Pool on the least loaded Host in the
 //   Pool's flintlock_hosts (internal/reconciler/hostpick.go). It does not
 //   check flintlock_hosts against its Hosts: CreatePool and UpdatePool take
 //   any name, and provisioning on a Host it does not know fails
-//   (ErrUnknownHost). It refuses a spec whose heartbeat expiry threshold
+//   (ErrUnknownHost). It refuses DeletePool while the Pool owns a
+//   MicroVM (BA-070). It refuses a spec whose heartbeat expiry threshold
 //   is not positive, which stands here for every spec it refuses (PO-004);
 // - the environment: Nodes are labelled, cordoned, uncordoned, deleted and
 //   created again, their Node reports flip between ready and not ready,
 //   Pools are created, changed (to a spec battery refuses, too) and
-//   deleted, leased MicroVMs are released,
+//   deleted, claims lease available MicroVMs and release them,
 //   cert-manager renews battery's client certificate,
 //   and time passes.
 //
@@ -81,7 +84,8 @@ module pools {
   // State
 
   // A MicroVM battery has created, reduced to where it runs.
-  type PlacedVM = { id: int, pool: PoolName, host: HostName }
+  // leased: a claim holds it; otherwise it is available.
+  type PlacedVM = { id: int, pool: PoolName, host: HostName, leased: bool }
 
   type BatteryState = {
     up: bool,
@@ -143,6 +147,12 @@ module pools {
     // the Pools in battery that named a Host such a restart removed, until
     // the Pool Controller next writes them
     staleAfterDrain: Set[PoolName],
+    // available MicroVMs the Pool Controller claimed and released to
+    // drain a deleted Pool (PO-031)
+    drainedVMs: int,
+    // MicroVMs claims leased, and leased MicroVMs released or expired
+    leases: int,
+    releases: int,
   }
 
   var now: Time
@@ -233,6 +243,12 @@ module pools {
     val fh = battery.pools.get(p).flintlockHosts
     fh.filter(h => fh.forall(h2 => vmCount(p, h) <= vmCount(p, h2)))
 
+  //@= docs/requirements/10-battery.md#delete-pool
+  //@# While a Pool's replenishment strategy is `MIN_SIZE_THRESHOLD`
+  //@# and its size is 0, battery SHALL provision no MicroVM for it.
+  //
+  // battery tops a Pool up to its size; the model has no strategies, and a
+  // Pool of size 0, drained or not, gets no MicroVM.
   def canProvision(p: PoolName): bool = and {
     battery.up,
     inBattery(p),
@@ -270,6 +286,9 @@ module pools {
       drainsWithPools: 0,
       restartsPastDrain: 0,
       staleAfterDrain: Set(),
+      drainedVMs: 0,
+      leases: 0,
+      releases: 0,
     },
   }
 
@@ -406,7 +425,7 @@ module pools {
     battery.hosts.contains(h),
     battery' = {
       ...battery,
-      vms: battery.vms.union(Set({ id: battery.nextVM, pool: p, host: h })),
+      vms: battery.vms.union(Set({ id: battery.nextVM, pool: p, host: h, leased: false })),
       nextVM: battery.nextVM + 1,
     },
     hist' = { ...hist, births: hist.births.union(Set({ host: h, at: now, nodeIsHost: isHost(h), age: age(h) })) },
@@ -424,15 +443,32 @@ module pools {
     battery' = battery, inv' = inv,
   }
 
-  // A leased MicroVM of the Pool on the Host is released, and battery
-  // deletes it.
+  // A claim leases an available MicroVM of the Pool on the Host.
+  action leaseVM(p: PoolName, h: HostName): bool = all {
+    battery.up,
+    inBattery(p),
+    val free = battery.vms.filter(v => v.pool == p and v.host == h and not(v.leased))
+    all {
+      free != Set(),
+      val oldest = free.fold(battery.nextVM, (m, v) => if (v.id < m) v.id else m)
+      battery' = { ...battery, vms: battery.vms.map(v => if (v.id == oldest) { ...v, leased: true } else v) },
+    },
+    now' = now, secret' = secret, nodes' = nodes, present' = present, changedAt' = changedAt, pools' = pools, inv' = inv,
+    hist' = { ...hist, leases: hist.leases + 1 },
+  }
+
+  // A leased MicroVM of the Pool on the Host is released, or its Lease
+  // expires, and battery deletes it.
   action releaseVM(p: PoolName, h: HostName): bool = all {
     battery.up,
-    vmCount(p, h) > 0,
-    val vs = battery.vms.filter(v => v.pool == p and v.host == h)
-    val newest = vs.fold(0, (m, v) => if (v.id > m) v.id else m)
-    battery' = { ...battery, vms: battery.vms.filter(v => v.id != newest) },
-    now' = now, secret' = secret, nodes' = nodes, present' = present, changedAt' = changedAt, pools' = pools, inv' = inv, hist' = hist,
+    val held = battery.vms.filter(v => v.pool == p and v.host == h and v.leased)
+    all {
+      held != Set(),
+      val newest = held.fold(0, (m, v) => if (v.id > m) v.id else m)
+      battery' = { ...battery, vms: battery.vms.filter(v => v.id != newest) },
+    },
+    now' = now, secret' = secret, nodes' = nodes, present' = present, changedAt' = changedAt, pools' = pools, inv' = inv,
+    hist' = { ...hist, releases: hist.releases + 1 },
   }
 
   //@= docs/requirements/10-battery.md#restarts
@@ -585,8 +621,9 @@ module pools {
 
   //@= docs/requirements/03-pools.md#declaration
   //@# The Pool Controller SHALL add a finalizer to each Pool, and when
-  //@# the Pool is deleted SHALL call `DeletePool` and remove the finalizer only
-  //@# once battery has deleted the Pool or reported it unknown.
+  //@# the Pool is deleted SHALL call `DeletePool`, drain the Pool while battery
+  //@# refuses it (PO-030, PO-031), and remove the finalizer only once battery
+  //@# has deleted the Pool or reported it unknown.
   def canAddFinalizer(p: PoolName): bool = and {
     live(p), not(obj(p).deleting), not(obj(p).hasFinalizer),
   }
@@ -669,23 +706,83 @@ module pools {
     now' = now, secret' = secret, nodes' = nodes, present' = present, changedAt' = changedAt, battery' = battery, inv' = inv, hist' = hist,
   }
 
+  def vmsOf(p: PoolName): Set[PlacedVM] = battery.vms.filter(v => v.pool == p)
+
+  //@= docs/requirements/10-battery.md#delete-pool
+  //@# If a Pool owns a MicroVM in any phase, then battery SHALL
+  //@# answer `DeletePool` for it with `FAILED_PRECONDITION` and keep the Pool
+  //@# and its MicroVMs.
+  //
+  // DeletePool succeeds for a Pool battery does not hold (NOT_FOUND, which
+  // lets the finalizer go) or one that owns no MicroVM; otherwise battery
+  // refuses it and the Pool Controller drains the Pool.
   def canDelete(p: PoolName): bool = and {
     live(p), obj(p).deleting, obj(p).hasFinalizer, battery.up,
+    not(inBattery(p)) or vmsOf(p) == Set(),
   }
 
-  // DeletePool, then the finalizer. battery deletes the Pool and its
-  // MicroVMs; a Pool it does not hold is "unknown", which also lets the
-  // finalizer go.
+  // DeletePool, then the finalizer.
   action ctlDeletePool(p: PoolName): bool = all {
     canDelete(p),
     battery' = {
       ...battery,
       pools: battery.pools.keys().exclude(Set(p)).mapBy(q => battery.pools.get(q)),
-      vms: battery.vms.filter(v => v.pool != p),
     },
     pools' = pools.set(p, PoolGone({ ...obj(p), hasFinalizer: false })),
     hist' = { ...hist, finalized: hist.finalized.union(Set(p)), staleAfterDrain: hist.staleAfterDrain.exclude(Set(p)) },
     now' = now, secret' = secret, nodes' = nodes, present' = present, changedAt' = changedAt, inv' = inv,
+  }
+
+  // battery refused DeletePool: the deleted Pool still owns MicroVMs.
+  def deletionRefused(p: PoolName): bool = and {
+    live(p), obj(p).deleting, obj(p).hasFinalizer, battery.up,
+    inBattery(p), vmsOf(p) != Set(),
+  }
+
+  //@= docs/requirements/03-pools.md#deletion
+  //@# When battery refuses `DeletePool` for a deleted Pool because
+  //@# the Pool still has MicroVMs, the Pool's spec in battery is not its
+  //@# drained spec, and battery reports no provisioning MicroVM in the Pool,
+  //@# the Pool Controller SHALL send battery the Pool's drained spec with
+  //@# `UpdatePool`.
+  //
+  // The drained spec is a size of 0 here; the model has no replenishment
+  // strategies, hooks or provisioning phase, so no MicroVM is being
+  // provisioned when UpdatePool comes (BA-074).
+  def canDrainSpec(p: PoolName): bool = and {
+    deletionRefused(p), battery.pools.get(p).size != 0,
+  }
+
+  action ctlDrainSpec(p: PoolName): bool = all {
+    canDrainSpec(p),
+    battery' = { ...battery, pools: battery.pools.set(p, { ...battery.pools.get(p), size: 0 }) },
+    now' = now, secret' = secret, nodes' = nodes, present' = present, changedAt' = changedAt, pools' = pools, inv' = inv, hist' = hist,
+  }
+
+  //@= docs/requirements/03-pools.md#deletion
+  //@# When battery refuses `DeletePool` for a deleted Pool whose
+  //@# spec in battery is its drained spec, the Pool Controller SHALL claim each
+  //@# available MicroVM of the Pool with `ClaimVM`, release it at once with
+  //@# `ReleaseVM`, and then call `DeletePool` again.
+
+  //@= docs/requirements/03-pools.md#deletion
+  //@# The Pool Controller SHALL NOT release a Lease of a deleted
+  //@# Pool other than one it claimed itself under PO-031.
+  //
+  // One claim and release, which deletes an available MicroVM; the leased
+  // ones stay until their claims end (releaseVM).
+  def canDrainVM(p: PoolName): bool = and {
+    deletionRefused(p), battery.pools.get(p).size == 0,
+    vmsOf(p).exists(v => not(v.leased)),
+  }
+
+  action ctlDrainVM(p: PoolName): bool = all {
+    canDrainVM(p),
+    val free = vmsOf(p).filter(v => not(v.leased))
+    val oldest = free.fold(battery.nextVM, (m, v) => if (v.id < m) v.id else m)
+    battery' = { ...battery, vms: battery.vms.filter(v => v.id != oldest) },
+    hist' = { ...hist, drainedVMs: hist.drainedVMs + 1 },
+    now' = now, secret' = secret, nodes' = nodes, present' = present, changedAt' = changedAt, pools' = pools, inv' = inv,
   }
 
   // Whether the Pool Controller has any step it can take.
@@ -697,6 +794,8 @@ module pools {
       not(canUpdate(p)),
       not(canReject(p)),
       not(canDelete(p)),
+      not(canDrainSpec(p)),
+      not(canDrainVM(p)),
     }),
   }
 
@@ -729,6 +828,7 @@ module pools {
       batteryProvision(p, h),
       batteryProvisionUnknownHost(p, h),
       batteryStart,
+      leaseVM(p, h),
       releaseVM(p, h),
       // the Inventory Controller
       invOpenWindow,
@@ -742,6 +842,8 @@ module pools {
       ctlUpdatePool(p),
       ctlRejectPool(p),
       ctlDeletePool(p),
+      ctlDrainSpec(p),
+      ctlDrainVM(p),
     }
   }
 
@@ -846,6 +948,19 @@ module pools {
   val goneLeavesNothing: bool =
     POOLS.forall(p => isGonePool(slot(p)) implies not(inBattery(p)))
 
+  // BA-070, PO-003 (#81): every MicroVM battery holds belongs to a Pool
+  // battery holds. battery refuses DeletePool while the Pool owns one, so
+  // deleting a Pool never orphans its MicroVMs.
+  val vmsBelongToPools: bool =
+    battery.vms.forall(v => inBattery(v.pool))
+
+  // PO-032: the drain of a deleted Pool never takes a MicroVM a claim
+  // holds. A leased MicroVM leaves battery only when it is released or
+  // its Lease expires, so battery holds exactly the leased MicroVMs that
+  // were leased and not yet released.
+  val drainLeavesLeases: bool =
+    battery.vms.filter(v => v.leased).size() == hist.leases - hist.releases
+
   // All the invariants CI checks.
   val safety: bool = and {
     poolHostsMatchSelector,
@@ -853,6 +968,8 @@ module pools {
     rejectedStandsOverNoEligibleHost,
     finalizerRemovedOnlyAfterDelete,
     goneLeavesNothing,
+    vmsBelongToPools,
+    drainLeavesLeases,
     hostsFollowNodes,
     noNewVMOnFormerHost,
     restartOnlyForSettledChanges,
@@ -888,6 +1005,12 @@ module pools {
     POOLS.exists(p => live(p) and obj(p).status.ready.reason == NoEligibleHost)
   // a Pool was deleted in battery under its finalizer
   val witnessPoolDeleted: bool = hist.finalized != Set()
+  // a deleted Pool was drained of an available MicroVM, and a Pool was
+  // deleted in battery (PO-031)
+  val witnessPoolDrained: bool = hist.drainedVMs > 0 and hist.finalized != Set()
+  // a deleted Pool, drained, waits for a MicroVM a claim holds (PO-032)
+  val witnessDeletionWaitsForClaim: bool =
+    POOLS.exists(p => deletionRefused(p) and battery.pools.get(p).size == 0 and vmsOf(p).forall(v => v.leased))
   // a live Pool whose selector matches no Host says Rejected, because
   // battery refuses its spec
   val witnessRejectedWithoutHost: bool =

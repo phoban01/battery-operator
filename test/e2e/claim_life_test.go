@@ -191,7 +191,6 @@ func claimLifeFeature(ns string) features.Feature {
 			}
 			return ctx
 		}).
-		// Not waited for: a Pool battery has filled is never deleted (#81).
 		Teardown(deleteNamespace(ns)).
 		Feature()
 }

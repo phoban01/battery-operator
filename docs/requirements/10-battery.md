@@ -239,6 +239,81 @@ SIGTERM, both of which stop it, and watches no file, so a renewed
 certificate reaches the Hosts only through a restart (06-deployment.md,
 DP-007). The same holds for the certificate authority in `ca_file`.
 
+## Deleting a Pool {#delete-pool}
+
+- **BA-070** If a Pool owns a MicroVM in any phase, then battery SHALL
+  answer `DeletePool` for it with `FAILED_PRECONDITION` and keep the Pool
+  and its MicroVMs.
+- **BA-071** If battery holds no Pool of the name and namespace a
+  `DeletePool` names, then battery SHALL answer it with `NOT_FOUND`.
+- **BA-072** While a Pool's replenishment strategy is `MIN_SIZE_THRESHOLD`
+  and its size is 0, battery SHALL provision no MicroVM for it.
+- **BA-073** battery SHALL NOT delete a MicroVM in the phase `QUARANTINED`.
+- **BA-074** When `UpdatePool` succeeds, battery SHALL stop the Pool's
+  reconciler, SHALL apply the hook failure policy of the Pool's previous
+  spec to each MicroVM whose provisioning that stops, and SHALL start a
+  reconciler with the new spec.
+
+| ID | Source at v0.3.3 |
+|----|------------------|
+| BA-070 | [`internal/api/pooladmin.go`, `PoolAdminServer.DeletePool`, L250-L280](https://github.com/liquidmetal-dev/battery/blob/v0.3.3/internal/api/pooladmin.go#L250-L280) |
+| BA-071 | [`internal/api/pooladmin.go`, `PoolAdminServer.DeletePool`, L263-L267](https://github.com/liquidmetal-dev/battery/blob/v0.3.3/internal/api/pooladmin.go#L263-L267) |
+| BA-072 | [`internal/reconciler/strategy.go`, `minSizeThreshold`, L89-L113](https://github.com/liquidmetal-dev/battery/blob/v0.3.3/internal/reconciler/strategy.go#L89-L113); [`internal/reconciler/reconciler.go`, `Reconciler.Run`, L97-L126](https://github.com/liquidmetal-dev/battery/blob/v0.3.3/internal/reconciler/reconciler.go#L97-L126) |
+| BA-073 | [`internal/reconciler/provision.go`, `ApplyHookFailurePolicy`, L333-L338](https://github.com/liquidmetal-dev/battery/blob/v0.3.3/internal/reconciler/provision.go#L333-L338); [`internal/reconciler/sweeper.go`, `Sweeper.retryPendingDeletions`, L148-L166](https://github.com/liquidmetal-dev/battery/blob/v0.3.3/internal/reconciler/sweeper.go#L148-L166), [`Sweeper.beginExpiry`, L176-L217](https://github.com/liquidmetal-dev/battery/blob/v0.3.3/internal/reconciler/sweeper.go#L176-L217); [`internal/api/lease.go`, `LeaseServer.ReleaseVM`, L270-L277](https://github.com/liquidmetal-dev/battery/blob/v0.3.3/internal/api/lease.go#L270-L277) |
+| BA-074 | [`internal/api/pooladmin.go`, `PoolAdminServer.UpdatePool`, L228-L240](https://github.com/liquidmetal-dev/battery/blob/v0.3.3/internal/api/pooladmin.go#L228-L240); [`internal/poolmanager/manager.go`, `StopReconciler`, L141-L157](https://github.com/liquidmetal-dev/battery/blob/v0.3.3/internal/poolmanager/manager.go#L141-L157); [`internal/reconciler/provision.go`, `Provisioner.Provision`, L193-L262](https://github.com/liquidmetal-dev/battery/blob/v0.3.3/internal/reconciler/provision.go#L193-L262), [`ApplyHookFailurePolicy`, L307-L352](https://github.com/liquidmetal-dev/battery/blob/v0.3.3/internal/reconciler/provision.go#L306-L352) |
+
+`DeletePool` lists the Pool's MicroVMs in every phase, `DELETING` and
+`FAILED` included, and refuses if there is one; it deletes none of them.
+battery v0.3.3 has no other call that deletes a Pool or an idle MicroVM,
+and none of its replenishment strategies deletes a MicroVM when a Pool's
+size drops: a strategy only decides how many to create. So a Pool that
+has ever held a MicroVM can be deleted only once each of its MicroVMs has
+gone some other way:
+
+- a leased MicroVM goes when its Lease is released (BA-030) or expires
+  (BA-023);
+- an available MicroVM goes only by being claimed and then released;
+- a MicroVM that is provisioning becomes available, or goes through the
+  Pool's hook failure policy, which deletes it under `DELETE_AND_REPLACE`
+  and quarantines it under `QUARANTINE`;
+- a quarantined MicroVM never goes (BA-073).
+
+battery v0.3.3 refuses a `MIN_SIZE_THRESHOLD` strategy without a positive
+`min_size`, but not a size of 0, and a `MIN_SIZE_THRESHOLD` Pool of size 0
+creates nothing: the tick's target is the size less every MicroVM already
+there, and the strategy ignores claims and deletions (BA-072). The other
+two strategies do not stop at a size of 0: `IMMEDIATE_ON_LEASE` creates a
+MicroVM on every claim, and `REPLACE_ON_DELETE` one on every deletion,
+whatever the size ([`internal/reconciler/strategy.go`, L86 and L127](https://github.com/liquidmetal-dev/battery/blob/v0.3.3/internal/reconciler/strategy.go#L74-L127)).
+A Pool set to `MIN_SIZE_THRESHOLD`, size 0, can therefore be emptied of
+its available MicroVMs by claiming each one and releasing it at once; with
+no pre-lease commands and the policy `DELETE_AND_REPLACE`, such a claim
+runs no hook, and one that fails deletes its MicroVM rather than
+quarantining it.
+
+A quarantined MicroVM has no Lease: `ApplyHookFailurePolicy` clears its
+lease id, and a pre-lease hook that fails in `ClaimVM` creates none
+([`internal/api/lease.go`, L119-L121](https://github.com/liquidmetal-dev/battery/blob/v0.3.3/internal/api/lease.go#L119-L121)).
+`ReleaseVM` needs a Lease, the sweep deletes only the MicroVMs of expired
+Leases and those already `DELETING`, and nothing else in battery deletes
+a MicroVM. A Pool with a quarantined MicroVM can therefore not be deleted
+through battery's API; only an edit of battery's database can.
+
+`UpdatePool` restarts the Pool's reconciler, which cancels the context of
+every `Provision` still running. A cancelled `Provision` goes through
+`ApplyHookFailurePolicy` with the spec the old reconciler was started
+with, whose policy may be `QUARANTINE`. A `Provision` cancelled before its
+MicroVM has a record in battery leaves nothing in battery to delete. A
+MicroVM whose record reached `PROVISIONING` or `CREATE_HOOK_RUNNING` when
+poolmgrd itself stopped has no reconciler to finish it after the restart
+([`internal/poolmanager/manager.go`, `Seed`, L78-L91](https://github.com/liquidmetal-dev/battery/blob/v0.3.3/internal/poolmanager/manager.go#L78-L91)),
+and it too blocks `DeletePool` for good.
+
+The Pool's status in battery counts only the available, leased,
+provisioning and quarantined MicroVMs (`CountVMs`), so a Pool whose
+counts are all 0 can still be refused while one of its MicroVMs is
+`DELETING`.
+
 ## Where the stand-ins differ {#stand-ins}
 
 The fake battery meets every assumption above except these, each cited
@@ -250,6 +325,10 @@ in its code as an exception:
   (BA-050);
 - it reaches its Hosts over connections the test gives it, and reads no
   certificate (BA-061).
+
+The pools model (`specs/quint/pools.qnt`) has no phases between created
+and available, so no MicroVM is being provisioned when `UpdatePool` comes
+(BA-074), and it has no quarantined MicroVM (BA-073).
 
 The claim lifecycle model (`specs/quint/claims.qnt`) is coarser than
 battery in these ways:
@@ -280,3 +359,6 @@ Every assumption above holds for battery v0.1.0 too, except those about
 - A Pool's reconciler now seeds an event-driven Pool once when it starts,
   and battery refuses to provision on a `flintlockd` older than v0.15.2.
   Neither changes an assumption here.
+- `DeletePool`, `UpdatePool`, the replenishment strategies and
+  `ApplyHookFailurePolicy` behave the same in v0.1.0, at other lines
+  (BA-070 to BA-074).
