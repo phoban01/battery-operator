@@ -78,6 +78,24 @@ const (
 	ReasonBatteryError = "BatteryError"
 )
 
+// ConditionAgentAvailable is the condition type that says whether a Bound
+// MicroVMClaim's status carries the address of the Exec Agent on its Host,
+// taken from the Host's Node report. A claim whose agent has no address
+// stays Bound: the Lease is battery's, and the address only tells the
+// Holder where to reach its MicroVM.
+const ConditionAgentAvailable = "AgentAvailable"
+
+// Reasons for the AgentAvailable condition.
+const (
+	// ReasonAgentAddressPublished means the Host's Node report carries the
+	// Exec Agent's address, and the claim's status.host.agentAddress holds
+	// it.
+	ReasonAgentAddressPublished = "AgentAddressPublished"
+	// ReasonNoAgentAddress means the Host's Node report carries no Exec
+	// Agent address, or the Host has no Node.
+	ReasonNoAgentAddress = "NoAgentAddress"
+)
+
 // PoolReference names a Pool in the claim's own namespace.
 type PoolReference struct {
 	// name is the name of the Pool.
@@ -188,7 +206,8 @@ type MicroVMClaimStatus struct {
 	// +optional
 	LeaseExpiresAt *metav1.Time `json:"leaseExpiresAt,omitempty"`
 
-	// conditions hold the claim's Bound and Synced conditions.
+	// conditions hold the claim's Bound, Synced and AgentAvailable
+	// conditions.
 	// +listType=map
 	// +listMapKey=type
 	// +optional

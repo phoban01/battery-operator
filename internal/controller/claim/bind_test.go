@@ -35,7 +35,7 @@ import (
 var leased = &battery.Claim{
 	LeaseID: "lease-1",
 	VMUID:   "vm-1",
-	Host:    battery.HostRef{Name: "node-a", Address: "10.0.0.1:9090"},
+	Host:    battery.HostRef{Name: nodeA, Address: "10.0.0.1:9090"},
 }
 
 //= docs/requirements/02-claims.md#binding
@@ -83,7 +83,7 @@ func TestBindWritesTheLease(t *testing.T) {
 	if st.MicroVM == nil || st.MicroVM.UID != "vm-1" {
 		t.Errorf("microVM = %+v, want uid vm-1", st.MicroVM)
 	}
-	if st.Host == nil || st.Host.NodeName != "node-a" {
+	if st.Host == nil || st.Host.NodeName != nodeA {
 		t.Errorf("host = %+v, want nodeName node-a", st.Host)
 	}
 	if st.Host != nil && st.Host.AgentAddress != "" {
