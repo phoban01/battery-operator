@@ -130,17 +130,121 @@ module claims_test {
         safety,
       })
 
-  // CL-030 with CL-012: battery is down past a Lease's expiry, expires it
-  // on start, and recovery makes the claim Expired.
+  // CL-030 with CL-012: battery is down past a Lease's expiry. The Lease
+  // is still held when battery starts, since the first sweep is a sweep
+  // interval later (BA-022), but recovery reads it with ListLeases, sees
+  // that its expiry has passed (BA-041), and makes the claim Expired. The
+  // sweep then deletes the Lease.
   run recoveryTest =
     init
       .then(bind("a", "v1"))
       .then(batteryStop)
       .then(ticks(EXPIRY + 1))
       .then(batteryStart)
-      .expect(ctrl.recovering and not(holds(1)))
+      .expect(and { ctrl.recovering, holds(1), not(holdsUnexpired(1)) })
       .then(ctlRecover)
       .expect(and { obj("a").status.phase == Expired, not(ctrl.recovering), safety })
+      .then(ticks(SWEEP))
+      .then(batteryExpire)
+      .expect(and { not(holds(1)), safety })
+
+  // BA-022: after a restart, time cannot pass one sweep interval with a
+  // Lease that expired while battery was down still unswept.
+  run sweepDueAfterRestartTest =
+    init
+      .then(bind("a", "v1"))
+      .then(batteryStop)
+      .then(ticks(EXPIRY + 1))
+      .then(batteryStart)
+      .then(ticks(SWEEP))
+      .then(tick)
+      .fail()
+
+  // BA-022 with BA-010: a Lease that expired while battery was down can
+  // still be renewed after the start, until the first sweep.
+  run renewedAfterRestartTest =
+    init
+      .then(bind("a", "v1"))
+      .then(batteryStop)
+      .then(ticks(EXPIRY + 1))
+      .then(batteryStart)
+      .then(renewClaim("a"))
+      .expect(witnessLateHeartbeat)
+      .then(ctlHeartbeat("a"))
+      .then(ctlWriteRenewed("a"))
+      .expect(and {
+        obj("a").status.phase == Bound,
+        obj("a").status.leaseExpiresAt == Some(EXPIRY + 1 + EXPIRY),
+        holdsUnexpired(1),
+        safety,
+      })
+
+  // BA-010 and BA-020: a Lease past its expiry waits for the sweep, and a
+  // Heartbeat in that time renews it.
+  run lateHeartbeatRenewsTest =
+    init
+      .then(bind("a", "v1"))
+      .then(ticks(EXPIRY + 1))
+      .expect(and { holds(1), not(holdsUnexpired(1)), witnessUnsweptLease })
+      .then(renewClaim("a"))
+      .expect(witnessLateHeartbeat)
+      .then(ctlHeartbeat("a"))
+      .then(ctlWriteRenewed("a"))
+      .expect(and {
+        obj("a").status.phase == Bound,
+        obj("a").status.leaseExpiresAt == Some(EXPIRY + 1 + EXPIRY),
+        battery.leases.get(1).expiresAt == EXPIRY + 1 + EXPIRY,
+        safety,
+      })
+
+  // BA-020: while battery runs, time cannot pass a Lease's expiry by a
+  // sweep interval without a sweep.
+  run sweepWithinIntervalTest =
+    init
+      .then(bind("a", "v1"))
+      .then(ticks(EXPIRY + SWEEP))
+      .then(tick)
+      .fail()
+
+  // The finding of #85: the Holder renews before the expiry, the
+  // controller has not relayed the renewal when the expiry passes, and
+  // CL-014 expires the claim. battery still holds the Lease and would have
+  // renewed it (BA-010). This test fails once the model changes to close
+  // it.
+  run renewalLostToExpiryBeforeSweepTest =
+    init
+      .then(bind("a", "v1"))
+      .then(ticks(EXPIRY - 1))
+      .then(renewClaim("a"))
+      .then(tick)
+      .expect(canExpiryPassed("a") and canHeartbeat("a"))
+      .then(ctlExpiryPassed("a"))
+      .expect(and {
+        obj("a").status.phase == Expired,
+        holds(1),
+        not(expiredOnlyOnceBatteryRefuses),
+        safety,
+      })
+
+  // The finding of #86: a crash-window orphan outlives the Pool's
+  // heartbeat_expiry_threshold by up to a sweep interval, which the prose
+  // under 02-claims.md, Binding, and ADR 0001, consequence 2, do not allow
+  // for. orphanLeaseBounded, the bound battery gives, still holds. #86
+  // corrects the prose; the model already has battery's bound.
+  run orphanOutlivesExpiryTest =
+    init
+      .then(createClaim("a"))
+      .then(ctlAddFinalizer("a"))
+      .then(replenish("v1"))
+      .then(ctlClaimVM("a", "v1"))
+      .then(crashController)
+      .then(ctlRecover)
+      .then(ticks(EXPIRY + 1))
+      .expect(and {
+        orphans == Set(1),
+        not(orphanGoneByExpiry),
+        safety,
+      })
 
   // CL-013 (#45): battery expires an unrenewed Lease, and the Events stream
   // reports the deleted MicroVM; the claim goes Expired.

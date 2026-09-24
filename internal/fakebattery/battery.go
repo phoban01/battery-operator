@@ -275,6 +275,17 @@ func (b *Battery) Ready() <-chan struct{} { return b.ready }
 // in-flight provisioning, deletes every MicroVM it created and returns nil.
 // Serve calls it; call it directly for in-process use with Conn.
 func (b *Battery) Run(ctx context.Context) error {
+	//= docs/requirements/10-battery.md#expiry
+	//= type=exception
+	//= reason=The fake ticks once at start, which is how a fresh Pool fills; its state never outlives a stop, so no Lease from before the start is left to renew.
+	//# battery SHALL run its first sweep one `sweep_interval` after it
+	//# starts, not at start.
+
+	//= docs/requirements/10-battery.md#restarts
+	//= type=exception
+	//= reason=The fake keeps its state in memory and loses it when Run returns; SetFaults with UnavailableFor stands in for a battery restart that keeps its database.
+	//# battery SHALL keep its Pools, MicroVMs and Leases across a
+	//# restart, in its database.
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 

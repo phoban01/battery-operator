@@ -17,6 +17,7 @@ limitations under the License.
 package fakebattery
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -41,6 +42,27 @@ import (
 // older than the threshold the fake drops the Lease and deletes the MicroVM
 // from the Host it was placed on.
 func TestLeaseExpiryDeletesTheMicroVM(t *testing.T) {
+	//= docs/requirements/10-battery.md#claiming
+	//= type=test
+	//# When `ClaimVM` succeeds, battery SHALL choose a new lease id,
+	//# and set the Lease's expiry to the time of the claim plus the Pool's
+	//# `heartbeat_expiry_threshold`.
+
+	//= docs/requirements/10-battery.md#heartbeat
+	//= type=test
+	//# If battery does not hold the Lease a `Heartbeat` names, then
+	//# battery SHALL answer it with `NOT_FOUND`.
+
+	//= docs/requirements/10-battery.md#expiry
+	//= type=test
+	//# When a sweep deletes a Lease, battery SHALL delete the Lease's
+	//# MicroVM through `flintlockd`
+
+	//= docs/requirements/10-battery.md#events
+	//= type=test
+	//# battery SHALL record `VM_DELETED_DUE_TO_EXPIRY` or
+	//# `VM_DELETED_ON_RELEASE` for a leased MicroVM only after `flintlockd` has
+	//# confirmed its deletion.
 	h := newHarness(t, Config{}, hostA)
 	spec := h.spec("pool", 1, hostA)
 	spec.Replenishment = replenishment{Type: poolmgrv1.ReplenishmentStrategyType_REPLACE_ON_DELETE}
@@ -98,6 +120,16 @@ func TestLeaseExpiryDeletesTheMicroVM(t *testing.T) {
 // two ways a Pool can be empty: never filled, and every MicroVM already
 // leased.
 func TestClaimOnEmptyPoolIsResourceExhausted(t *testing.T) {
+	//= docs/requirements/10-battery.md#claiming
+	//= type=test
+	//# If a Pool has no MicroVM in the phase `AVAILABLE`, then battery
+	//# SHALL answer `ClaimVM` for that Pool with `RESOURCE_EXHAUSTED` and create no
+	//# Lease.
+
+	//= docs/requirements/10-battery.md#claiming
+	//= type=test
+	//# If battery holds no Pool of the name and namespace a `ClaimVM`
+	//# names, then battery SHALL answer it with `NOT_FOUND`.
 	h := newHarness(t, Config{}, hostA)
 	lease := h.rawLease()
 
@@ -107,6 +139,9 @@ func TestClaimOnEmptyPoolIsResourceExhausted(t *testing.T) {
 	_, err := lease.ClaimVM(h.ctx, &poolmgrv1.ClaimVMRequest{Pool: refToProto(h.ref("empty"))})
 	if code := statusCode(t, err); code != codes.ResourceExhausted {
 		t.Fatalf("ClaimVM on an empty pool: code %v, want RESOURCE_EXHAUSTED", code)
+	}
+	if leases := h.b.Leases(); len(leases) != 0 {
+		t.Fatalf("leases after ClaimVM on an empty pool = %+v, want none", leases)
 	}
 
 	// A Pool whose only MicroVM is leased. REPLACE_ON_DELETE does not
@@ -159,5 +194,113 @@ func TestHostOnClaimResponse(t *testing.T) {
 		if vm.UID == resp.GetVmUid() && vm.Host != resp.GetHost().GetName() {
 			t.Fatalf("microvm %s is on %q but the claim reported %q", vm.UID, vm.Host, resp.GetHost().GetName())
 		}
+	}
+}
+
+// TestLateHeartbeatRenewsAnUnsweptLease holds the control loop's tick off
+// with an hour-long interval, so that a Lease passes its expiry with no
+// sweep. The Lease is still held and a heartbeat renews it, as in battery;
+// only the sweep ends it.
+func TestLateHeartbeatRenewsAnUnsweptLease(t *testing.T) {
+	//= docs/requirements/10-battery.md#heartbeat
+	//= type=test
+	//# When battery receives a `Heartbeat` for a Lease it still holds,
+	//# battery SHALL set the Lease's expiry to the time of the `Heartbeat` plus
+	//# the Pool's `heartbeat_expiry_threshold` and answer with that expiry,
+	//# whether or not the Lease's previous expiry has passed.
+
+	//= docs/requirements/10-battery.md#expiry
+	//= type=test
+	//# battery SHALL delete an expired Lease only in a sweep, which
+	//# runs once every `sweep_interval` while battery runs, and which deletes
+	//# every Lease whose expiry is at or before the time of the sweep.
+	const interval = time.Hour
+	h := newHarness(t, Config{ReconcileInterval: interval}, hostA)
+	spec := h.spec("pool", 1, hostA)
+	spec.Replenishment = replenishment{Type: poolmgrv1.ReplenishmentStrategyType_REPLACE_ON_DELETE}
+	h.createPool(spec)
+	claim := h.claim("pool")
+
+	// Ten seconds past the 30s expiry, with no tick since.
+	h.advance(40 * time.Second)
+	leases := h.b.Leases()
+	if len(leases) != 1 || leases[0].ExpiresAt.After(h.clk.Now()) {
+		t.Fatalf("leases 10s past the expiry, before a sweep = %+v, want the expired lease still held", leases)
+	}
+	expires, err := h.client.Heartbeat(h.ctx, claim.LeaseID)
+	if err != nil {
+		t.Fatalf("Heartbeat on the expired, unswept lease: %v", err)
+	}
+	if want := testEpoch.Add(70 * time.Second); !expires.Equal(want) {
+		t.Fatalf("Heartbeat expiry = %s, want %s", expires, want)
+	}
+
+	// Past the renewed expiry, the Lease still waits for the sweep; the
+	// tick at the hour ends it.
+	h.advance(40 * time.Second)
+	if leases := h.b.Leases(); len(leases) != 1 {
+		t.Fatalf("leases past the renewed expiry, before a sweep = %+v, want the lease still held", leases)
+	}
+	h.advance(interval)
+	expired := h.waitEvent(poolmgrv1.EventType_VM_DELETED_DUE_TO_EXPIRY)
+	if expired.VMUID != claim.VMUID {
+		t.Fatalf("VM_DELETED_DUE_TO_EXPIRY for %q, want the leased microvm %q", expired.VMUID, claim.VMUID)
+	}
+	if _, err := h.client.Heartbeat(h.ctx, claim.LeaseID); statusCode(t, err) != codes.NotFound {
+		t.Fatalf("Heartbeat after the sweep = %v, want NOT_FOUND", err)
+	}
+}
+
+// TestReleaseKeepsTheLeaseUntilTheHostConfirms releases a Lease while the
+// Host refuses deletions. The fake answers UNAVAILABLE and keeps the Lease,
+// which a heartbeat still renews; once the Host takes the deletion, the
+// loop finishes it and the Lease is gone, so a second release is
+// NOT_FOUND.
+func TestReleaseKeepsTheLeaseUntilTheHostConfirms(t *testing.T) {
+	//= docs/requirements/10-battery.md#release
+	//= type=test
+	//# When battery receives a `ReleaseVM` for a Lease it holds,
+	//# battery SHALL delete the Lease's MicroVM through `flintlockd` and answer
+	//# with success only once `flintlockd` has confirmed the deletion and the
+	//# Lease is deleted.
+
+	//= docs/requirements/10-battery.md#release
+	//= type=test
+	//# If `flintlockd` does not confirm the deletion of a released
+	//# Lease's MicroVM, then battery SHALL answer the `ReleaseVM` with
+	//# `UNAVAILABLE`, keep the Lease, and retry the deletion in every later sweep
+	//# until `flintlockd` confirms it, deleting the Lease then.
+
+	//= docs/requirements/10-battery.md#release
+	//= type=test
+	//# If battery does not hold the Lease a `ReleaseVM` names, then
+	//# battery SHALL answer it with `NOT_FOUND`.
+	h := newHarness(t, Config{}, hostA)
+	host := h.stubs[hostA]
+	spec := h.spec("pool", 1, hostA)
+	spec.Replenishment = replenishment{Type: poolmgrv1.ReplenishmentStrategyType_REPLACE_ON_DELETE}
+	h.createPool(spec)
+	claim := h.claim("pool")
+
+	host.set(func(s *testHost) { s.deleteErr = errors.New("host busy") })
+	if err := h.client.ReleaseVM(h.ctx, claim.LeaseID); statusCode(t, err) != codes.Unavailable {
+		t.Fatalf("ReleaseVM while the host refuses = %v, want UNAVAILABLE", err)
+	}
+	if leases := h.b.Leases(); len(leases) != 1 || leases[0].LeaseID != claim.LeaseID {
+		t.Fatalf("leases after the refused release = %+v, want the lease kept", leases)
+	}
+	if _, err := h.client.Heartbeat(h.ctx, claim.LeaseID); err != nil {
+		t.Fatalf("Heartbeat on the kept lease: %v", err)
+	}
+
+	host.set(func(s *testHost) { s.deleteErr = nil })
+	h.advance(testInterval)
+	h.waitEvent(poolmgrv1.EventType_VM_DELETED_ON_RELEASE)
+	assertDeleted(t, host, claim.VMUID)
+	if leases := h.b.Leases(); len(leases) != 0 {
+		t.Fatalf("leases after the host took the deletion = %+v, want none", leases)
+	}
+	if err := h.client.ReleaseVM(h.ctx, claim.LeaseID); statusCode(t, err) != codes.NotFound {
+		t.Fatalf("ReleaseVM of the released lease = %v, want NOT_FOUND", err)
 	}
 }

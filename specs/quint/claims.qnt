@@ -11,8 +11,8 @@
 //   (CL-014, once ListLeases confirms it: CL-016), release with ReleaseVM
 //   and then remove the finalizer, and recover after a restart;
 // - battery's steps: replenish the Pool, answer ClaimVM, Heartbeat and
-//   ReleaseVM, expire Leases nobody renews, report deleted MicroVMs on the
-//   Events stream;
+//   ReleaseVM, sweep the Leases nobody renewed, report deleted MicroVMs on
+//   the Events stream;
 // - the environment: Holders create, renew and delete claims, time passes,
 //   the controller crashes (between any two of its steps, including between
 //   ClaimVM and the status write), battery stops and starts, and the
@@ -27,7 +27,14 @@
 //
 // Model citations use //@= and //@# (docs/requirements/README.md, "Model
 // citations"). They record what is modelled; they never count as an
-// implementation or a test.
+// implementation or a test. battery's steps cite what the Operator assumes
+// battery does (docs/requirements/10-battery.md, BA-*), and the Claim
+// Controller's steps cite its requirements (02-claims.md, CL-*).
+//
+// The file is laid out as: parameters, state, views, init, the environment,
+// battery's steps, the Claim Controller's steps, step, invariants (all in
+// safety), properties the requirements do not yet guarantee (kept out of
+// safety, each with its issue), and witnesses.
 module claims {
   import types.* from "./types"
 
@@ -47,6 +54,9 @@ module claims {
   pure val POOL_SIZE: int = 2
   // The Pool's heartbeat_expiry_threshold, in ticks.
   pure val EXPIRY: Time = 3
+  // battery's sweep_interval, in ticks (BA-020): the longest a Lease
+  // outlives its expiry, or battery's start, before a sweep deletes it.
+  pure val SWEEP: Time = 2
 
   // ---------------------------------------------------------------------
   // State
@@ -63,6 +73,9 @@ module claims {
 
   type BatteryState = {
     up: bool,
+    // when battery last started; its first sweep is due SWEEP after
+    // (BA-022)
+    upSince: Time,
     // MicroVMs not yet created
     unborn: Set[VMId],
     // AVAILABLE: warm and unleased
@@ -117,11 +130,22 @@ module claims {
   def obj(c: ClaimName): MicroVMClaim = claimIn(claims.get(c))
   def live(c: ClaimName): bool = isLive(claims.get(c))
 
+  // battery holds a Lease until a sweep or a release deletes its row. It
+  // renews any Lease it holds, whether or not its expiry has passed
+  // (BA-010), and lists it in ListLeases with its expiry (BA-041).
   def holds(l: LeaseId): bool = battery.leases.keys().contains(l)
-  // battery answers Heartbeat only for a Lease it holds that has not run
-  // out; one past its expiry that the sweep has not reached yet is expired.
+  // A Lease battery holds whose expiry has not passed yet. One past its
+  // expiry that no sweep has deleted is held, but not unexpired.
   def holdsUnexpired(l: LeaseId): bool =
     holds(l) and battery.leases.get(l).expiresAt > now
+
+  pure def maxOf(a: int, b: int): int = if (a > b) a else b
+
+  // The latest time a sweep can delete Lease l, as BA-020 and BA-022
+  // bound it: one sweep interval after its expiry, or after battery's
+  // start if it expired while battery was stopped.
+  def sweepDue(l: LeaseId): Time =
+    maxOf(battery.leases.get(l).expiresAt, battery.upSince) + SWEEP
 
   // lease ids recorded in the status of a claim that still exists
   def recordedByLiveClaims: Set[LeaseId] =
@@ -149,6 +173,7 @@ module claims {
     claims' = CLAIMS.mapBy(_ => Unborn),
     battery' = {
       up: true,
+      upSince: 0,
       unborn: VMS,
       warm: Set(),
       handedOut: Set(),
@@ -189,8 +214,14 @@ module claims {
   pure def unsynced(o: MicroVMClaim): MicroVMClaim =
     { ...o, status: { ...o.status, synced: unavailable } }
 
+  //@= docs/requirements/10-battery.md#events
+  //@# battery SHALL record `VM_DELETED_DUE_TO_EXPIRY` or
+  //@# `VM_DELETED_ON_RELEASE` for a leased MicroVM only after `flintlockd` has
+  //@# confirmed its deletion.
+  //
   // battery deletes a released or expired MicroVM; its uid is retired, and
-  // the Events stream reports the deletion.
+  // the Events stream reports the deletion. The model deletes the Lease and
+  // the MicroVM in one step; in battery the Lease row goes first (BA-023).
   pure def dropLeases(b: BatteryState, ls: Set[LeaseId]): BatteryState = {
     ...b,
     leases: b.leases.keys().exclude(ls).mapBy(l => b.leases.get(l)),
@@ -198,7 +229,8 @@ module claims {
     events: b.events.union(ls.map(l => b.leases.get(l).vm)),
   }
 
-  // Leases battery's sweep expires at time t.
+  // Leases a sweep at time t deletes: every one whose expiry is at or
+  // before t (BA-020).
   pure def overdue(b: BatteryState, t: Time): Set[LeaseId] =
     b.leases.keys().filter(l => b.leases.get(l).expiresAt <= t)
 
@@ -233,10 +265,18 @@ module claims {
     now' = now, battery' = battery, ctrl' = ctrl, hist' = hist,
   }
 
-  // Time passes. While battery runs, its sweep expires a Lease before time
-  // moves past the Lease's expiry, so a Lease never outlives it by a tick.
+  //@= docs/requirements/10-battery.md#expiry
+  //@# battery SHALL delete an expired Lease only in a sweep, which
+  //@# runs once every `sweep_interval` while battery runs, and which deletes
+  //@# every Lease whose expiry is at or before the time of the sweep.
+  //
+  // Time passes. The sweep is its own step (batteryExpire), so time can
+  // pass a Lease's expiry with the Lease still held. While battery runs,
+  // time cannot move past sweepDue(l) until a sweep has deleted l: a sweep
+  // comes within one sweep interval. The model lets it come at any time in
+  // that interval, which covers the periodic sweep.
   action tick: bool = all {
-    battery.up implies overdue(battery, now) == Set(),
+    battery.up implies battery.leases.keys().forall(l => now < sweepDue(l)),
     now' = now + 1,
     claims' = claims, battery' = battery, ctrl' = ctrl, hist' = hist,
   }
@@ -249,9 +289,16 @@ module claims {
     now' = now, claims' = claims, battery' = battery, hist' = hist,
   }
 
+  //@= docs/requirements/10-battery.md#restarts
+  //@# battery SHALL keep its Pools, MicroVMs and Leases across a
+  //@# restart, in its database.
+  //
   // battery stops, for a Host change (ADR 0001, consequence 1) or a crash.
   // Its database survives; calls to it fail until it is back.
-  // Events not yet delivered are lost with the stream.
+  // Events not yet delivered are lost with the stream. battery replays its
+  // whole outbox to a new subscriber (BA-050), so this is more pessimistic
+  // than battery: the model's controller can miss what battery would
+  // replay, and has to rely on CL-014 and CL-030 instead.
   action batteryStop: bool = all {
     battery.up,
     battery' = { ...battery, up: false, events: Set() },
@@ -265,11 +312,17 @@ module claims {
     now' = now, claims' = claims, ctrl' = ctrl, hist' = hist,
   }
 
-  // battery starts again, and expires the Leases that ran out while it was
-  // down. The controller sees its connection restored.
+  //@= docs/requirements/10-battery.md#expiry
+  //@# battery SHALL run its first sweep one `sweep_interval` after it
+  //@# starts, not at start.
+  //
+  // battery starts again. The Leases that ran out while it was down are
+  // still held, and renewable, until its first sweep, which is due SWEEP
+  // after the start (sweepDue). The controller sees its connection
+  // restored.
   action batteryStart: bool = all {
     not(battery.up),
-    battery' = { ...dropLeases(battery, overdue(battery, now)), up: true },
+    battery' = { ...battery, up: true, upSince: now },
     ctrl' = { ...ctrl, recovering: true },
     now' = now, claims' = claims, hist' = hist,
   }
@@ -286,7 +339,20 @@ module claims {
     now' = now, claims' = claims, ctrl' = ctrl, hist' = hist,
   }
 
-  // battery expires the Leases nobody renewed and deletes their MicroVMs.
+  //@= docs/requirements/10-battery.md#expiry
+  //@# When a sweep deletes a Lease, battery SHALL delete the Lease's
+  //@# MicroVM through `flintlockd`
+  //
+  //@= docs/requirements/10-battery.md#expiry
+  //@# If a `Heartbeat` renews a Lease after a sweep has listed it as
+  //@# expired and before the sweep deletes it, then battery SHALL keep the Lease
+  //@# with its renewed expiry.
+  //
+  // A sweep: battery deletes the Leases nobody renewed in time, and their
+  // MicroVMs. It takes the Leases overdue when it runs, so a Heartbeat
+  // that lands before it keeps its Lease, the race battery's guarded
+  // delete settles the same way. The tick guard makes it come within one
+  // sweep interval.
   action batteryExpire: bool = all {
     battery.up,
     overdue(battery, now) != Set(),
@@ -346,6 +412,11 @@ module claims {
     nextLease: b.nextLease + 1,
   }
 
+  //@= docs/requirements/10-battery.md#claiming
+  //@# When `ClaimVM` succeeds, battery SHALL choose a new lease id,
+  //@# and set the Lease's expiry to the time of the claim plus the Pool's
+  //@# `heartbeat_expiry_threshold`.
+  //
   // ClaimVM succeeds. battery chooses the lease id and answers; the
   // controller holds the answer until it writes the status.
   action ctlClaimVM(c: ClaimName, vm: VMId): bool = all {
@@ -370,9 +441,14 @@ module claims {
     status: { ...o.status, phase: Pending, bound: unavailable, synced: unavailable },
   }
 
+  //@= docs/requirements/10-battery.md#claiming
+  //@# Once battery has committed a Lease in `ClaimVM`, battery SHALL
+  //@# answer that `ClaimVM` with success.
+  //
   // ClaimVM fails in transit after battery committed the Lease: the answer
   // is lost without a crash, and the Lease is an orphan. The claim stays
-  // Pending and canCallClaimVM holds again, which is the retry.
+  // Pending and canCallClaimVM holds again, which is the retry. battery
+  // itself answered success (BA-004); the transport lost it.
   action ctlClaimVMLost(c: ClaimName, vm: VMId): bool = all {
     canClaimVM(c),
     battery.warm.contains(vm),
@@ -394,6 +470,11 @@ module claims {
   //@# MicroVM, then the Claim Controller SHALL keep the claim in the phase
   //@# `Pending` with the condition `Bound` false and the reason `PoolExhausted`,
   //@# and SHALL retry with backoff.
+  //
+  //@= docs/requirements/10-battery.md#claiming
+  //@# If a Pool has no MicroVM in the phase `AVAILABLE`, then battery
+  //@# SHALL answer `ClaimVM` for that Pool with `RESOURCE_EXHAUSTED` and create no
+  //@# Lease.
   action ctlPoolExhausted(c: ClaimName): bool = all {
     canClaimVM(c),
     battery.warm == Set(),
@@ -470,13 +551,21 @@ module claims {
   pure def renew(b: BatteryState, l: LeaseId, t: Time): BatteryState =
     { ...b, leases: b.leases.set(l, { ...b.leases.get(l), expiresAt: t + EXPIRY }) }
 
-  // Heartbeat succeeds: battery moves the Lease's expiry, and the
-  // controller holds battery's answer until it writes the status.
+  //@= docs/requirements/10-battery.md#heartbeat
+  //@# When battery receives a `Heartbeat` for a Lease it still holds,
+  //@# battery SHALL set the Lease's expiry to the time of the `Heartbeat` plus
+  //@# the Pool's `heartbeat_expiry_threshold` and answer with that expiry,
+  //@# whether or not the Lease's previous expiry has passed.
+  //
+  // Heartbeat succeeds on any Lease battery still holds, including one
+  // past its expiry that no sweep has deleted: battery moves the Lease's
+  // expiry, and the controller holds battery's answer until it writes the
+  // status.
   action ctlHeartbeat(c: ClaimName): bool = all {
     canHeartbeat(c),
     val l = getOr(obj(c).status.leaseId, 0)
     all {
-      holdsUnexpired(l),
+      holds(l),
       battery' = renew(battery, l, now),
       setMem(c, HeartbeatAnswered({ leaseId: l, expiresAt: now + EXPIRY, renewTime: obj(c).spec.renewTime })),
     },
@@ -496,7 +585,7 @@ module claims {
     canHeartbeat(c),
     val l = getOr(obj(c).status.leaseId, 0)
     all {
-      holdsUnexpired(l),
+      holds(l),
       battery' = renew(battery, l, now),
     },
     setClaim(c, unsynced(obj(c))),
@@ -540,10 +629,16 @@ module claims {
     status: { ...o.status, phase: Expired, bound: { status: CondFalse, reason: LeaseExpired }, synced: synced },
   }
 
-  // Heartbeat fails: battery no longer holds the Lease, or it has run out.
+  //@= docs/requirements/10-battery.md#heartbeat
+  //@# If battery does not hold the Lease a `Heartbeat` names, then
+  //@# battery SHALL answer it with `NOT_FOUND`.
+  //
+  // Heartbeat fails: battery no longer holds the Lease. battery has no
+  // answer for "expired" (BA-011), so this is the only way a Heartbeat
+  // fails, and CL-012's "expired" never comes from a Heartbeat.
   action ctlHeartbeatUnknown(c: ClaimName): bool = all {
     canHeartbeat(c),
-    not(holdsUnexpired(getOr(obj(c).status.leaseId, 0))),
+    not(holds(getOr(obj(c).status.leaseId, 0))),
     setClaim(c, expired(obj(c))),
     now' = now, battery' = battery, ctrl' = ctrl, hist' = hist,
   }
@@ -643,7 +738,21 @@ module claims {
 
   def canRelease(c: ClaimName): bool = canCallRelease(c) and battery.up
 
-  // battery releases Lease l if it holds it, and deletes the MicroVM.
+  //@= docs/requirements/10-battery.md#release
+  //@# When battery receives a `ReleaseVM` for a Lease it holds,
+  //@# battery SHALL delete the Lease's MicroVM through `flintlockd` and answer
+  //@# with success only once `flintlockd` has confirmed the deletion and the
+  //@# Lease is deleted.
+  //
+  //@= docs/requirements/10-battery.md#release
+  //@# If battery does not hold the Lease a `ReleaseVM` names, then
+  //@# battery SHALL answer it with `NOT_FOUND`.
+  //
+  // battery releases Lease l if it holds it, and deletes the MicroVM. The
+  // model's release succeeds at once. UNAVAILABLE with the Lease kept
+  // (BA-031) is not a step of its own: to the controller it is a ReleaseVM
+  // that failed before battery acted, with the Lease still held, which is
+  // ctlReleaseUnanswered.
   pure def release(b: BatteryState, l: LeaseId): BatteryState =
     dropLeases(b, Set(l).intersect(b.leases.keys()))
 
@@ -697,6 +806,11 @@ module claims {
     now' = now, ctrl' = ctrl,
   }
 
+  //@= docs/requirements/10-battery.md#release
+  //@# If `flintlockd` does not confirm the deletion of a released
+  //@# Lease's MicroVM, then battery SHALL answer the `ReleaseVM` with
+  //@# `UNAVAILABLE`, keep the Lease
+  //
   // ReleaseVM fails in transit before battery acted, battery is down, or
   // battery answers UNAVAILABLE because flintlockd has not confirmed the
   // deletion and keeps the Lease.
@@ -728,8 +842,15 @@ module claims {
   //@# battery's Leases.
   def canRecover: bool = ctrl.recovering and battery.up
 
-  // Every Bound claim whose Lease battery no longer holds becomes Expired
-  // (CL-012). Leases no claim records are left alone (CL-031).
+  //@= docs/requirements/10-battery.md#list-leases
+  //@# battery SHALL include in the answer to `ListLeases` a Lease
+  //@# whose expiry has passed but that no sweep has deleted yet.
+  //
+  // Every Bound claim whose Lease battery no longer holds, or holds past
+  // its expiry, becomes Expired (CL-012). Leases no claim records are left
+  // alone (CL-031). The controller reads the Leases with ListLeases
+  // (BA-040), which lists each with its expiry and renews none; that is
+  // the only way it can tell "expired" from "unknown".
   action ctlRecover: bool = all {
     canRecover,
     claims' = CLAIMS.mapBy(c =>
@@ -833,12 +954,14 @@ module claims {
   // ADR 0001, consequence 2, and the prose under 02-claims.md, Binding: the
   // crash-window orphan is bounded. Nothing renews an orphan, and while
   // battery runs it is gone within the Pool's heartbeat_expiry_threshold of
-  // being claimed. (While battery is down nothing expires; the orphan goes
-  // as soon as battery is back, in batteryStart.)
+  // being claimed plus one sweep interval (BA-020), or within one sweep
+  // interval of battery starting again if it ran out while battery was
+  // down (BA-022). The prose promises the threshold alone; that is
+  // orphanGoneByExpiry below, which does not hold (#86).
   val orphanLeaseBounded: bool =
     orphans.forall(l => and {
       battery.leases.get(l).expiresAt == battery.leases.get(l).claimedAt + EXPIRY,
-      battery.up implies now <= battery.leases.get(l).claimedAt + EXPIRY,
+      battery.up implies now <= maxOf(battery.leases.get(l).claimedAt + EXPIRY, battery.upSince) + SWEEP,
     })
 
   // CL-020: the finalizer is removed only after battery has released the
@@ -929,9 +1052,35 @@ module claims {
       not(holdsUnexpired(getOr(obj(c).status.leaseId, 0))))
 
   // ---------------------------------------------------------------------
+  // Properties the requirements do not yet guarantee. Each is a finding,
+  // filed as an issue, kept out of safety, and reached by a scenario test
+  // in claims_test.qnt that fails once the model changes to close it.
+
+  // A claim goes Expired only once battery would refuse a Heartbeat for its
+  // Lease, that is once no Lease row is left (BA-010, BA-011). Not in
+  // safety: CL-014 expires a claim as soon as its expiry passes, while the
+  // Lease waits up to a sweep interval for the sweep and a Heartbeat would
+  // still renew it. With a renewal already requested, the Holder loses a
+  // MicroVM battery would have kept (#85).
+  // claims_test.qnt, renewalLostToExpiryBeforeSweepTest, reaches it.
+  val expiredOnlyOnceBatteryRefuses: bool =
+    CLAIMS.forall(c => (live(c) and obj(c).status.phase == Expired) implies
+      not(holds(getOr(obj(c).status.leaseId, 0))))
+
+  // The prose under 02-claims.md, Binding, and ADR 0001, consequence 2:
+  // battery expires an orphan after the Pool's heartbeat_expiry_threshold.
+  // Not in safety: the sweep deletes it up to one sweep interval later
+  // (BA-020), and up to one sweep interval after battery restarts
+  // (BA-022), so it outlives the threshold (#86).
+  // orphanLeaseBounded is the bound battery gives. claims_test.qnt,
+  // orphanOutlivesExpiryTest, reaches it.
+  val orphanGoneByExpiry: bool =
+    orphans.forall(l => battery.up implies now <= battery.leases.get(l).claimedAt + EXPIRY)
+
+  // ---------------------------------------------------------------------
   // Witnesses: states quint run reports reaching, to show the simulation
   // gets to the interesting interleavings. quint run counts the traces in
-  // which each becomes true.
+  // which each becomes true. hack/quint.sh fails if one is never reached.
 
   // a crash-window orphan exists
   val witnessOrphan: bool = orphans != Set()
@@ -957,4 +1106,14 @@ module claims {
       | ReleaseAnswered(_) => true
       | _ => false
     })
+  // battery runs and holds a Lease past its expiry, waiting for the sweep
+  // (BA-020)
+  val witnessUnsweptLease: bool =
+    battery.up and battery.leases.keys().exists(l => not(holdsUnexpired(l)))
+  // the controller can relay a renewal for a Lease past its expiry that
+  // battery still holds, so the Heartbeat renews it (BA-010);
+  // claims_test.qnt, lateHeartbeatRenewsTest, takes that step
+  val witnessLateHeartbeat: bool =
+    CLAIMS.exists(c => canHeartbeat(c) and holds(getOr(obj(c).status.leaseId, 0))
+      and not(holdsUnexpired(getOr(obj(c).status.leaseId, 0))))
 }

@@ -70,6 +70,13 @@ func (b *Battery) emitLocked(key poolKey, vmUID string, typ poolmgrv1.EventType,
 	})
 }
 
+//= docs/requirements/10-battery.md#events
+//= type=exception
+//= reason=The fake replays only the last Config.EventReplay events of each Pool, 100 by default, where battery replays its whole outbox.
+//# When a client subscribes to battery's `Events` service, battery
+//# SHALL send every event its outbox holds for the Pool the subscription
+//# names, or for every Pool, and then each new event as battery records it.
+
 // eventBus fans events out to Subscribe streams and keeps the last replay
 // events of every Pool for new subscribers.
 type eventBus struct {

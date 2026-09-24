@@ -88,15 +88,26 @@ func TestDocumentedDifferences(t *testing.T) {
 		}
 	})
 
-	t.Run("VM_EXPIRING_SOON comes again after every heartbeat", func(t *testing.T) {
+	t.Run("VM_EXPIRING_SOON fires one heartbeat interval before the expiry", func(t *testing.T) {
 		h := newHarness(t, Config{}, hostA)
 		spec := h.spec("pool", 1, hostA)
 		spec.Replenishment = replenishment{Type: poolmgrv1.ReplenishmentStrategyType_REPLACE_ON_DELETE}
 		h.createPool(spec)
 		claim := h.claim("pool")
 
+		// 11s before the expiry: outside the Pool's 10s heartbeat interval,
+		// though inside battery's default 30s warning_window.
+		h.advance(19 * time.Second)
+		if n := h.warned("pool"); n != 0 {
+			t.Fatalf("%d leases warned 11s before the expiry, want none", n)
+		}
+		h.advance(2 * time.Second)
+
+		// Like battery, the warning comes again for every new expiry.
 		for i := range 2 {
-			h.advance(21 * time.Second)
+			if i > 0 {
+				h.advance(21 * time.Second)
+			}
 			warning := h.waitEvent(poolmgrv1.EventType_VM_EXPIRING_SOON)
 			if payloadOf(t, warning)["lease_id"] != claim.LeaseID {
 				t.Fatalf("warning %d is for %v, want the lease %s", i, payloadOf(t, warning)["lease_id"], claim.LeaseID)
@@ -104,6 +115,20 @@ func TestDocumentedDifferences(t *testing.T) {
 			if _, err := h.client.Heartbeat(h.ctx, claim.LeaseID); err != nil {
 				t.Fatalf("Heartbeat: %v", err)
 			}
+		}
+	})
+
+	t.Run("ReleaseVM emits VM_RELEASED before the deletion", func(t *testing.T) {
+		h := newHarness(t, Config{}, hostA)
+		h.createPool(h.spec("pool", 1, hostA))
+		claim := h.claim("pool")
+		if err := h.client.ReleaseVM(h.ctx, claim.LeaseID); err != nil {
+			t.Fatalf("ReleaseVM: %v", err)
+		}
+		got := h.collectUntil(poolmgrv1.EventType_VM_DELETED_ON_RELEASE)
+		released := eventOfType(t, got, poolmgrv1.EventType_VM_RELEASED)
+		if released.VMUID != claim.VMUID {
+			t.Fatalf("VM_RELEASED for %q, want the released microvm %q", released.VMUID, claim.VMUID)
 		}
 	})
 
