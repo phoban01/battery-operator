@@ -1,0 +1,39 @@
+# The Exec Agent's Host prerequisites (EA-031, EA-032), set to what a kind
+# node can satisfy. A kind node has no KVM and no containerd thin pool, and
+# the Exec Agent reports a Host without them not ready, which would keep the
+# Inventory Controller from admitting it.
+#
+# - KVM: the agent checks that sysfs lists the device (<kvm-sysfs-dir>/dev)
+#   and that the device node is a character device, without opening it.
+#   /dev/null passes both, with sysfs's /sys/class/mem/null.
+# - The thin pool: the agent looks for a device-mapper device of that name
+#   under <sys-block-dir>/dm-*/dm/name. fake-host.yaml writes one, named
+#   flintlock-thinpool, under /var/lib/battery-e2e/sys-block on the node,
+#   which this patch mounts.
+#
+# Every other argument is config/exec-agent's, repeated because a patch
+# replaces the list whole.
+- op: replace
+  path: /spec/template/spec/containers/0/args
+  value:
+  - --flintlockd=$(HOST_IP):9090
+  - --port=10270
+  - --kvm-device=/host/dev/null
+  - --kvm-sysfs-dir=/sys/class/mem/null
+  - --thin-pool=flintlock-thinpool
+  - --sys-block-dir=/host/e2e/sys-block
+  - --trust-domain=battery.liquidmetal-x.dev
+  - --flintlockd-cert-dir=/etc/battery/flintlockd
+- op: add
+  path: /spec/template/spec/containers/0/volumeMounts/-
+  value:
+    name: e2e-sys-block
+    mountPath: /host/e2e/sys-block
+    readOnly: true
+- op: add
+  path: /spec/template/spec/volumes/-
+  value:
+    name: e2e-sys-block
+    hostPath:
+      path: /var/lib/battery-e2e/sys-block
+      type: DirectoryOrCreate

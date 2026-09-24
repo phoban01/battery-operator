@@ -85,6 +85,13 @@ type TLS struct {
 	// ClientCAFile, when set, makes the Server require and verify a client
 	// certificate signed by it: mutual TLS, as battery reaches flintlockd.
 	ClientCAFile string
+	// Reload makes the Server read the files again for every TLS handshake,
+	// so that a certificate, key or client CA replaced on disk takes effect
+	// on the next connection. It stands in for the Host Image, which
+	// restarts flintlockd when the Exec Agent replaces the files (EA-064);
+	// the fake keeps its MicroVMs across the change instead. Without it,
+	// Serve reads the files once, when it starts.
+	Reload bool
 }
 
 // Faults are the Server's runtime fault switches. All false is a healthy
@@ -283,11 +290,31 @@ func (s *Server) listen() (net.Listener, error) {
 
 // serverCredentials builds Serve's transport credentials from Config.TLS:
 // plaintext when unset, otherwise the server certificate, and client
-// certificate verification when ClientCAFile is set too.
+// certificate verification when ClientCAFile is set too. The files are read
+// here, and again for every handshake when TLS.Reload is set.
 func (s *Server) serverCredentials() (credentials.TransportCredentials, error) {
 	if s.cfg.TLS == nil {
 		return insecure.NewCredentials(), nil
 	}
+	tlsCfg, err := s.loadTLSConfig()
+	if err != nil {
+		return nil, err
+	}
+	if s.cfg.TLS.Reload {
+		// A file that fails to load fails that handshake only; the next one
+		// reads the files again.
+		tlsCfg = &tls.Config{
+			MinVersion: tls.VersionTLS12,
+			GetConfigForClient: func(*tls.ClientHelloInfo) (*tls.Config, error) {
+				return s.loadTLSConfig()
+			},
+		}
+	}
+	return credentials.NewTLS(tlsCfg), nil
+}
+
+// loadTLSConfig reads Config.TLS's files into a server TLS configuration.
+func (s *Server) loadTLSConfig() (*tls.Config, error) {
 	cert, err := tls.LoadX509KeyPair(s.cfg.TLS.CertFile, s.cfg.TLS.KeyFile)
 	if err != nil {
 		return nil, fmt.Errorf("fake flintlockd %s: loading server certificate: %w", s.cfg.Name, err)
@@ -305,7 +332,7 @@ func (s *Server) serverCredentials() (credentials.TransportCredentials, error) {
 		tlsCfg.ClientCAs = pool
 		tlsCfg.ClientAuth = tls.RequireAndVerifyClientCert
 	}
-	return credentials.NewTLS(tlsCfg), nil
+	return tlsCfg, nil
 }
 
 // Addr is the bound TCP address once Serve is listening, empty before.

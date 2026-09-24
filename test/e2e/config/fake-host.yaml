@@ -1,0 +1,111 @@
+# The fake Host: on every kind node labelled battery.liquidmetal-x.dev/host=true
+# (test/e2e/kind-config.yaml labels the workers), the fake flintlockd
+# (cmd/fake-flintlockd) stands in for the Host Image's flintlockd.
+#
+# It runs in the node's network namespace and serves on the node's address,
+# port 9090, which is where the Exec Agent looks for its Host's flintlockd
+# (config/exec-agent's --flintlockd=$(HOST_IP):9090) and where battery
+# reaches it. It serves with the certificate, key and client CA bundle the
+# Exec Agent writes to /etc/battery/flintlockd (EA-064), waiting for them
+# and reading them again when they change, since kind has no Host Image unit
+# to start and restart it.
+#
+# Its init container does what the Host Image does on a real Host:
+# - creates /etc/battery/flintlockd, owned by 65532, the user of both the
+#   Exec Agent's image and this one, so that the agent may write it and the
+#   fake read it;
+# - writes a stand-in for containerd's thin pool: a sysfs-shaped directory
+#   naming one device-mapper device flintlock-thinpool, which
+#   exec-agent-host-prerequisites.yaml points the Exec Agent at.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: battery-e2e-fake-host
+  labels:
+    app.kubernetes.io/name: battery-operator
+    app.kubernetes.io/component: fake-flintlockd
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: fake-flintlockd
+  namespace: battery-e2e-fake-host
+  labels:
+    app.kubernetes.io/name: battery-operator
+    app.kubernetes.io/component: fake-flintlockd
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: battery-operator
+      app.kubernetes.io/component: fake-flintlockd
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: battery-operator
+        app.kubernetes.io/component: fake-flintlockd
+    spec:
+      hostNetwork: true
+      automountServiceAccountToken: false
+      nodeSelector:
+        battery.liquidmetal-x.dev/host: "true"
+      tolerations:
+      - operator: Exists
+      terminationGracePeriodSeconds: 5
+      initContainers:
+      - name: prepare-host
+        image: mirror.gcr.io/library/busybox:1.37@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e
+        command:
+        - sh
+        - -ec
+        - |
+          mkdir -p /host/etc/battery/flintlockd
+          chown 65532:65532 /host/etc/battery/flintlockd
+          chmod 0750 /host/etc/battery/flintlockd
+          mkdir -p /host/var/lib/battery-e2e/sys-block/dm-0/dm
+          echo flintlock-thinpool > /host/var/lib/battery-e2e/sys-block/dm-0/dm/name
+        securityContext:
+          runAsUser: 0
+        volumeMounts:
+        - name: host-etc-battery
+          mountPath: /host/etc/battery
+        - name: host-e2e
+          mountPath: /host/var/lib/battery-e2e
+      containers:
+      - name: fake-flintlockd
+        image: ghcr.io/phoban01/battery-operator/fake-flintlockd:e2e
+        args:
+        - --listen=$(HOST_IP):9090
+        # /etc/battery/flintlockd on the node, through the /etc/battery
+        # mount: a volume of the directory itself could not be mounted until
+        # the init container had created it.
+        - --cert-dir=/host/etc/battery/flintlockd
+        env:
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: HOST_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.hostIP
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 65532
+          runAsGroup: 65532
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: [ALL]
+        volumeMounts:
+        - name: host-etc-battery
+          mountPath: /host/etc/battery
+          readOnly: true
+      volumes:
+      - name: host-etc-battery
+        hostPath:
+          path: /etc/battery
+          type: DirectoryOrCreate
+      - name: host-e2e
+        hostPath:
+          path: /var/lib/battery-e2e
+          type: DirectoryOrCreate
