@@ -18,6 +18,14 @@ pattern = "internal/**/*.go"
 [[source]]
 pattern = "pkg/**/*.go"
 
+# The e2e suite (test/e2e), and its kustomize overlay below.
+[[source]]
+pattern = "test/**/*.go"
+
+[[source]]
+pattern = "test/**/*.yaml"
+comment-style = { meta = "#=", content = "#/" }
+
 # The Manifests (06-deployment.md, 05-exec-agent.md#identity) are YAML and
 # cite requirements with `#=` and `#/`.
 [[source]]

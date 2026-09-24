@@ -1,0 +1,21 @@
+# The e2e suite's kind cluster (test/e2e/README.md): a control plane that is
+# not a Host, and two workers that are. The label is the one an operator of
+# a real cluster sets on every Host, which the Exec Agent's DaemonSet and
+# the fake flintlockd's select on.
+#
+# The node image is pinned by digest: it is the default of kind v0.30.0,
+# Kubernetes v1.34.0, which has ServiceAccountTokenPodNodeInfo (the Exec
+# Agent's admission policy needs it) and ValidatingAdmissionPolicy.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+- role: control-plane
+  image: kindest/node:v1.34.0@sha256:7416a61b42b1662ca6ca89f02028ac133a309a2a30ba309614e8ec94d976dc5a
+- role: worker
+  image: kindest/node:v1.34.0@sha256:7416a61b42b1662ca6ca89f02028ac133a309a2a30ba309614e8ec94d976dc5a
+  labels:
+    battery.liquidmetal-x.dev/host: "true"
+- role: worker
+  image: kindest/node:v1.34.0@sha256:7416a61b42b1662ca6ca89f02028ac133a309a2a30ba309614e8ec94d976dc5a
+  labels:
+    battery.liquidmetal-x.dev/host: "true"

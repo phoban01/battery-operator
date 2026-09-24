@@ -71,36 +71,42 @@ vet: ## Run go vet against code.
 test: manifests generate fmt vet setup-envtest kustomize ## Run tests.
 	KUSTOMIZE="$(KUSTOMIZE)" KUBEBUILDER_ASSETS="$(shell "$(ENVTEST)" use $(ENVTEST_K8S_VERSION) --bin-dir "$(LOCALBIN)" -p path)" go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out
 
-# TODO(user): To use a different vendor for e2e tests, modify the setup under 'tests/e2e'.
-# The default setup assumes Kind is pre-installed and builds/loads the Manager Docker image locally.
-# kubectl kuberc is disabled by default for test isolation; enable with:
-# - KUBECTL_KUBERC=true
-# CertManager is installed by default; skip with:
-# - CERT_MANAGER_INSTALL_SKIP=true
-KIND_CLUSTER ?= battery-operator-test-e2e
+# The e2e suite (test/e2e/README.md, ADR 0006): sigs.k8s.io/e2e-framework
+# creates a kind cluster from test/e2e/kind-config.yaml, loads the images
+# into it, installs cert-manager, deploys the Manifests through the overlay
+# test/e2e/config, runs the features and deletes the cluster. test-e2e
+# builds the three images with Dagger first, tagged E2E_IMAGE_TAG; the
+# nodes pull poolmgrd, POOLMGRD_IMG, themselves.
+#
+# - E2E_KEEP_CLUSTER=true leaves the cluster in place, and a later run
+#   reuses it; cleanup-test-e2e deletes it.
+# - E2E_LOGS_DIR=<dir> exports the cluster's logs there at the end.
+# - E2E_ARGS passes more flags to go test, for example
+#   E2E_ARGS='-run TestCRDValidation'.
+KIND_CLUSTER ?= battery-operator-e2e
+E2E_IMAGE_TAG ?= e2e
+FAKE_FLINTLOCKD_IMG ?= $(IMAGE_REPO)/fake-flintlockd:$(IMAGE_TAG)
+E2E_ARGS ?=
 
-.PHONY: setup-test-e2e
-setup-test-e2e: ## Set up a Kind cluster for e2e tests if it does not exist
-	@command -v $(KIND) >/dev/null 2>&1 || { \
-		echo "Kind is not installed. Please install Kind manually."; \
-		exit 1; \
-	}
-	@case "$$($(KIND) get clusters)" in \
-		*"$(KIND_CLUSTER)"*) \
-			echo "Kind cluster '$(KIND_CLUSTER)' already exists. Skipping creation." ;; \
-		*) \
-			echo "Creating Kind cluster '$(KIND_CLUSTER)'..."; \
-			$(KIND) create cluster --name $(KIND_CLUSTER) ;; \
-	esac
+.PHONY: docker-build-e2e
+docker-build-e2e: IMAGE_TAG = $(E2E_IMAGE_TAG)
+docker-build-e2e: docker-build ## Build the Operator, Exec Agent and fake flintlockd images for the e2e suite and load them into Docker.
+	$(DAGGER) call fake-flintlockd-image export-image --name=${FAKE_FLINTLOCKD_IMG}
 
 .PHONY: test-e2e
-test-e2e: setup-test-e2e manifests generate fmt vet ## Run the e2e tests. Expected an isolated environment using Kind.
-	KIND=$(KIND) KIND_CLUSTER=$(KIND_CLUSTER) go test -tags=e2e ./test/e2e/ -v -ginkgo.v
-	$(MAKE) cleanup-test-e2e
+test-e2e: IMAGE_TAG = $(E2E_IMAGE_TAG)
+test-e2e: manifests kustomize docker-build-e2e test-e2e-only ## Build the images, then run the e2e suite on a kind cluster of its own.
+
+.PHONY: test-e2e-only
+test-e2e-only: IMAGE_TAG = $(E2E_IMAGE_TAG)
+test-e2e-only: kustomize ## Run the e2e suite with images already built by docker-build-e2e.
+	cd test/e2e && KIND_CLUSTER=$(KIND_CLUSTER) KUSTOMIZE="$(KUSTOMIZE)" KUBECTL="$(KUBECTL)" \
+		IMG=$(IMG) EXEC_AGENT_IMG=$(EXEC_AGENT_IMG) FAKE_FLINTLOCKD_IMG=$(FAKE_FLINTLOCKD_IMG) POOLMGRD_IMG=$(POOLMGRD_IMG) \
+		go test -tags=e2e -v -count=1 -timeout=40m . $(E2E_ARGS)
 
 .PHONY: cleanup-test-e2e
-cleanup-test-e2e: ## Tear down the Kind cluster used for e2e tests
-	@$(KIND) delete cluster --name $(KIND_CLUSTER)
+cleanup-test-e2e: ## Delete the kind cluster a run with E2E_KEEP_CLUSTER=true left.
+	$(KIND) delete cluster --name $(KIND_CLUSTER)
 
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint linter

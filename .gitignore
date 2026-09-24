@@ -18,3 +18,6 @@ go.work
 
 # the image tarballs of `dagger call images export --path=dist/images`
 /dist/images/
+
+# the e2e suite writes its kustomization for each run here
+/test/e2e/.run/
