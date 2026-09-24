@@ -31,6 +31,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/phoban01/battery-operator/internal/hostcert"
+	"github.com/phoban01/battery-operator/internal/reconcile"
 )
 
 // The reasons a request is denied for, one for each check.
@@ -78,18 +79,32 @@ var (
 	}
 )
 
-// reviewed is a request that passed every check.
-type reviewed struct {
-	// req is the parsed PKCS#10 request.
-	req *x509.CertificateRequest
-	// node is the requester's Node name.
-	node string
+// csrReview runs every check of the request's signer name, in order, and
+// stops at the first the request fails, recording it in the scope's denial.
+// A failed check ends the review, not the chain: the decision
+// subreconcilers after it deny the request or mark it Failed. An error
+// means the review could not be made and has to be retried.
+//
+// Each check is a subreconciler of its own, so that a check can be added,
+// changed or reordered without touching the others or the decision.
+type csrReview struct{}
+
+// csrChecks are the review's checks, in order.
+func csrChecks() reconcile.Group[*csrScope] {
+	return reconcile.Group[*csrScope]{Chain: reconcile.Steps[*csrScope](
+		csrRequester{},
+		csrRequest{},
+		csrUsages{},
+		csrSubjectAltNames{},
+	)}
 }
 
-// review runs every check of the request's signer name. It returns the
-// reviewed request when every check passes, and otherwise why the request
-// fails. An error means the review could not be made and has to be retried.
-func (r *CertificateSigningRequestReconciler) review(ctx context.Context, csr *certificatesv1.CertificateSigningRequest) (*reviewed, *denial, error) {
+// Reconcile implements reconcile.SubReconciler.
+func (csrReview) Reconcile(ctx context.Context, s *csrScope) (reconcile.Result, error) {
+	//= docs/requirements/09-certificates.md#signing
+	//# The Operator SHALL sign a request only when it passes every
+	//# check of [Approval](#approval) for its signer name, whoever approved it.
+	//
 	//= docs/requirements/09-certificates.md#approval
 	//# The Operator SHALL approve a
 	//# `battery.liquidmetal-x.dev/flintlockd-serving` request only when the
@@ -114,57 +129,103 @@ func (r *CertificateSigningRequestReconciler) review(ctx context.Context, csr *c
 	//# request's subject alternative names are exactly one of that Node's
 	//# internal addresses and
 	//# `spiffe://<trust domain>/flintlock/client/exec-agent/<node name>`.
-	if want := r.Config.execAgentUsername(); csr.Spec.Username != want {
-		return nil, denyf(ReasonRequester, "The requester %q is not the Exec Agent's ServiceAccount %q", csr.Spec.Username, want), nil
+	return csrChecks().Reconcile(ctx, s)
+}
+
+// deny records that the request failed a check, and stops the review.
+func (s *csrScope) deny(d *denial) (reconcile.Result, error) {
+	s.denial = d
+	return reconcile.Result{Stop: true}, nil
+}
+
+// csrRequester checks that the requester is the Exec Agent's
+// ServiceAccount and that its user info names one Node, which it records.
+type csrRequester struct{}
+
+// Reconcile implements reconcile.SubReconciler.
+func (csrRequester) Reconcile(_ context.Context, s *csrScope) (reconcile.Result, error) {
+	csr := s.Object
+	if want := s.Config.execAgentUsername(); csr.Spec.Username != want {
+		return s.deny(denyf(ReasonRequester, "The requester %q is not the Exec Agent's ServiceAccount %q", csr.Spec.Username, want))
 	}
 	nodes := csr.Spec.Extra[hostcert.NodeNameExtra]
 	if len(nodes) != 1 || nodes[0] == "" {
-		return nil, denyf(ReasonNodeName, "The requester's %s names no single Node", hostcert.NodeNameExtra), nil
+		return s.deny(denyf(ReasonNodeName, "The requester's %s names no single Node", hostcert.NodeNameExtra))
 	}
-	nodeName := nodes[0]
+	s.node = nodes[0]
+	return reconcile.Result{}, nil
+}
 
-	req, err := parseRequest(csr.Spec.Request)
+// csrRequest checks that spec.request is a well-formed, self-signed PKCS#10
+// request, and records it parsed.
+type csrRequest struct{}
+
+// Reconcile implements reconcile.SubReconciler.
+func (csrRequest) Reconcile(_ context.Context, s *csrScope) (reconcile.Result, error) {
+	req, err := parseRequest(s.Object.Spec.Request)
 	if err != nil {
-		return nil, denyf(ReasonInvalidRequest, "%v", err), nil
+		return s.deny(denyf(ReasonInvalidRequest, "%v", err))
 	}
+	s.req = req
+	return reconcile.Result{}, nil
+}
 
+// csrUsages checks the request's key usages against its signer's.
+type csrUsages struct{}
+
+// Reconcile implements reconcile.SubReconciler.
+func (csrUsages) Reconcile(_ context.Context, s *csrScope) (reconcile.Result, error) {
+	csr := s.Object
 	//= docs/requirements/09-certificates.md#approval
 	//# The Operator SHALL approve a request only when its key usages
 	//# are digital signature and key encipherment, with server auth for
 	//# `flintlockd-serving` and `exec-agent-serving`, or with client auth for
 	//# `flintlockd-client`.
 	if want := signerUsages[csr.Spec.SignerName]; !sameUsages(csr.Spec.Usages, want) {
-		return nil, denyf(ReasonKeyUsages, "The key usages %v are not %v", csr.Spec.Usages, want), nil
+		return s.deny(denyf(ReasonKeyUsages, "The key usages %v are not %v", csr.Spec.Usages, want))
 	}
+	return reconcile.Result{}, nil
+}
 
+// csrSubjectAltNames checks the request's subject alternative names against
+// the ones its signer and the requester's Node call for: for a serving
+// signer, the Node must exist and have an internal address.
+type csrSubjectAltNames struct{}
+
+// Reconcile implements reconcile.SubReconciler.
+func (csrSubjectAltNames) Reconcile(ctx context.Context, s *csrScope) (reconcile.Result, error) {
+	csr := s.Object
 	var d *denial
 	switch csr.Spec.SignerName {
 	case hostcert.ClientSigner:
-		d = checkSANs(req, hostcert.ExecAgentID(r.Config.TrustDomain, nodeName), nil)
+		d = checkSANs(s.req, hostcert.ExecAgentID(s.Config.TrustDomain, s.node), nil)
 	case hostcert.ServingSigner, hostcert.ExecAgentServingSigner:
-		addrs, nd, err := r.internalAddresses(ctx, nodeName)
-		if err != nil || nd != nil {
-			return nil, nd, err
+		addrs, nd, err := internalAddresses(ctx, s.APIReader, s.node)
+		if err != nil {
+			return reconcile.Result{}, err
 		}
-		uri := hostcert.HostID(r.Config.TrustDomain, nodeName)
+		if nd != nil {
+			return s.deny(nd)
+		}
+		uri := hostcert.HostID(s.Config.TrustDomain, s.node)
 		if csr.Spec.SignerName == hostcert.ExecAgentServingSigner {
-			uri = hostcert.ExecAgentID(r.Config.TrustDomain, nodeName)
+			uri = hostcert.ExecAgentID(s.Config.TrustDomain, s.node)
 		}
-		d = checkSANs(req, uri, addrs)
+		d = checkSANs(s.req, uri, addrs)
 	default:
 		d = denyf(ReasonSigner, "The signer name %q is not the Operator's", csr.Spec.SignerName)
 	}
 	if d != nil {
-		return nil, d, nil
+		return s.deny(d)
 	}
-	return &reviewed{req: req, node: nodeName}, nil, nil
+	return reconcile.Result{}, nil
 }
 
 // internalAddresses returns the internal addresses of the Node name, or why
 // a request for it fails when it does not exist or has none.
-func (r *CertificateSigningRequestReconciler) internalAddresses(ctx context.Context, name string) ([]net.IP, *denial, error) {
+func internalAddresses(ctx context.Context, nodes client.Reader, name string) ([]net.IP, *denial, error) {
 	node := &corev1.Node{}
-	if err := r.APIReader.Get(ctx, client.ObjectKey{Name: name}, node); err != nil {
+	if err := nodes.Get(ctx, client.ObjectKey{Name: name}, node); err != nil {
 		if apierrors.IsNotFound(err) {
 			return nil, denyf(ReasonNodeNotFound, "The requester's Node %q does not exist", name), nil
 		}
