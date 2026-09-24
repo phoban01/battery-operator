@@ -53,7 +53,8 @@ needs. Nothing test-only goes in `config/` at the top of the repository.
 battery's Hosts are the kind workers, at their internal addresses, rendered
 with `internal/batterysidecar.Render` into battery's ConfigMap when the
 cluster exists, since kind picks the addresses. The Inventory Controller
-(#19) will write them itself.
+rewrites them from the Exec Agents' reports once it admits the Hosts; #99
+drops the static ones in favour of it.
 
 ## CI
 

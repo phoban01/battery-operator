@@ -170,9 +170,10 @@ func installCertManager(ctx context.Context, cfg *envconf.Config) (context.Conte
 //
 // battery's Hosts are the kind nodes labelled as Hosts, at their internal
 // addresses, rendered with batterysidecar.Render as the Inventory
-// Controller will (#19) once it exists. The addresses are kind's, so the
-// suite renders them when the cluster exists rather than config/ holding
-// them.
+// Controller renders them. The addresses are kind's, so the suite renders
+// them when the cluster exists rather than config/ holding them. The
+// Inventory Controller rewrites the file from the Exec Agents' reports once
+// it admits the Hosts; #99 drops this in favour of it.
 func deploy(s settings) env.Func {
 	return func(ctx context.Context, cfg *envconf.Config) (context.Context, error) {
 		//= docs/requirements/08-test-doubles.md#test-environments

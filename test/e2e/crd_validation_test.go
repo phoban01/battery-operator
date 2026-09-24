@@ -58,7 +58,7 @@ func TestCRDValidation(t *testing.T) {
 			//= docs/requirements/01-resources.md#pool
 			//= type=test
 			//# The CRDs SHALL reject a `Pool` whose `spec.size` is negative or
-			//# whose enumerated fields hold a value that battery v0.1.0 does not define.
+			//# whose enumerated fields hold a value that battery v0.3.3 does not define.
 			c := mustClient(t, cfg)
 			for _, tc := range []struct {
 				name   string
