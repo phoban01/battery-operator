@@ -45,9 +45,23 @@ var errNotSynced = errors.New("the claims have not been listed yet")
 // every claim of the cluster, indexed by Host. RBAC: get, list and watch
 // on microvmclaims.
 type KubeClaims struct {
-	reader   client.Reader
-	cache    cache.Cache
-	informer cache.Informer
+	// reader reads a claim from the API server.
+	reader client.Reader
+	// cached lists the claims from the cache, by hostNodeIndex.
+	cached client.Reader
+	// start keeps the cache until its context ends.
+	start func(context.Context) error
+	// synced reports whether the cache has listed the claims once.
+	synced func() bool
+}
+
+// claimHostNode is hostNodeIndex: the Node of the Host a claim is bound on.
+func claimHostNode(o client.Object) []string {
+	claim, ok := o.(*batteryv1alpha1.MicroVMClaim)
+	if !ok || claim.Status.Host == nil || claim.Status.Host.NodeName == "" {
+		return nil
+	}
+	return []string{claim.Status.Host.NodeName}
 }
 
 // NewKubeClaims builds the lookup from the agent's client configuration.
@@ -65,27 +79,33 @@ func NewKubeClaims(ctx context.Context, cfg *rest.Config, resync time.Duration) 
 	if err != nil {
 		return nil, fmt.Errorf("execagent: building the claim cache: %w", err)
 	}
-	if err := c.IndexField(ctx, &batteryv1alpha1.MicroVMClaim{}, hostNodeIndex, func(o client.Object) []string {
-		claim, ok := o.(*batteryv1alpha1.MicroVMClaim)
-		if !ok || claim.Status.Host == nil || claim.Status.Host.NodeName == "" {
-			return nil
-		}
-		return []string{claim.Status.Host.NodeName}
-	}); err != nil {
+	if err := c.IndexField(ctx, &batteryv1alpha1.MicroVMClaim{}, hostNodeIndex, claimHostNode); err != nil {
 		return nil, fmt.Errorf("execagent: indexing the claim cache: %w", err)
 	}
 	inf, err := c.GetInformer(ctx, &batteryv1alpha1.MicroVMClaim{})
 	if err != nil {
 		return nil, fmt.Errorf("execagent: building the claim informer: %w", err)
 	}
-	return &KubeClaims{reader: reader, cache: c, informer: inf}, nil
+	return &KubeClaims{reader: reader, cached: c, start: c.Start, synced: inf.HasSynced}, nil
+}
+
+// newKubeClaims is the lookup over reader for single claims and cached for
+// the claims of a Host. cached has to be indexed by hostNodeIndex with
+// claimHostNode, and is taken to be synced and to need no running. The
+// unit tests pass controller-runtime's fake client as both.
+func newKubeClaims(reader, cached client.Reader) *KubeClaims {
+	return &KubeClaims{
+		reader: reader, cached: cached,
+		start:  func(ctx context.Context) error { <-ctx.Done(); return nil },
+		synced: func() bool { return true },
+	}
 }
 
 // Run keeps the cache until ctx ends.
-func (k *KubeClaims) Run(ctx context.Context) error { return k.cache.Start(ctx) }
+func (k *KubeClaims) Run(ctx context.Context) error { return k.start(ctx) }
 
 // HasSynced reports whether the claims have been listed once.
-func (k *KubeClaims) HasSynced() bool { return k.informer != nil && k.informer.HasSynced() }
+func (k *KubeClaims) HasSynced() bool { return k.synced() }
 
 // Claim implements ClaimLookup with a read from the API server.
 func (k *KubeClaims) Claim(ctx context.Context, namespace, name string) (*Claim, error) {
@@ -109,7 +129,7 @@ func (k *KubeClaims) BoundOnHost(ctx context.Context, hostNode string) ([]Claim,
 		return nil, errNotSynced
 	}
 	var list batteryv1alpha1.MicroVMClaimList
-	if err := k.cache.List(ctx, &list, client.MatchingFields{hostNodeIndex: hostNode}); err != nil {
+	if err := k.cached.List(ctx, &list, client.MatchingFields{hostNodeIndex: hostNode}); err != nil {
 		return nil, err
 	}
 	var out []Claim

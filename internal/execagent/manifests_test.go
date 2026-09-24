@@ -29,7 +29,6 @@ import (
 	"sigs.k8s.io/yaml"
 
 	"github.com/phoban01/battery-operator/internal/execagent"
-	"github.com/phoban01/battery-operator/internal/execagent/execagenttest"
 )
 
 //= docs/requirements/05-exec-agent.md#serving
@@ -48,7 +47,7 @@ import (
 // certificates to the Host.
 func TestDaemonSet(t *testing.T) {
 	t.Parallel()
-	data, err := os.ReadFile(filepath.Join(execagenttest.ModuleRoot(), "config", "exec-agent", "daemonset.yaml"))
+	data, err := os.ReadFile(filepath.Join(moduleRoot(), "config", "exec-agent", "daemonset.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,9 +56,9 @@ func TestDaemonSet(t *testing.T) {
 		t.Fatal(err)
 	}
 	spec := ds.Spec.Template.Spec
-	if ds.Namespace != execagenttest.AgentNamespace || spec.ServiceAccountName != execagenttest.AgentServiceAccount {
+	if ds.Namespace != agentNamespace || spec.ServiceAccountName != agentServiceAccount {
 		t.Errorf("the DaemonSet runs as %s/%s, want %s/%s", ds.Namespace, spec.ServiceAccountName,
-			execagenttest.AgentNamespace, execagenttest.AgentServiceAccount)
+			agentNamespace, agentServiceAccount)
 	}
 	if ds.Kind != "DaemonSet" {
 		t.Errorf("the Exec Agent runs as a %s, want a DaemonSet", ds.Kind)

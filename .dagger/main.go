@@ -129,8 +129,8 @@ func (m *BatteryOperator) Lint(ctx context.Context) (string, error) {
 		Stdout(ctx)
 }
 
-// Test runs the unit and envtest tests through `make test`, which downloads
-// the envtest binaries itself.
+// Test runs the unit tests through `make test`, which need no API server
+// (ADR 0006).
 func (m *BatteryOperator) Test(ctx context.Context) (string, error) {
 	return m.gobase("test").
 		WithExec([]string{"make", "test"}).

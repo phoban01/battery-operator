@@ -86,8 +86,8 @@ func holderUser() authenticationv1.UserInfo {
 
 // TestAuthenticateReviewsForTheAgentsAudience checks that every request is
 // reviewed, for the agent's audience, and that a request is refused
-// unless the review authenticates it for that audience. The envtest suite
-// checks the same against a real API server.
+// unless the review authenticates it for that audience. The e2e suite
+// checks the same against a real API server (TestExecAgentAuthentication).
 func TestAuthenticateReviewsForTheAgentsAudience(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {

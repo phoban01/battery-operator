@@ -435,8 +435,9 @@ func TestExecAPIIsFlintlocksOwn(t *testing.T) {
 // TestServingCertificateNamesTheAddress checks that the agent puts a signed
 // serving certificate in use only when it names the exec API's address, is
 // for the key the agent generated, carries the agent's SPIFFE ID and chains
-// to the published serving CA. The envtest suite checks that the agent
-// serves on its Node's internal address with the certificate it obtained.
+// to the published serving CA. TestAgentRequestsItsCertificates checks that
+// the agent serves on its Node's internal address with the certificate it
+// obtained.
 func TestServingCertificateNamesTheAddress(t *testing.T) {
 	t.Parallel()
 	ca, other := newUnitCA(t), newUnitCA(t)

@@ -107,8 +107,8 @@ Two layers ([ADR 0006](docs/adr/0006-unit-tests-and-kind-e2e.md),
   Host. Anything that needs an API server is tested here: CRD validation,
   admission policies, TokenReview, CSRs, RBAC as shipped.
 - **Avoid envtest.** Use it only where neither layer can exercise a
-  behaviour, and say why beside the use (TD-027). Some envtest suites
-  remain from earlier waves; they are being moved.
+  behaviour, and say why beside the use (TD-027). No test uses it now, and
+  `test/layers` fails on a use that does not say why.
 - There is no KVM and no battery daemon in development; the fakes and kind
   stand in.
 

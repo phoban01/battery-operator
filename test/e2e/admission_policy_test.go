@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	authenticationv1 "k8s.io/api/authentication/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -30,6 +31,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/utils/ptr"
@@ -44,6 +46,10 @@ import (
 // (config/exec-agent/admission-policy.yaml), which the API server names
 // when it refuses a request.
 const admissionPolicy = "battery-operator-exec-agent-own-host"
+
+// otherGuardNode names a Host that is not in the cluster, whose drain guard
+// no Exec Agent looks after.
+const otherGuardNode = "e2e-another-host"
 
 // TestExecAgentAdmissionPolicy: the Exec Agent's identity, a token bound to
 // its pod on one Host, may change only that Host's Node's annotations under
@@ -76,7 +82,7 @@ func TestExecAgentAdmissionPolicy(t *testing.T) {
 			// kind-config.yaml has two Hosts and a control plane that is
 			// none. A smaller cluster (KIND_CONFIG) skips the cases that
 			// need those Nodes; a guard for another Host needs only a name.
-			host, otherHost, otherGuardHost = hosts[0].Name, "", "e2e-another-host"
+			host, otherHost, otherGuardHost = hosts[0].Name, "", otherGuardNode
 			if len(hosts) > 1 {
 				otherHost, otherGuardHost = hosts[1].Name, hosts[1].Name
 			}
@@ -107,9 +113,33 @@ func TestExecAgentAdmissionPolicy(t *testing.T) {
 			}); err != nil {
 				t.Errorf("annotating its own Node under the prefix: %v", err)
 			}
+			// The report it keeps there, which the Exec Agent of the Host has
+			// written by now, it may also remove.
+			var n corev1.Node
+			err := wait.PollUntilContextTimeout(ctx, 2*time.Second, 3*time.Minute, true, func(ctx context.Context) (bool, error) {
+				if err := c.Get(ctx, client.ObjectKey{Name: host}, &n); err != nil {
+					return false, nil
+				}
+				_, ok := n.Annotations[execagent.AnnotationReady]
+				return ok, nil
+			})
+			if err != nil {
+				t.Fatalf("the Exec Agent of %s wrote no report: %v", host, err)
+			}
+			if err := patchNode(ctx, c, asAgent, host, func(n *corev1.Node) {
+				delete(n.Annotations, execagent.AnnotationReady)
+			}); err != nil {
+				t.Errorf("removing a report annotation of its own Node: %v", err)
+			}
 			return ctx
 		}).
 		Assess("the agent may change nothing else of any Node", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+			//= docs/requirements/05-exec-agent.md#identity
+			//= type=test
+			//# The Manifests SHALL include a ValidatingAdmissionPolicy that
+			//# lets an Exec Agent's identity change only the annotations of its own
+			//# Host's Node under the prefix `battery.liquidmetal-x.dev/`, and nothing
+			//# else of any Node.
 			c := mustClient(t, cfg)
 			for _, tc := range []struct {
 				name   string
@@ -135,6 +165,20 @@ func TestExecAgentAdmissionPolicy(t *testing.T) {
 				{"its own Node, by an identity that names no node", asAgentNoNode, host, func(n *corev1.Node) {
 					setAnnotation(n, execagent.Prefix+"e2e", "refused")
 				}},
+				{"another prefix's annotation of its own Node, removed", asAgent, host, func(n *corev1.Node) {
+					for key := range n.Annotations {
+						if !strings.HasPrefix(key, execagent.Prefix) {
+							delete(n.Annotations, key)
+							return
+						}
+					}
+				}},
+				{"a look-alike of the prefix on its own Node", asAgent, host, func(n *corev1.Node) {
+					setAnnotation(n, "evil"+execagent.Prefix+"e2e", "refused")
+				}},
+				{"a subdomain of the prefix on its own Node", asAgent, host, func(n *corev1.Node) {
+					setAnnotation(n, "host-service."+execagent.Prefix+"e2e", "refused")
+				}},
 			} {
 				t.Run(tc.name, func(t *testing.T) {
 					if tc.node == "" {
@@ -143,6 +187,20 @@ func TestExecAgentAdmissionPolicy(t *testing.T) {
 					wantRefused(t, patchNode(ctx, c, tc.client, tc.node, tc.mutate))
 				})
 			}
+			// Nor its own Node's status, which RBAC refuses it before the
+			// policy is asked.
+			t.Run("its own Node's status", func(t *testing.T) {
+				var n corev1.Node
+				if err := c.Get(ctx, client.ObjectKey{Name: host}, &n); err != nil {
+					t.Fatal(err)
+				}
+				changed := n.DeepCopy()
+				changed.Status.Conditions = append(changed.Status.Conditions, corev1.NodeCondition{Type: "E2E", Status: corev1.ConditionFalse})
+				err := asAgent.Status().Patch(ctx, changed, client.MergeFrom(&n), client.DryRunAll)
+				if !apierrors.IsForbidden(err) {
+					t.Errorf("patching its own Node's status: got %v, want it refused", err)
+				}
+			})
 			return ctx
 		}).
 		Assess("the agent may create and delete its own Host's drain guard", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
@@ -168,6 +226,11 @@ func TestExecAgentAdmissionPolicy(t *testing.T) {
 			return ctx
 		}).
 		Assess("the agent may make no other Host's drain guard", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+			//= docs/requirements/05-exec-agent.md#identity
+			//= type=test
+			//# The ValidatingAdmissionPolicy of EA-051 SHALL let an Exec
+			//# Agent's identity create and delete guard pods and PodDisruptionBudgets
+			//# only for its own Host's Node.
 			for _, tc := range []struct {
 				name string
 				obj  client.Object
@@ -180,6 +243,8 @@ func TestExecAgentAdmissionPolicy(t *testing.T) {
 					p.Spec.AutomountServiceAccountToken = nil
 					return p
 				}()},
+				{"a pod of another name", guardPod("not-the-guard", host)},
+				{"a budget of another name", guardBudget("not-the-guard")},
 			} {
 				t.Run(tc.name, func(t *testing.T) {
 					wantRefused(t, asAgent.Create(ctx, tc.obj, client.DryRunAll))
@@ -194,6 +259,15 @@ func TestExecAgentAdmissionPolicy(t *testing.T) {
 			}
 			defer func() { _ = c.Delete(ctx, budget) }()
 			wantRefused(t, asAgent.Delete(ctx, guardBudget(execagent.GuardName(otherGuardHost))))
+			// Nor its guard pod: a guard pod for a Node that does not exist
+			// stands in for another Host's, since no Exec Agent removes it
+			// while the test runs.
+			pod := guardPod(execagent.GuardName(otherGuardNode), otherGuardNode)
+			if err := c.Create(ctx, pod); err != nil {
+				t.Fatalf("creating another Host's guard pod: %v", err)
+			}
+			defer func() { _ = c.Delete(ctx, pod, client.GracePeriodSeconds(0)) }()
+			wantRefused(t, asAgent.Delete(ctx, guardPod(execagent.GuardName(otherGuardNode), otherGuardNode), client.DryRunAll))
 			return ctx
 		}).
 		Feature()
