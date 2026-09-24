@@ -41,8 +41,10 @@ Inside it:
 - The Makefile pins controller-gen, setup-envtest, golangci-lint and
   kustomize, as kubebuilder scaffolds it, and installs them into `bin/` on
   first use.
-- duvet, which traces requirements to code, is built into `.devbox/cargo`
-  on the first shell entry. That takes a few minutes, once.
+- duvet, which traces requirements to code, is built once per machine into
+  `~/.cache/battery-operator/cargo` (or `$BATTERY_OPERATOR_CARGO_HOME`) on the
+  first shell entry, and shared by every checkout and worktree. The first
+  build takes a few minutes.
 - `devbox run build`, `test`, `lint` and `duvet` run the make targets, and
   `devbox run coverage-gate CL-001 CL-002` runs the requirements gate for
   those IDs.
