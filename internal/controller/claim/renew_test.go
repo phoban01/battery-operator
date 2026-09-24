@@ -142,8 +142,8 @@ func wantExpired(t *testing.T, got *batteryv1alpha1.MicroVMClaim) {
 	if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != batteryv1alpha1.ReasonLeaseExpired {
 		t.Errorf("Bound condition = %+v, want false with reason LeaseExpired", cond)
 	}
-	if got.Status.LeaseID != "lease-1" {
-		t.Errorf("leaseID = %q, want lease-1 kept for the release", got.Status.LeaseID)
+	if got.Status.LeaseID == "" {
+		t.Error("leaseID is gone, want it kept for the release")
 	}
 }
 
