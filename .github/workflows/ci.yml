@@ -22,7 +22,9 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # matches DAGGER_VERSION in devbox.json and engineVersion in dagger.json
+  # matches DAGGER_VERSION in devbox.json and engineVersion in dagger.json.
+  # Every job sets Dagger up with .github/actions/setup-dagger, which pulls
+  # the engine image with retries (#125).
   DAGGER_VERSION: 0.21.9
   DAGGER_NO_NAG: 1
 
@@ -33,7 +35,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-      - uses: dagger/dagger-for-github@27b130bf0f79a7f6fbbbe0fbca6760dc9bb40a77 # v8.4.1
+      - uses: ./.github/actions/setup-dagger
         with:
           version: ${{ env.DAGGER_VERSION }}
           call: lint
@@ -44,7 +46,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-      - uses: dagger/dagger-for-github@27b130bf0f79a7f6fbbbe0fbca6760dc9bb40a77 # v8.4.1
+      - uses: ./.github/actions/setup-dagger
         with:
           version: ${{ env.DAGGER_VERSION }}
           call: test
@@ -55,13 +57,13 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-      - uses: dagger/dagger-for-github@27b130bf0f79a7f6fbbbe0fbca6760dc9bb40a77 # v8.4.1
+      - uses: ./.github/actions/setup-dagger
         with:
           version: ${{ env.DAGGER_VERSION }}
           call: build export --path=bin/manager
       # Both images, for both platforms, so that a PR which breaks one fails
       # here rather than when main publishes.
-      - uses: dagger/dagger-for-github@27b130bf0f79a7f6fbbbe0fbca6760dc9bb40a77 # v8.4.1
+      - uses: ./.github/actions/setup-dagger
         with:
           version: ${{ env.DAGGER_VERSION }}
           call: images entries
@@ -72,7 +74,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-      - uses: dagger/dagger-for-github@27b130bf0f79a7f6fbbbe0fbca6760dc9bb40a77 # v8.4.1
+      - uses: ./.github/actions/setup-dagger
         with:
           version: ${{ env.DAGGER_VERSION }}
           call: check-generated
@@ -85,7 +87,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-      - uses: dagger/dagger-for-github@27b130bf0f79a7f6fbbbe0fbca6760dc9bb40a77 # v8.4.1
+      - uses: ./.github/actions/setup-dagger
         with:
           version: ${{ env.DAGGER_VERSION }}
           call: quint
@@ -110,8 +112,8 @@ jobs:
         run: |
           go install "sigs.k8s.io/kind@${KIND_VERSION}"
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
-      # Installs the CLI only; make calls it.
-      - uses: dagger/dagger-for-github@27b130bf0f79a7f6fbbbe0fbca6760dc9bb40a77 # v8.4.1
+      # Installs the CLI and pulls the engine; make calls it.
+      - uses: ./.github/actions/setup-dagger
         with:
           version: ${{ env.DAGGER_VERSION }}
       - name: make test-e2e
@@ -153,11 +155,11 @@ jobs:
           fi
           echo "::error::this PR changes .duvet/snapshot.txt, which changes only at milestones. Restore it with: git checkout origin/$BASE -- .duvet/snapshot.txt. A deliberate milestone snapshot says 'Snapshot: milestone' on its own line in the PR body."
           exit 1
-      # Installs the CLI only. The calls below are run steps, so that the PR
+      # Installs the CLI and pulls the engine. The calls below are run steps, so that the PR
       # body reaches dagger through an environment variable and never through
       # the action's own interpolation into its shell.
       - name: install dagger
-        uses: dagger/dagger-for-github@27b130bf0f79a7f6fbbbe0fbca6760dc9bb40a77 # v8.4.1
+        uses: ./.github/actions/setup-dagger
         with:
           version: ${{ env.DAGGER_VERSION }}
       - name: duvet report
@@ -224,7 +226,7 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - name: install dagger
-        uses: dagger/dagger-for-github@27b130bf0f79a7f6fbbbe0fbca6760dc9bb40a77 # v8.4.1
+        uses: ./.github/actions/setup-dagger
         with:
           version: ${{ env.DAGGER_VERSION }}
       - name: publish

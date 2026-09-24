@@ -1,0 +1,45 @@
+name: setup dagger
+description: >-
+  Installs the Dagger CLI and pulls its engine image, retrying the pull, so
+  that a registry hiccup on the runner does not fail the job (#125). The CLI
+  starts the engine from the image in the runner's Docker when it is there,
+  and pulls it only when it is not.
+inputs:
+  version:
+    description: the Dagger version, without the leading v
+    required: true
+  call:
+    description: a function of the module to call once the engine is up; none if empty
+    required: false
+    default: ""
+runs:
+  using: composite
+  steps:
+    # Installs the CLI only.
+    - uses: dagger/dagger-for-github@27b130bf0f79a7f6fbbbe0fbca6760dc9bb40a77 # v8.4.1
+      with:
+        version: ${{ inputs.version }}
+    - name: pull the dagger engine
+      shell: bash
+      env:
+        IMAGE: registry.dagger.io/engine:v${{ inputs.version }}
+      run: |
+        for attempt in 1 2 3 4 5; do
+          if docker pull --quiet "$IMAGE"; then
+            exit 0
+          fi
+          echo "::warning::pulling $IMAGE failed (attempt $attempt of 5)"
+          sleep $((attempt * 15))
+        done
+        echo "::error::could not pull $IMAGE"
+        exit 1
+    - name: dagger call
+      if: inputs.call != ''
+      shell: bash
+      env:
+        CALL: ${{ inputs.call }}
+      # CALL is a fixed string from the workflow, never a PR's content; it is
+      # split into words as the action's own `call` input is.
+      run: |
+        # shellcheck disable=SC2086
+        dagger --progress=plain call $CALL
