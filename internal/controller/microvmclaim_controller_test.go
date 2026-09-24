@@ -21,10 +21,12 @@ import (
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -33,6 +35,7 @@ import (
 	"github.com/phoban01/battery-operator/internal/battery"
 	"github.com/phoban01/battery-operator/internal/clock"
 	"github.com/phoban01/battery-operator/internal/controller/claim"
+	"github.com/phoban01/battery-operator/internal/execagent"
 )
 
 // The claim these tests reconcile, and the Lease battery gives it.
@@ -54,17 +57,20 @@ func testClaim() *batteryv1alpha1.MicroVMClaim {
 	}
 }
 
-// newClaimFakeClient is a fake client holding cl, with the status
-// subresource.
-func newClaimFakeClient(t *testing.T, cl *batteryv1alpha1.MicroVMClaim) (*runtime.Scheme, client.Client) {
+// newClaimFakeClient is a fake client holding cl and objs, with the
+// client-go types and the MicroVMClaim status subresource.
+func newClaimFakeClient(t *testing.T, cl *batteryv1alpha1.MicroVMClaim, objs ...client.Object) (*runtime.Scheme, client.Client) {
 	t.Helper()
 	s := runtime.NewScheme()
+	if err := clientgoscheme.AddToScheme(s); err != nil {
+		t.Fatal(err)
+	}
 	if err := batteryv1alpha1.AddToScheme(s); err != nil {
 		t.Fatal(err)
 	}
 	c := fake.NewClientBuilder().
 		WithScheme(s).
-		WithObjects(cl).
+		WithObjects(append([]client.Object{cl}, objs...)...).
 		WithStatusSubresource(&batteryv1alpha1.MicroVMClaim{}).
 		Build()
 	return s, c
@@ -91,11 +97,15 @@ func (s *claimVMStub) ClaimVM(context.Context, battery.PoolRef) (*battery.Claim,
 // through a claim's binding, one reconcile at a time, as the watch on the
 // claim would: the finalizer is written first, an exhausted Pool leaves
 // the claim Pending with a retry, and the claim binds once battery has a
-// MicroVM. It checks the wiring; each step's behaviour is tested in
+// MicroVM, taking the Exec Agent's address from its Node on the reconcile
+// after that. It checks the wiring; each step's behaviour is tested in
 // package claim.
 func TestMicroVMClaimReconcilerBindsAfterTheFinalizer(t *testing.T) {
 	ctx := context.Background()
-	s, c := newClaimFakeClient(t, testClaim())
+	s, c := newClaimFakeClient(t, testClaim(), &corev1.Node{ObjectMeta: metav1.ObjectMeta{
+		Name:        "node-a",
+		Annotations: map[string]string{execagent.AnnotationAddress: "10.0.0.7:7443"},
+	}})
 	b := &claimVMStub{answers: []error{battery.ErrExhausted, nil}}
 	r := &MicroVMClaimReconciler{
 		Client:    c,
@@ -146,9 +156,16 @@ func TestMicroVMClaimReconcilerBindsAfterTheFinalizer(t *testing.T) {
 		t.Errorf("Synced is not true after battery answered: %+v", got.Status.Conditions)
 	}
 
-	// Later: a Bound claim is not claimed again.
+	// Later: a Bound claim is not claimed again, and takes its Exec
+	// Agent's address from the Node.
 	if _, err := r.Reconcile(ctx, req); err != nil {
 		t.Fatal(err)
+	}
+	if err := c.Get(ctx, key, got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Status.Host == nil || got.Status.Host.AgentAddress != "10.0.0.7:7443" {
+		t.Errorf("host = %+v, want the Node's agent address 10.0.0.7:7443", got.Status.Host)
 	}
 	if b.calls != 2 {
 		t.Errorf("ClaimVM calls = %d, want 2", b.calls)

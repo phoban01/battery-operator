@@ -19,10 +19,14 @@ package controller
 import (
 	"context"
 	"errors"
+	"fmt"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	batteryv1alpha1 "github.com/phoban01/battery-operator/api/v1alpha1"
@@ -55,6 +59,7 @@ type MicroVMClaimReconciler struct {
 // +kubebuilder:rbac:groups=battery.liquidmetal-x.dev,resources=microvmclaims,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=battery.liquidmetal-x.dev,resources=microvmclaims/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=battery.liquidmetal-x.dev,resources=microvmclaims/finalizers,verbs=update
+// +kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch
 
 // Reconcile runs the claim's subreconcilers and writes what they changed.
 func (r *MicroVMClaimReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -96,6 +101,7 @@ func (r *MicroVMClaimReconciler) chain() claimscope.Chain {
 			claim.Release{Backoff: backoff},
 			claim.EnsureFinalizer{},
 			claim.Bind{},
+			claim.AgentAddress{},
 			claim.Pending{Backoff: backoff},
 		},
 		Finally: []claimscope.Subreconciler{
@@ -105,9 +111,19 @@ func (r *MicroVMClaimReconciler) chain() claimscope.Chain {
 }
 
 // SetupWithManager sets up the controller with the Manager.
+// Besides its claims, it watches Nodes: a change to the Exec Agent's
+// address in a Node's report reconciles every claim bound on that Node
+// (claim.AgentAddress).
 func (r *MicroVMClaimReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	if err := mgr.GetFieldIndexer().IndexField(context.Background(),
+		&batteryv1alpha1.MicroVMClaim{}, claim.NodeNameField, claim.NodeName); err != nil {
+		return fmt.Errorf("indexing MicroVMClaims by node name: %w", err)
+	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&batteryv1alpha1.MicroVMClaim{}).
+		Watches(&corev1.Node{},
+			handler.EnqueueRequestsFromMapFunc(claim.ClaimsOnNode(mgr.GetClient())),
+			builder.WithPredicates(claim.AgentAddressChanged())).
 		Named("microvmclaim").
 		Complete(r)
 }

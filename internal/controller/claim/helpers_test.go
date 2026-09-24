@@ -25,6 +25,7 @@ import (
 	"github.com/go-logr/logr/testr"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -86,11 +87,15 @@ func aClaim(finalizers ...string) *batteryv1alpha1.MicroVMClaim {
 	}
 }
 
-// newFakeClient is controller-runtime's fake client holding objs, with the
-// MicroVMClaim status subresource.
+// newFakeClient is controller-runtime's fake client holding objs, with
+// the client-go types, the MicroVMClaim status subresource and the index of
+// claims by node name.
 func newFakeClient(t *testing.T, objs ...client.Object) client.WithWatch {
 	t.Helper()
 	scheme := runtime.NewScheme()
+	if err := clientgoscheme.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
 	if err := batteryv1alpha1.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
 	}
@@ -98,6 +103,7 @@ func newFakeClient(t *testing.T, objs ...client.Object) client.WithWatch {
 		WithScheme(scheme).
 		WithObjects(objs...).
 		WithStatusSubresource(&batteryv1alpha1.MicroVMClaim{}).
+		WithIndex(&batteryv1alpha1.MicroVMClaim{}, NodeNameField, NodeName).
 		Build()
 }
 

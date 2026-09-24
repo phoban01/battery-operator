@@ -25,12 +25,16 @@ limitations under the License.
 // finalizer once the Lease is gone, and stops the chain (CL-020, CL-021,
 // CL-022).
 //
-// Binding is three steps, in this order:
+// Binding is four steps, in this order:
 //
 //   - EnsureFinalizer puts the release finalizer on the claim, and stops
 //     the chain until that is written (CL-001).
 //   - Bind calls battery's ClaimVM for a claim that has no Lease, and
 //     records a successful answer in the status (CL-002).
+//   - AgentAddress copies the Exec Agent's address from the Node report of
+//     a Bound claim's Host, or says there is none (CL-005, CL-006). The
+//     controller watches Nodes, so a change to the report reaches the
+//     claims bound on the Host (ClaimsOnNode).
 //   - Pending records why a claim could not be bound, and asks for a retry
 //     with backoff (CL-003, CL-004, CL-007).
 //
