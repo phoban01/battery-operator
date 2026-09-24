@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -118,6 +119,9 @@ func TestMicroVMClaimReconcilerBindsAfterTheFinalizer(t *testing.T) {
 	}
 	if got.Status.Phase != batteryv1alpha1.MicroVMClaimBound || got.Status.LeaseID != "lease-1" {
 		t.Fatalf("status = %+v, want Bound on lease-1", got.Status)
+	}
+	if !meta.IsStatusConditionTrue(got.Status.Conditions, batteryv1alpha1.ConditionSynced) {
+		t.Errorf("Synced is not true after battery answered: %+v", got.Status.Conditions)
 	}
 
 	// Later: a Bound claim is not claimed again.

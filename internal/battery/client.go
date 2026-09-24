@@ -73,7 +73,7 @@ func Dial(cfg Config) (*Connection, error) {
 			},
 			MinConnectTimeout: max(cfg.ReconnectMax, minConnectTimeout),
 		}),
-		grpc.WithChainUnaryInterceptor(deadlineInterceptor(cfg.CallTimeout)),
+		grpc.WithChainUnaryInterceptor(deadlineInterceptor(cfg.CallTimeout, cfg.ClaimTimeout)),
 	}
 
 	conn, err := grpc.NewClient(cfg.Address, opts...)
@@ -88,14 +88,23 @@ func Dial(cfg Config) (*Connection, error) {
 	}, nil
 }
 
-// deadlineInterceptor bounds every unary call with d. A caller that set an
-// earlier deadline keeps it, because context.WithTimeout never extends one.
-func deadlineInterceptor(d time.Duration) grpc.UnaryClientInterceptor {
+// deadlineInterceptor bounds ClaimVM with claim and every other unary call
+// with call. A caller that set an earlier deadline keeps it, because
+// context.WithTimeout never extends one.
+func deadlineInterceptor(call, claim time.Duration) grpc.UnaryClientInterceptor {
 	return func(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn,
 		invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
 		//= docs/requirements/06-deployment.md#battery-connection
 		//# The Operator SHALL call battery over gRPC on the loopback
 		//# address of DP-001, with a deadline on every unary call.
+		d := call
+
+		//= docs/requirements/06-deployment.md#battery-connection
+		//# The Operator SHALL give `ClaimVM` a deadline of its own,
+		//# configurable apart from the deadline of the other unary calls of DP-010.
+		if method == poolmgrv1.Lease_ClaimVM_FullMethodName {
+			d = claim
+		}
 		ctx, cancel := context.WithTimeout(ctx, d)
 		defer cancel()
 		return invoker(ctx, method, req, reply, cc, opts...)

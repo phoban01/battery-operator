@@ -59,7 +59,7 @@ func TestBindWritesTheLease(t *testing.T) {
 		t.Error("the chain went on after Bind")
 		return claimscope.Result{}, nil
 	})
-	if err := claimscope.Run(ctx, s, Bind{}, after); err != nil {
+	if err := (claimscope.Chain{Steps: []claimscope.Subreconciler{Bind{}, after}}).Run(ctx, s); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if !s.Result.Stop {
@@ -173,11 +173,11 @@ func TestBindWaitsForTheFinalizerToBeWritten(t *testing.T) {
 	}
 }
 
-// TestBindLeavesPendingFailuresToPending: an exhausted or unknown Pool is
-// recorded in the scope and the chain goes on; the status is Pending's to
-// write.
+// TestBindLeavesPendingFailuresToPending: an exhausted or unknown Pool, or
+// a ClaimVM that fails in transit, is recorded in the scope and the chain
+// goes on; the status is Pending's to write.
 func TestBindLeavesPendingFailuresToPending(t *testing.T) {
-	for _, want := range []error{battery.ErrExhausted, battery.ErrNotFound} {
+	for _, want := range []error{battery.ErrExhausted, battery.ErrNotFound, battery.ErrUnavailable, context.DeadlineExceeded} {
 		t.Run(want.Error(), func(t *testing.T) {
 			s, _ := newScope(t, aClaim(batteryv1alpha1.ReleaseFinalizer), answers(nil, fmt.Errorf("ClaimVM: %w", want)))
 
@@ -188,8 +188,8 @@ func TestBindLeavesPendingFailuresToPending(t *testing.T) {
 			if res != (claimscope.Result{}) {
 				t.Errorf("result = %+v, want the chain to continue", res)
 			}
-			if !errors.Is(s.ClaimVMErr, want) {
-				t.Errorf("ClaimVMErr = %v, want %v", s.ClaimVMErr, want)
+			if call := s.BatteryCall; call == nil || call.Method != methodClaimVM || !errors.Is(call.Err, want) {
+				t.Errorf("BatteryCall = %+v, want ClaimVM failing with %v", call, want)
 			}
 			if s.Claim.Status.LeaseID != "" || s.Claim.Status.Phase != "" {
 				t.Errorf("status = %+v, want it untouched", s.Claim.Status)
@@ -198,19 +198,79 @@ func TestBindLeavesPendingFailuresToPending(t *testing.T) {
 	}
 }
 
-// TestBindReturnsOtherFailures: battery being unavailable is an error, so
-// the controller retries with its own backoff, and the status is untouched.
+//= docs/requirements/02-claims.md#failed-calls
+//= type=test
+//# If a call to battery for a claim fails with an error that no
+//# other requirement in this document names, then the Claim Controller SHALL
+//# set the claim's condition `Synced` false with the reason `BatteryError`,
+//# SHALL NOT change the claim's phase because of that failure, and SHALL
+//# retry the call with backoff.
+
+// TestBindReturnsOtherFailures covers CL-041 from Bind's side: an error no
+// requirement names is returned, so the controller retries it with its
+// rate limiter's backoff, and the phase is untouched.
 func TestBindReturnsOtherFailures(t *testing.T) {
-	s, _ := newScope(t, aClaim(batteryv1alpha1.ReleaseFinalizer), answers(nil, battery.ErrUnavailable))
+	cl := aClaim(batteryv1alpha1.ReleaseFinalizer)
+	cl.Status.Phase = batteryv1alpha1.MicroVMClaimPending
+	s, _ := newScope(t, cl, answers(nil, battery.ErrInvalid))
 
 	_, err := Bind{}.Reconcile(context.Background(), s)
-	if !errors.Is(err, battery.ErrUnavailable) {
-		t.Errorf("err = %v, want ErrUnavailable", err)
+	if !errors.Is(err, battery.ErrInvalid) {
+		t.Errorf("err = %v, want ErrInvalid", err)
 	}
-	if s.ClaimVMErr != nil {
-		t.Errorf("ClaimVMErr = %v, want nil", s.ClaimVMErr)
+	if call := s.BatteryCall; call == nil || !errors.Is(call.Err, battery.ErrInvalid) {
+		t.Errorf("BatteryCall = %+v, want ClaimVM failing with ErrInvalid", call)
 	}
-	if s.Claim.Status.Phase != "" {
-		t.Errorf("phase = %q, want it untouched", s.Claim.Status.Phase)
+	if s.Claim.Status.Phase != batteryv1alpha1.MicroVMClaimPending {
+		t.Errorf("phase = %q, want it left Pending", s.Claim.Status.Phase)
+	}
+}
+
+//= docs/requirements/02-claims.md#binding
+//= type=test
+//# The Claim Controller SHALL write to a claim's status only a
+//# lease id that battery returned in its answer to a `ClaimVM` call for that
+//# claim.
+
+// TestBindWritesOnlyTheLeaseItsClaimVMReturned covers CL-008: a ClaimVM
+// whose answer was lost leaves no lease id, and Bind makes no other call to
+// battery to look for the lost Lease (any would panic in the stub); the
+// retry writes the lease id of its own answer.
+func TestBindWritesOnlyTheLeaseItsClaimVMReturned(t *testing.T) {
+	ctx := context.Background()
+	answersInTurn := []error{battery.ErrUnavailable, nil}
+	second := &battery.Claim{LeaseID: "lease-2", VMUID: "vm-2", Host: battery.HostRef{Name: "node-b"}}
+	b := &stubBattery{claimVM: func(battery.PoolRef) (*battery.Claim, error) {
+		err := answersInTurn[0]
+		answersInTurn = answersInTurn[1:]
+		if err != nil {
+			return nil, err
+		}
+		return second, nil
+	}}
+	c := newFakeClient(t, aClaim(batteryv1alpha1.ReleaseFinalizer))
+	key := claimKey
+
+	for range 2 {
+		s := scopeFor(t, c, key, b)
+		if err := pendingChain().Run(ctx, s); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Patch(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if s.Claim.Status.LeaseID != "" && s.Claim.Status.LeaseID != second.LeaseID {
+			t.Fatalf("leaseID = %q, want only lease-2, from ClaimVM's own answer", s.Claim.Status.LeaseID)
+		}
+		if len(b.claimCalls()) == 1 && s.Claim.Status.LeaseID != "" {
+			t.Fatalf("leaseID = %q after a ClaimVM that failed in transit, want none", s.Claim.Status.LeaseID)
+		}
+	}
+	got := &batteryv1alpha1.MicroVMClaim{}
+	if err := c.Get(ctx, key, got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Status.LeaseID != second.LeaseID {
+		t.Errorf("leaseID = %q, want lease-2", got.Status.LeaseID)
 	}
 }

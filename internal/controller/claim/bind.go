@@ -42,11 +42,16 @@ import (
 // finalizer written. A cache that has not yet seen the status of an
 // earlier bind cannot make it claim twice.
 //
-// A ClaimVM that fails because the Pool is exhausted or unknown leaves its
-// error in the scope's ClaimVMErr for Pending, and the chain goes on. Any
-// other failure, such as battery being unavailable, is returned, so the
-// claim is retried with the controller's backoff and its status is left as
-// it was.
+// Bind records the call in the scope's BatteryCall, for Pending and
+// Synced. A ClaimVM that fails because the Pool is exhausted or unknown, or
+// that fails in transit, leaves the claim to Pending, and the chain goes
+// on. Any other failure is returned, so the claim is retried with the
+// controller's backoff and its phase is left as it was.
+//
+// A ClaimVM that fails in transit may have leased a MicroVM whose answer
+// was lost. Bind never looks for that Lease, in battery or anywhere else:
+// it writes only the lease id of the answer it got, and the lost Lease is
+// an orphan like any other.
 type Bind struct{}
 
 var _ claimscope.Subreconciler = Bind{}
@@ -85,11 +90,19 @@ func (Bind) Reconcile(ctx context.Context, s *claimscope.Scope) (claimscope.Resu
 
 	pool := battery.PoolRef{Name: s.Claim.Spec.PoolRef.Name, Namespace: s.Claim.Namespace}
 	claimed, err := s.Battery.ClaimVM(ctx, pool)
+	s.Called(methodClaimVM, err)
 	switch {
-	case errors.Is(err, battery.ErrExhausted), errors.Is(err, battery.ErrNotFound):
-		s.ClaimVMErr = err
+	case errors.Is(err, battery.ErrExhausted), errors.Is(err, battery.ErrNotFound), failedInTransit(err):
 		return claimscope.Result{}, nil
+	//= docs/requirements/02-claims.md#failed-calls
+	//# If a call to battery for a claim fails with an error that no
+	//# other requirement in this document names, then the Claim Controller SHALL
+	//# set the claim's condition `Synced` false with the reason `BatteryError`,
+	//# SHALL NOT change the claim's phase because of that failure, and SHALL
+	//# retry the call with backoff.
 	case err != nil:
+		// The controller's rate limiter retries it with backoff; Synced
+		// records the failure.
 		return claimscope.Result{}, fmt.Errorf("claiming a MicroVM from Pool %s: %w", pool, err)
 	}
 
@@ -99,11 +112,17 @@ func (Bind) Reconcile(ctx context.Context, s *claimscope.Scope) (claimscope.Resu
 	// failed status write orphans that Lease, and the next reconcile
 	// claims a second MicroVM. The window is kept as short as it can be:
 	// Bind stops the chain, so the status is the next thing written and
-	// no other call to battery comes first. The status patch carries no
+	// no other call to battery comes first; the Synced step that runs
+	// after the chain only reads the scope. The status patch carries no
 	// optimistic lock, so no conflict can lose it. An orphaned Lease is
 	// bounded: nothing renews it, so battery expires it after the Pool's
 	// heartbeat_expiry_threshold and deletes its MicroVM. Only a
 	// client-chosen lease id upstream would close the window.
+
+	//= docs/requirements/02-claims.md#binding
+	//# The Claim Controller SHALL write to a claim's status only a
+	//# lease id that battery returned in its answer to a `ClaimVM` call for that
+	//# claim.
 
 	//= docs/requirements/02-claims.md#binding
 	//# When battery's `ClaimVM` succeeds for a claim, the Claim

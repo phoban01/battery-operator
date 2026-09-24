@@ -33,10 +33,13 @@ import (
 
 var testBackoff = Backoff{Min: time.Second, Max: 8 * time.Second}
 
-// pendingChain is binding without the finalizer step: the claims in these
-// tests already carry it.
-func pendingChain() []claimscope.Subreconciler {
-	return []claimscope.Subreconciler{Bind{}, Pending{Backoff: testBackoff}}
+// pendingChain is binding without the finalizer step, which the claims in
+// these tests do not need: they already carry the finalizer.
+func pendingChain() claimscope.Chain {
+	return claimscope.Chain{
+		Steps:   []claimscope.Subreconciler{Bind{}, Pending{Backoff: testBackoff}},
+		Finally: []claimscope.Subreconciler{Synced{}},
+	}
 }
 
 // reconcileAt runs the chain on a fresh scope for the claim in c at time
@@ -44,10 +47,10 @@ func pendingChain() []claimscope.Subreconciler {
 func reconcileAt(t *testing.T, c client.Client, b battery.Client, now time.Time) (claimscope.Result, *batteryv1alpha1.MicroVMClaim) {
 	t.Helper()
 	ctx := context.Background()
-	key := client.ObjectKey{Namespace: "ci", Name: "runner-1"}
+	key := claimKey
 	s := scopeFor(t, c, key, b)
 	s.Clock = clock.NewFake(now)
-	if err := claimscope.Run(ctx, s, pendingChain()...); err != nil {
+	if err := pendingChain().Run(ctx, s); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if err := s.Patch(ctx); err != nil {
@@ -162,5 +165,38 @@ func TestPendingIgnoresASuccessfulOrAbsentClaimVM(t *testing.T) {
 	}
 	if res != (claimscope.Result{}) || s.Claim.Status.Phase != "" {
 		t.Errorf("result = %+v, status = %+v, want neither changed", res, s.Claim.Status)
+	}
+}
+
+//= docs/requirements/02-claims.md#binding
+//= type=test
+//# If battery's `ClaimVM` for a claim fails in transit, then the
+//# Claim Controller SHALL keep the claim in the phase `Pending` with the
+//# condition `Bound` false and the reason `BatteryUnavailable`, and SHALL
+//# retry `ClaimVM` with backoff.
+
+// TestPendingWhenClaimVMFailsInTransitBacksOff covers CL-007: a ClaimVM
+// that battery did not answer, whether the connection was down or the
+// deadline passed, leaves the claim Pending with BatteryUnavailable, and
+// ClaimVM is retried with backoff until battery answers.
+func TestPendingWhenClaimVMFailsInTransitBacksOff(t *testing.T) {
+	c := newFakeClient(t, aClaim(batteryv1alpha1.ReleaseFinalizer))
+
+	res, got := reconcileAt(t, c, answers(nil, battery.ErrUnavailable), start)
+	assertPending(t, got, batteryv1alpha1.ReasonBatteryUnavailable)
+	if res.RequeueAfter != time.Second {
+		t.Errorf("RequeueAfter = %v, want 1s", res.RequeueAfter)
+	}
+
+	res, got = reconcileAt(t, c, answers(nil, context.DeadlineExceeded), start.Add(2*time.Second))
+	assertPending(t, got, batteryv1alpha1.ReasonBatteryUnavailable)
+	if res.RequeueAfter != 2*time.Second {
+		t.Errorf("RequeueAfter = %v, want 2s", res.RequeueAfter)
+	}
+
+	b := answers(leased, nil)
+	_, got = reconcileAt(t, c, b, start.Add(4*time.Second))
+	if got.Status.Phase != batteryv1alpha1.MicroVMClaimBound || len(b.claimCalls()) != 1 {
+		t.Errorf("phase = %q after %d ClaimVM calls, want Bound after one retry", got.Status.Phase, len(b.claimCalls()))
 	}
 }

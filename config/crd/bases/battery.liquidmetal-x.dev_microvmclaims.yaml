@@ -111,7 +111,7 @@ spec:
                 format: date-time
                 type: string
               conditions:
-                description: conditions hold the claim's Bound condition.
+                description: conditions hold the claim's Bound and Synced conditions.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.

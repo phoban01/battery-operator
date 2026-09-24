@@ -42,7 +42,7 @@ func TestEnsureFinalizerAddsItAndStops(t *testing.T) {
 	b := answers(nil, nil)
 	s, c := newScope(t, aClaim(), b)
 
-	if err := claimscope.Run(ctx, s, EnsureFinalizer{}, Bind{}); err != nil {
+	if err := (claimscope.Chain{Steps: []claimscope.Subreconciler{EnsureFinalizer{}, Bind{}}}).Run(ctx, s); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if !s.Result.Stop {

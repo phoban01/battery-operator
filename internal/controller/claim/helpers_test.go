@@ -67,12 +67,15 @@ func answers(c *battery.Claim, err error) *stubBattery {
 	return &stubBattery{claimVM: func(battery.PoolRef) (*battery.Claim, error) { return c, err }}
 }
 
+// claimKey is aClaim's key.
+var claimKey = client.ObjectKey{Namespace: "ci", Name: "runner-1"}
+
 // aClaim is the claim "runner-1" in "ci" on the Pool "small".
 func aClaim(finalizers ...string) *batteryv1alpha1.MicroVMClaim {
 	return &batteryv1alpha1.MicroVMClaim{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:       "runner-1",
-			Namespace:  "ci",
+			Name:       claimKey.Name,
+			Namespace:  claimKey.Namespace,
 			Generation: 1,
 			Finalizers: finalizers,
 		},

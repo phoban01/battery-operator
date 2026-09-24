@@ -72,7 +72,7 @@ func (r *MicroVMClaimReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		s.Clock = clock.Real{}
 	}
 
-	err := claimscope.Run(ctx, s, r.chain()...)
+	err := r.chain().Run(ctx, s)
 	// The patch runs even when the chain failed, so that what the chain
 	// did before the failure is not lost.
 	if perr := s.Patch(ctx); perr != nil {
@@ -85,15 +85,20 @@ func (r *MicroVMClaimReconciler) Reconcile(ctx context.Context, req ctrl.Request
 }
 
 // chain is the Claim Controller's subreconcilers, in the order they run.
-func (r *MicroVMClaimReconciler) chain() []claimscope.Subreconciler {
+func (r *MicroVMClaimReconciler) chain() claimscope.Chain {
 	backoff := r.Backoff
 	if backoff == (claim.Backoff{}) {
 		backoff = claim.DefaultBackoff
 	}
-	return []claimscope.Subreconciler{
-		claim.EnsureFinalizer{},
-		claim.Bind{},
-		claim.Pending{Backoff: backoff},
+	return claimscope.Chain{
+		Steps: []claimscope.Subreconciler{
+			claim.EnsureFinalizer{},
+			claim.Bind{},
+			claim.Pending{Backoff: backoff},
+		},
+		Finally: []claimscope.Subreconciler{
+			claim.Synced{},
+		},
 	}
 }
 

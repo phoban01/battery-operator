@@ -41,38 +41,61 @@ func TestRunFoldsResultsAndStops(t *testing.T) {
 		ran = true
 		return Result{}, nil
 	})
+	finallyRan := false
+	finally := Func(func(context.Context, *Scope) (Result, error) {
+		finallyRan = true
+		return Result{Stop: true, RequeueAfter: time.Minute}, nil
+	})
 	s := New(&batteryv1alpha1.MicroVMClaim{})
-	err := Run(context.Background(), s,
-		result(Result{RequeueAfter: 5 * time.Second}, nil),
-		result(Result{RequeueAfter: 2 * time.Second}, nil),
-		result(Result{}, nil),
-		result(Result{Stop: true, RequeueAfter: 3 * time.Second}, nil),
-		never,
-	)
+	err := Chain{
+		Steps: []Subreconciler{
+			result(Result{RequeueAfter: 5 * time.Second}, nil),
+			result(Result{RequeueAfter: 2 * time.Second}, nil),
+			result(Result{}, nil),
+			result(Result{Stop: true, RequeueAfter: 3 * time.Second}, nil),
+			never,
+		},
+		Finally: []Subreconciler{finally},
+	}.Run(context.Background(), s)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if ran {
-		t.Error("a subreconciler ran after the chain stopped")
+		t.Error("a step ran after the chain stopped")
+	}
+	if !finallyRan {
+		t.Error("the Finally subreconciler did not run after the chain stopped")
 	}
 	if want := (Result{Stop: true, RequeueAfter: 2 * time.Second}); s.Result != want {
 		t.Errorf("Result = %+v, want %+v", s.Result, want)
 	}
 }
 
-func TestRunStopsOnError(t *testing.T) {
-	boom := errors.New("boom")
+func TestRunStopsOnErrorAndStillRunsFinally(t *testing.T) {
+	boom, bang := errors.New("boom"), errors.New("bang")
 	ran := false
 	never := Func(func(context.Context, *Scope) (Result, error) {
 		ran = true
 		return Result{}, nil
 	})
+	finallyRuns := 0
+	finally := Func(func(context.Context, *Scope) (Result, error) {
+		finallyRuns++
+		return Result{}, bang
+	})
 	s := New(&batteryv1alpha1.MicroVMClaim{})
-	if err := Run(context.Background(), s, result(Result{}, boom), never); !errors.Is(err, boom) {
-		t.Errorf("err = %v, want boom", err)
+	err := Chain{
+		Steps:   []Subreconciler{result(Result{}, boom), never},
+		Finally: []Subreconciler{finally, finally},
+	}.Run(context.Background(), s)
+	if !errors.Is(err, boom) || !errors.Is(err, bang) {
+		t.Errorf("err = %v, want boom and bang", err)
 	}
 	if ran {
-		t.Error("a subreconciler ran after one failed")
+		t.Error("a step ran after one failed")
+	}
+	if finallyRuns != 2 {
+		t.Errorf("Finally subreconcilers ran %d times, want each of the 2 to run", finallyRuns)
 	}
 }
 

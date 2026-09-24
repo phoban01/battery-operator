@@ -22,12 +22,13 @@ limitations under the License.
 // chain that #58 brings. They have the same shape, specialised to
 // MicroVMClaim, so that moving the Claim Controller onto the shared types
 // changes no logic: Scope becomes Scope[*MicroVMClaim] plus the claim's own
-// fields (ClaimVMErr), and Subreconciler, Func, Result and Run keep their
+// field (BatteryCall), and Subreconciler, Func, Result and Chain keep their
 // meaning.
 package claimscope
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -62,10 +63,22 @@ type Scope struct {
 	// Result is the chain's result so far.
 	Result Result
 
-	// ClaimVMErr is how battery's ClaimVM failed in this reconcile, for a
-	// failure that leaves the claim Pending (ErrExhausted, ErrNotFound).
-	// It is nil when ClaimVM was not called or succeeded.
-	ClaimVMErr error
+	// BatteryCall is the last call to battery the chain made for the claim
+	// in this reconcile, or nil if it made none.
+	BatteryCall *BatteryCall
+}
+
+// BatteryCall is a call to battery and how it ended.
+type BatteryCall struct {
+	// Method is the Client method, such as "ClaimVM".
+	Method string
+	// Err is the call's error, nil when it succeeded.
+	Err error
+}
+
+// Called records a call to battery in the scope.
+func (s *Scope) Called(method string, err error) {
+	s.BatteryCall = &BatteryCall{Method: method, Err: err}
 }
 
 // New builds a scope for claim, keeping a copy of it as fetched.
@@ -75,8 +88,8 @@ func New(claim *batteryv1alpha1.MicroVMClaim) *Scope {
 
 // Result is what a subreconciler asks of the chain.
 type Result struct {
-	// Stop ends the chain after this subreconciler. The scope is still
-	// patched.
+	// Stop ends the chain's Steps after this subreconciler. Its Finally
+	// subreconcilers still run, and the scope is still patched.
 	Stop bool
 	// RequeueAfter, when positive, asks for another reconcile after this
 	// long.
@@ -106,20 +119,41 @@ type Func func(ctx context.Context, s *Scope) (Result, error)
 // Reconcile implements Subreconciler.
 func (f Func) Reconcile(ctx context.Context, s *Scope) (Result, error) { return f(ctx, s) }
 
-// Run runs the chain in order, folding each result into s.Result, until
-// one stops it or fails.
-func Run(ctx context.Context, s *Scope, chain ...Subreconciler) error {
-	for _, sub := range chain {
+// Chain is a controller's subreconcilers.
+type Chain struct {
+	// Steps run in order until one stops the chain or fails.
+	Steps []Subreconciler
+	// Finally run after Steps however they ended, and all of them run:
+	// they report on what the Steps did, such as a condition that
+	// summarises it.
+	Finally []Subreconciler
+}
+
+// Run runs the chain on s, folding each result into s.Result, and returns
+// the errors of the step that failed and of any Finally subreconciler.
+func (c Chain) Run(ctx context.Context, s *Scope) error {
+	var errs []error
+	for _, sub := range c.Steps {
 		res, err := sub.Reconcile(ctx, s)
 		s.Result = s.Result.merge(res)
 		if err != nil {
-			return err
+			errs = append(errs, err)
+			break
 		}
 		if res.Stop {
-			return nil
+			break
 		}
 	}
-	return nil
+	for _, sub := range c.Finally {
+		res, err := sub.Reconcile(ctx, s)
+		// A Finally subreconciler cannot stop what has already run.
+		res.Stop = false
+		s.Result = s.Result.merge(res)
+		if err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // Patch writes what the chain changed: the claim's metadata, then its

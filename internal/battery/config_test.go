@@ -18,19 +18,63 @@ package battery
 
 import (
 	"context"
+	"flag"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	poolmgrv1 "github.com/liquidmetal-dev/battery/api/proto/poolmgr/v1alpha1"
 	"google.golang.org/grpc"
 
 	"github.com/phoban01/battery-operator/internal/fakeflintlock"
 )
 
+//= docs/requirements/06-deployment.md#battery-connection
+//= type=test
+//# The Operator SHALL give `ClaimVM` a deadline of its own,
+//# configurable apart from the deadline of the other unary calls of DP-010.
+
+// TestDeadlineInterceptorGivesClaimVMItsOwnDeadline covers DP-013.
+func TestDeadlineInterceptorGivesClaimVMItsOwnDeadline(t *testing.T) {
+	interceptor := deadlineInterceptor(time.Second, time.Hour)
+	var got time.Time
+	invoker := func(ctx context.Context, _ string, _, _ any, _ *grpc.ClientConn, _ ...grpc.CallOption) error {
+		got, _ = ctx.Deadline()
+		return nil
+	}
+
+	for method, want := range map[string]time.Duration{
+		poolmgrv1.Lease_ClaimVM_FullMethodName:   time.Hour,
+		poolmgrv1.Lease_Heartbeat_FullMethodName: time.Second,
+		poolmgrv1.Lease_ReleaseVM_FullMethodName: time.Second,
+	} {
+		before := time.Now()
+		if err := interceptor(context.Background(), method, nil, nil, nil, invoker); err != nil {
+			t.Fatal(err)
+		}
+		if got.Before(before.Add(want)) || got.After(time.Now().Add(want)) {
+			t.Errorf("%s got deadline %v, want %v from now", method, got.Sub(before), want)
+		}
+	}
+
+	fs := flag.NewFlagSet("test", flag.ContinueOnError)
+	var cfg Config
+	cfg.BindFlags(fs)
+	if err := fs.Parse([]string{"--battery-call-timeout=3s", "--battery-claim-timeout=5m"}); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.CallTimeout != 3*time.Second || cfg.ClaimTimeout != 5*time.Minute {
+		t.Errorf("flags gave CallTimeout %v and ClaimTimeout %v, want 3s and 5m", cfg.CallTimeout, cfg.ClaimTimeout)
+	}
+	if d := (Config{}).withDefaults().ClaimTimeout; d != DefaultClaimTimeout {
+		t.Errorf("default ClaimTimeout = %v, want %v", d, DefaultClaimTimeout)
+	}
+}
+
 func TestDeadlineInterceptorKeepsAnEarlierDeadline(t *testing.T) {
-	interceptor := deadlineInterceptor(time.Hour)
+	interceptor := deadlineInterceptor(time.Hour, time.Hour)
 	var got time.Time
 	invoker := func(ctx context.Context, _ string, _, _ any, _ *grpc.ClientConn, _ ...grpc.CallOption) error {
 		got, _ = ctx.Deadline()

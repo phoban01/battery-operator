@@ -27,5 +27,8 @@ limitations under the License.
 //   - Bind calls battery's ClaimVM for a claim that has no Lease, and
 //     records a successful answer in the status (CL-002).
 //   - Pending records why a claim could not be bound, and asks for a retry
-//     with backoff (CL-003, CL-004).
+//     with backoff (CL-003, CL-004, CL-007).
+//
+// After them, however they ended, Synced sets the Synced condition from
+// the last call to battery (CL-040, CL-041, CL-042).
 package claim

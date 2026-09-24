@@ -53,8 +53,8 @@ func (b Backoff) after(pending time.Duration) time.Duration {
 }
 
 // Pending records why battery's ClaimVM could not bind a claim, from the
-// scope's ClaimVMErr: the claim stays Pending, its Bound condition is false
-// with the reason, and the chain asks for a retry after Backoff.
+// scope's BatteryCall: the claim stays Pending, its Bound condition is
+// false with the reason, and the chain asks for a retry after Backoff.
 type Pending struct {
 	Backoff Backoff
 }
@@ -63,27 +63,41 @@ var _ claimscope.Subreconciler = Pending{}
 
 // Reconcile implements claimscope.Subreconciler.
 func (p Pending) Reconcile(_ context.Context, s *claimscope.Scope) (claimscope.Result, error) {
+	call := s.BatteryCall
+	if call == nil || call.Method != methodClaimVM || call.Err == nil {
+		return claimscope.Result{}, nil
+	}
 	pool := s.Claim.Spec.PoolRef.Name
 	var reason, message string
-	switch {
+	switch err := call.Err; {
 	//= docs/requirements/02-claims.md#binding
 	//# If battery's `ClaimVM` fails because the Pool has no warm
 	//# MicroVM, then the Claim Controller SHALL keep the claim in the phase
 	//# `Pending` with the condition `Bound` false and the reason `PoolExhausted`,
 	//# and SHALL retry with backoff.
-	case errors.Is(s.ClaimVMErr, battery.ErrExhausted):
+	case errors.Is(err, battery.ErrExhausted):
 		reason = batteryv1alpha1.ReasonPoolExhausted
 		message = fmt.Sprintf("Pool %s has no available MicroVM", pool)
 	//= docs/requirements/02-claims.md#binding
 	//# If the claim's Pool does not exist, then the Claim Controller
 	//# SHALL keep the claim in the phase `Pending` with the condition `Bound`
 	//# false and the reason `PoolNotFound`, and SHALL retry with backoff.
-	case errors.Is(s.ClaimVMErr, battery.ErrNotFound):
+	case errors.Is(err, battery.ErrNotFound):
 		// battery is the authority over Pools (ADR 0001): a Pool
 		// resource that battery does not know yet cannot be claimed from
 		// either.
 		reason = batteryv1alpha1.ReasonPoolNotFound
 		message = fmt.Sprintf("battery has no Pool %s", pool)
+	//= docs/requirements/02-claims.md#binding
+	//# If battery's `ClaimVM` for a claim fails in transit, then the
+	//# Claim Controller SHALL keep the claim in the phase `Pending` with the
+	//# condition `Bound` false and the reason `BatteryUnavailable`, and SHALL
+	//# retry `ClaimVM` with backoff.
+	case failedInTransit(err):
+		// battery may have leased a MicroVM whose answer was lost; that
+		// Lease is an orphan, and the retry claims another (CL-008).
+		reason = batteryv1alpha1.ReasonBatteryUnavailable
+		message = fmt.Sprintf("ClaimVM on Pool %s got no answer from battery", pool)
 	default:
 		return claimscope.Result{}, nil
 	}
