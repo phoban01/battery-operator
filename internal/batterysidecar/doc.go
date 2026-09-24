@@ -43,7 +43,10 @@ limitations under the License.
 // SIGTERM by stopping gracefully and exiting, has no reload and does not
 // handle SIGHUP (which, unhandled, kills a Go program without running its
 // deferred cleanup, the SQLite store's Close among them). It does not watch
-// its file either.
+// its file either. It reads its flintlockd client certificate once too,
+// when it starts, and presents that certificate until it exits (BA-061),
+// so a certificate cert-manager has renewed reaches the Hosts only when
+// battery restarts (DP-007).
 //
 // The mechanism chosen is a shared process namespace and SIGTERM: the
 // Operator's pod sets shareProcessNamespace, both containers run as the
@@ -51,12 +54,15 @@ limitations under the License.
 // so the Operator may signal battery without any capability, and the pod's
 // restartPolicy, Always, has the kubelet start battery again with the new
 // file. Restarter.Restart is the single hook: the Inventory Controller
-// writes the ConfigMap and calls it with the content it wrote. Restart
+// writes the ConfigMap and calls it with the content it wrote and the
+// client certificate battery's Secret holds, whether it restarts battery
+// for its Hosts, for a renewed certificate, or both. Restart
 //
-//  1. waits until the Operator's own mount of the ConfigMap holds that
-//     content. The kubelet updates a ConfigMap volume some time after the
-//     object changes, and both containers mount the same volume, so what
-//     the Operator reads is what battery would read;
+//  1. waits until the Operator's own mounts of the ConfigMap and of the
+//     client certificate's Secret hold that content. The kubelet updates a
+//     ConfigMap or Secret volume some time after the object changes, and
+//     both containers mount the same volumes, so what the Operator reads is
+//     what battery would read;
 //  2. finds poolmgrd in the shared /proc and sends it SIGTERM;
 //  3. waits until that process has gone, so that the old battery, still
 //     draining, cannot answer for the new one;

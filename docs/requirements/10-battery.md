@@ -199,16 +199,27 @@ Lease is warned again
 
 - **BA-060** battery SHALL keep its Pools, MicroVMs and Leases across a
   restart, in its database.
+- **BA-061** battery SHALL read the client certificate, key and certificate
+  authority of each Host's TLS configuration only when it starts, and SHALL
+  present that client certificate to the Host until it exits.
 
 | ID | Source at v0.3.3 |
 |----|------------------|
 | BA-060 | [`cmd/poolmgrd/main.go`, L73-L77](https://github.com/liquidmetal-dev/battery/blob/v0.3.3/cmd/poolmgrd/main.go#L73-L77); [`internal/store/sqlite.go`, `Open`, L26-L51](https://github.com/liquidmetal-dev/battery/blob/v0.3.3/internal/store/sqlite.go#L26-L51) |
+| BA-061 | [`cmd/poolmgrd/main.go`, L64 and L84-L87](https://github.com/liquidmetal-dev/battery/blob/v0.3.3/cmd/poolmgrd/main.go#L64-L87); [`internal/flintlockclient/pool.go`, `New`, L44-L82](https://github.com/liquidmetal-dev/battery/blob/v0.3.3/internal/flintlockclient/pool.go#L44-L82), [`dialCredentials`, L149-L175](https://github.com/liquidmetal-dev/battery/blob/v0.3.3/internal/flintlockclient/pool.go#L149-L175) |
 
 Leases are not renewed or expired while battery is stopped; after the
 restart they are swept as BA-022 says. Calls to battery fail while it is
 stopped. The database lasts as long as the file `poolmgrd -db` names, so
 whether Leases survive the Operator's pod being replaced, and not only
 battery's container restarting, is up to the Manifests (06-deployment.md).
+
+`flintlockclient.New` builds each Host's transport credentials once, at
+startup, from a `tls.Config` whose `Certificates` hold the key pair read
+then; nothing reads the files again. poolmgrd handles only SIGINT and
+SIGTERM, both of which stop it, and watches no file, so a renewed
+certificate reaches the Hosts only through a restart (06-deployment.md,
+DP-007). The same holds for the certificate authority in `ca_file`.
 
 ## Where the stand-ins differ {#stand-ins}
 
@@ -218,7 +229,9 @@ in its code as an exception:
 - it sweeps once when it starts (BA-022), which is how a fresh Pool fills,
   and its state does not survive a restart (BA-060);
 - a new `Events` subscriber is replayed only the last events of each Pool
-  (BA-050).
+  (BA-050);
+- it reaches its Hosts over connections the test gives it, and reads no
+  certificate (BA-061).
 
 The claim lifecycle model (`specs/quint/claims.qnt`) is coarser than
 battery in these ways:

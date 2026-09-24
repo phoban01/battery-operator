@@ -215,7 +215,7 @@ func TestBatteryConfigFromConfigMap(t *testing.T) {
 	}
 
 	operatorSA := serviceAccount(operatorNamespace, d.Spec.Template.Spec.ServiceAccountName)
-	for _, verb := range []string{"get", verbUpdate} {
+	for _, verb := range []string{verbGet, verbUpdate} {
 		if !slices.ContainsFunc(grants(t, objs), func(g grant) bool {
 			return g.subject == operatorSA && g.allows(operatorNamespace, "", "configmaps", verb, cm.Name)
 		}) {
@@ -316,6 +316,53 @@ func TestRestartMechanism(t *testing.T) {
 	}
 	if spec.RestartPolicy != "" && spec.RestartPolicy != corev1.RestartPolicyAlways {
 		t.Errorf("the pod's restart policy is %s; the kubelet has to start battery again", spec.RestartPolicy)
+	}
+}
+
+//= docs/requirements/06-deployment.md#battery-sidecar
+//= type=test
+//# When the client certificate in the Secret of DP-005 changes,
+//# the Operator SHALL restart battery through the mechanism of DP-006, and
+//# SHALL signal battery only once the Operator's own mount of that Secret
+//# holds the new certificate.
+
+// TestOperatorWatchesBatteryClientCertificate checks what a restart for a
+// renewed client certificate needs of the Manifests: the Operator watches
+// the Secret cert-manager issues battery's certificate into, the one its
+// --battery-client-secret names, and may read no other Secret by that
+// grant; and its container mounts the volume battery reads the
+// certificate from, at the path its --battery-client-cert-file names.
+func TestOperatorWatchesBatteryClientCertificate(t *testing.T) {
+	t.Parallel()
+	objs := build(t, "config/default")
+	d, manager, bat := operator(t, objs)
+	clientSecret := one[certificate](t, objs, "Certificate", "battery-operator-battery-flintlockd-client").Spec.SecretName
+
+	if name, _ := flag(manager.Args, "battery-client-secret"); name != clientSecret || name != batterysidecar.DefaultClientSecret {
+		t.Errorf("the Operator watches Secret %q; cert-manager issues battery's certificate into %s; the default is %s",
+			name, clientSecret, batterysidecar.DefaultClientSecret)
+	}
+	file, _ := flag(manager.Args, "battery-client-cert-file")
+	if file != batterysidecar.ClientCertFile {
+		t.Errorf("the Operator reads battery's certificate at %q, want %s", file, batterysidecar.ClientCertFile)
+	}
+	if mountAt(t, manager, path.Dir(file)).Name != mountAt(t, bat, batterysidecar.TLSDir).Name {
+		t.Error("the Operator and battery mount battery's client certificate from different volumes")
+	}
+
+	operatorSA := serviceAccount(operatorNamespace, d.Spec.Template.Spec.ServiceAccountName)
+	gs := grants(t, objs)
+	for _, verb := range []string{verbGet, "list", "watch"} {
+		if !slices.ContainsFunc(gs, func(g grant) bool {
+			return g.subject == operatorSA && g.allows(operatorNamespace, "", "secrets", verb, clientSecret)
+		}) {
+			t.Errorf("the Operator may not %s Secret %s", verb, clientSecret)
+		}
+	}
+	for _, g := range gs {
+		if g.subject == operatorSA && g.allows(operatorNamespace, "", "secrets", verbGet, "another-secret") {
+			t.Errorf("the Operator may read any Secret in its namespace: %+v", g.rule)
+		}
 	}
 }
 

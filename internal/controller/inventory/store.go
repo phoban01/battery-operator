@@ -18,6 +18,8 @@ package inventory
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
@@ -32,6 +34,12 @@ import (
 // failed) is finished on the next reconcile.
 const RestartPendingAnnotation = "battery.liquidmetal-x.dev/restart-pending"
 
+// ClientCertificateAnnotation records on battery's ConfigMap the SHA-256
+// digest, in hex, of the client certificate battery last restarted with,
+// so that the Inventory Controller can tell when cert-manager has renewed
+// it (DP-007).
+const ClientCertificateAnnotation = "battery.liquidmetal-x.dev/client-certificate-sha256"
+
 // Config is battery's configuration as stored.
 type Config struct {
 	// Hosts are the configuration's Hosts, without the placeholder an empty
@@ -42,14 +50,24 @@ type Config struct {
 	// Pending is true when Raw was written and battery may not yet have
 	// restarted with it.
 	Pending bool
+	// ClientCertificate is the Digest of the client certificate battery last
+	// restarted with, "" if none is recorded.
+	ClientCertificate string
+}
+
+// Digest is the SHA-256 digest of a client certificate, in hex: what
+// ClientCertificateAnnotation holds.
+func Digest(cert []byte) string {
+	sum := sha256.Sum256(cert)
+	return hex.EncodeToString(sum[:])
 }
 
 // Store reads and writes battery's configuration.
 type Store interface {
 	// Load reads the configuration.
 	Load(ctx context.Context) (Config, error)
-	// Save writes raw as the configuration, marked pending or not.
-	Save(ctx context.Context, raw []byte, pending bool) error
+	// Save writes c's Raw, Pending and ClientCertificate; Hosts are Raw's.
+	Save(ctx context.Context, c Config) error
 }
 
 // ConfigMapStore keeps battery's configuration in its ConfigMap, under
@@ -84,11 +102,16 @@ func (c ConfigMapStore) Load(ctx context.Context) (Config, error) {
 			hosts[h.Name] = h.Address
 		}
 	}
-	return Config{Hosts: hosts, Raw: raw, Pending: cm.Annotations[RestartPendingAnnotation] == annotationTrue}, nil
+	return Config{
+		Hosts:             hosts,
+		Raw:               raw,
+		Pending:           cm.Annotations[RestartPendingAnnotation] == annotationTrue,
+		ClientCertificate: cm.Annotations[ClientCertificateAnnotation],
+	}, nil
 }
 
 // Save implements Store.
-func (c ConfigMapStore) Save(ctx context.Context, raw []byte, pending bool) error {
+func (c ConfigMapStore) Save(ctx context.Context, config Config) error {
 	cm, err := c.get(ctx)
 	if err != nil {
 		return err
@@ -96,19 +119,25 @@ func (c ConfigMapStore) Save(ctx context.Context, raw []byte, pending bool) erro
 	if cm.Data == nil {
 		cm.Data = map[string]string{}
 	}
-	cm.Data[batterysidecar.ConfigKey] = string(raw)
-	if pending {
-		if cm.Annotations == nil {
-			cm.Annotations = map[string]string{}
-		}
-		cm.Annotations[RestartPendingAnnotation] = annotationTrue
-	} else {
-		delete(cm.Annotations, RestartPendingAnnotation)
-	}
+	cm.Data[batterysidecar.ConfigKey] = string(config.Raw)
+	setAnnotation(cm, RestartPendingAnnotation, config.Pending, annotationTrue)
+	setAnnotation(cm, ClientCertificateAnnotation, config.ClientCertificate != "", config.ClientCertificate)
 	if err := c.Writer.Update(ctx, cm); err != nil {
 		return fmt.Errorf("updating ConfigMap %s: %w", c.Key, err)
 	}
 	return nil
+}
+
+// setAnnotation sets key to value on cm if set, and removes it otherwise.
+func setAnnotation(cm *corev1.ConfigMap, key string, set bool, value string) {
+	if !set {
+		delete(cm.Annotations, key)
+		return
+	}
+	if cm.Annotations == nil {
+		cm.Annotations = map[string]string{}
+	}
+	cm.Annotations[key] = value
 }
 
 func (c ConfigMapStore) get(ctx context.Context) (*corev1.ConfigMap, error) {

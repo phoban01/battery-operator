@@ -47,7 +47,7 @@ type Resume struct{}
 func (Resume) Reconcile(ctx context.Context, s *Scope) (Result, error) {
 	if s.Config.Pending {
 		s.Log.Info("Resumed restart of battery with a configuration written earlier", "hosts", slices.Sorted(maps.Keys(s.Config.Hosts)))
-		if err := restart(ctx, s, s.Config.Raw); err != nil {
+		if err := restart(ctx, s); err != nil {
 			return Result{Stop: true}, err
 		}
 	}
@@ -147,10 +147,46 @@ func (st Settle) Reconcile(_ context.Context, s *Scope) (Result, error) {
 	return res, nil
 }
 
-// Window batches the settled changes into restarts of battery: the first
-// settled change waiting opens a restart window, and the chain goes on to
-// Apply only once the window has closed. A window whose changes all
-// flapped back closes without a restart.
+// Renew notices a renewed client certificate: one its Secret holds that
+// battery has not restarted with. The restart it needs waits for a restart
+// window like a Host change, so that the two go into one restart.
+//
+// Where no certificate is recorded, which is only before the Inventory
+// Controller has restarted battery for the first time, battery read the
+// one its Secret holds when its pod started, and Renew records that one
+// without restarting battery.
+type Renew struct{}
+
+func (Renew) Reconcile(ctx context.Context, s *Scope) (Result, error) {
+	if s.ClientCertificate == nil {
+		// No Secret: battery cannot have started without it, and nothing
+		// has been renewed.
+		return Result{}, nil
+	}
+	digest := Digest(s.ClientCertificate)
+	switch s.Config.ClientCertificate {
+	case digest:
+		return Result{}, nil
+	case "":
+		s.Config.ClientCertificate = digest
+		if err := s.Store.Save(ctx, s.Config); err != nil {
+			return Result{Stop: true}, err
+		}
+		s.Log.Info("Recorded the client certificate battery started with", "sha256", digest)
+		return Result{}, nil
+	}
+
+	//= docs/requirements/06-deployment.md#battery-sidecar
+	//# When the client certificate in the Secret of DP-005 changes,
+	//# the Operator SHALL restart battery through the mechanism of DP-006
+	s.Renewed = true
+	return Result{}, nil
+}
+
+// Window batches the settled changes, and a renewed client certificate,
+// into restarts of battery: the first one waiting opens a restart window,
+// and the chain goes on to Apply only once the window has closed. A window
+// whose changes all flapped back closes without a restart.
 type Window struct {
 	// Length is the restart window.
 	Length time.Duration
@@ -158,7 +194,7 @@ type Window struct {
 
 func (w Window) Reconcile(_ context.Context, s *Scope) (Result, error) {
 	opened, open := s.State.WindowOpened()
-	if s.Desired.Equal(s.Config.Hosts) {
+	if s.Desired.Equal(s.Config.Hosts) && !s.Renewed {
 		if open {
 			s.State.windowOpened = time.Time{}
 			s.Log.Info("Closed restart window without restarting battery")
@@ -175,11 +211,18 @@ func (w Window) Reconcile(_ context.Context, s *Scope) (Result, error) {
 	//# Inventory Controller SHALL open a restart window of the configured
 	//# length, and SHALL apply every change that has settled by the time the
 	//# window closes in a single restart of battery.
+
+	//= docs/requirements/06-deployment.md#battery-sidecar
+	//# The Operator SHALL restart battery for a changed client
+	//# certificate at the close of a restart window of IN-012, in the same
+	//# single restart as every change to battery's Hosts that has settled by
+	//# then.
 	now := s.Clock.Now()
 	if !open {
 		opened = now
 		s.State.windowOpened = now
-		s.Log.Info("Opened restart window", "closesAt", now.Add(w.Length))
+		s.Log.Info("Opened restart window", "closesAt", now.Add(w.Length),
+			"hostsChanged", !s.Desired.Equal(s.Config.Hosts), "clientCertificateRenewed", s.Renewed)
 	}
 	if left := opened.Add(w.Length).Sub(now); left > 0 {
 		return Result{Stop: true, RequeueAfter: left}, nil
@@ -188,7 +231,8 @@ func (w Window) Reconcile(_ context.Context, s *Scope) (Result, error) {
 }
 
 // Apply writes the Hosts battery should have to its configuration and
-// restarts battery with it, once.
+// restarts battery with it, and with the client certificate its Secret
+// holds, once.
 type Apply struct{}
 
 func (Apply) Reconcile(ctx context.Context, s *Scope) (Result, error) {
@@ -205,7 +249,8 @@ func (Apply) Reconcile(ctx context.Context, s *Scope) (Result, error) {
 	//= docs/requirements/04-inventory.md#applying
 	//# When the set of Hosts changes, the Inventory Controller SHALL
 	//# write the new list to battery's configuration and restart battery.
-	if err := s.Store.Save(ctx, raw, true); err != nil {
+	pending := Config{Hosts: s.Desired, Raw: raw, Pending: true, ClientCertificate: s.Config.ClientCertificate}
+	if err := s.Store.Save(ctx, pending); err != nil {
 		return Result{Stop: true}, err
 	}
 	// The window has closed: whatever happens to this restart, a change
@@ -213,25 +258,35 @@ func (Apply) Reconcile(ctx context.Context, s *Scope) (Result, error) {
 	// Resume's to finish.
 	s.State.windowOpened = time.Time{}
 	s.State.drainStarted = time.Time{}
-	s.Config = Config{Hosts: s.Desired, Raw: raw, Pending: true}
-	s.Log.Info("Wrote battery's configuration", "hosts", slices.Sorted(maps.Keys(s.Desired)))
-	if err := restart(ctx, s, raw); err != nil {
+	s.Config = pending
+	s.Log.Info("Wrote battery's configuration", "hosts", slices.Sorted(maps.Keys(s.Desired)),
+		"clientCertificateRenewed", s.Renewed)
+	if err := restart(ctx, s); err != nil {
 		return Result{Stop: true}, err
 	}
 	return Result{}, nil
 }
 
-// restart restarts battery with raw, the pending configuration in s, then
-// marks it applied and publishes its Hosts.
-func restart(ctx context.Context, s *Scope, raw []byte) error {
-	if err := s.Restarter.Restart(ctx, raw); err != nil {
+// restart restarts battery with the pending configuration in s and the
+// client certificate its Secret holds, then marks the configuration
+// applied, records the certificate and publishes the Hosts.
+func restart(ctx context.Context, s *Scope) error {
+	want := batterysidecar.Mounts{Config: s.Config.Raw, ClientCertificate: s.ClientCertificate}
+	if err := s.Restarter.Restart(ctx, want); err != nil {
 		return fmt.Errorf("restarting battery: %w", err)
 	}
-	if err := s.Store.Save(ctx, raw, false); err != nil {
+	applied := s.Config
+	applied.Pending = false
+	if s.ClientCertificate != nil {
+		applied.ClientCertificate = Digest(s.ClientCertificate)
+	}
+	if err := s.Store.Save(ctx, applied); err != nil {
 		return err
 	}
-	s.Config.Pending = false
+	s.Config = applied
+	s.Renewed = false
 	s.HostSet.publish(s.Config.Hosts)
-	s.Log.Info("Restarted battery", "hosts", slices.Sorted(maps.Keys(s.Config.Hosts)))
+	s.Log.Info("Restarted battery", "hosts", slices.Sorted(maps.Keys(s.Config.Hosts)),
+		"clientCertificate", s.Config.ClientCertificate)
 	return nil
 }

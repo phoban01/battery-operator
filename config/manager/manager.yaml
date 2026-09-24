@@ -88,6 +88,11 @@ spec:
           # container mounts it: the same volume battery reads.
           - --battery-config-map=battery-operator-battery-config
           - --battery-config-file=/etc/battery/config/config.json
+          # battery's client certificate's Secret, which cert-manager renews,
+          # and where this container mounts its certificate: the same volume
+          # battery reads. battery restarts when it changes (DP-007).
+          - --battery-client-secret=battery-flintlockd-client
+          - --battery-client-cert-file=/etc/battery/tls/tls.crt
         env:
         - name: POD_NAMESPACE
           valueFrom:
@@ -130,6 +135,15 @@ spec:
           readOnly: true
         - name: battery-config
           mountPath: /etc/battery/config
+          readOnly: true
+        #= docs/requirements/06-deployment.md#battery-sidecar
+        #/ SHALL signal battery only once the Operator's own mount of that Secret
+        #/ holds the new certificate.
+        # battery's TLS volume, so that the Operator sees when a renewed
+        # client certificate has reached battery's files. The Operator may
+        # read that Secret through the API anyway.
+        - name: battery-tls
+          mountPath: /etc/battery/tls
           readOnly: true
       #= docs/requirements/06-deployment.md#battery-sidecar
       #/ The Manifests SHALL run battery as a container in the

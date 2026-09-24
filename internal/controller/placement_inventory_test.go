@@ -43,10 +43,10 @@ type knownHostsRestarter struct {
 	restarts int
 }
 
-func (r *knownHostsRestarter) Restart(ctx context.Context, config []byte) error {
+func (r *knownHostsRestarter) Restart(ctx context.Context, want batterysidecar.Mounts) error {
 	r.t.Helper()
 	r.restarts++
-	f, err := batterysidecar.Parse(config)
+	f, err := batterysidecar.Parse(want.Config)
 	if err != nil {
 		r.t.Fatalf("parsing battery's configuration: %v", err)
 	}
@@ -87,7 +87,7 @@ func TestPoolsNameOnlyHostsBatteryKnowsAcrossRestarts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cmKey := client.ObjectKey{Namespace: "battery-system", Name: batterysidecar.DefaultConfigMap}
+	cmKey := client.ObjectKey{Namespace: testNamespace, Name: batterysidecar.DefaultConfigMap}
 	hostNode := func(name, addr string) *corev1.Node {
 		n := labelledNode(name, zoneA)
 		n.Annotations = map[string]string{
@@ -114,6 +114,9 @@ func TestPoolsNameOnlyHostsBatteryKnowsAcrossRestarts(t *testing.T) {
 		Pools:     bc,
 		Options:   inventory.Options{SettleTime: 30 * time.Second, RestartWindow: time.Minute, DrainTimeout: 10 * time.Second},
 		Clock:     clk,
+		// No client certificate Secret: nothing is renewed here.
+		ClientSecret: batteryClientSecret,
+		Secrets:      k8s,
 	}
 	pools := &PoolReconciler{Client: k8s, Battery: bc, Hosts: hosts, Clock: clk}
 	f := &placementFixture{t: t, ctx: ctx, k8s: k8s, bc: bc, r: pools, key: client.ObjectKeyFromObject(pool)}

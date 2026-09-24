@@ -28,6 +28,9 @@ import (
 // writeVerbs are the verbs that change an object.
 const verbUpdate = "update"
 
+// verbGet reads an object.
+const verbGet = "get"
+
 var writeVerbs = []string{"create", verbUpdate, "patch", "delete", "deletecollection"}
 
 // operatorIdentity is the Operator's ServiceAccount, as a grant's subject.
@@ -114,7 +117,7 @@ func TestCASecretReaders(t *testing.T) {
 	gs := grants(t, objs)
 	for _, secret := range []string{controller.DefaultServingCASecret, controller.DefaultClientCASecret} {
 		if !slices.ContainsFunc(gs, func(g grant) bool {
-			return g.subject == op && g.allows(operatorNamespace, "", "secrets", "get", secret)
+			return g.subject == op && g.allows(operatorNamespace, "", "secrets", verbGet, secret)
 		}) {
 			t.Errorf("the Operator may not read Secret %s", secret)
 		}
@@ -122,7 +125,7 @@ func TestCASecretReaders(t *testing.T) {
 			if g.subject == op {
 				continue
 			}
-			for _, verb := range []string{"get", "list", "watch"} {
+			for _, verb := range []string{verbGet, "list", "watch"} {
 				if g.allows(operatorNamespace, "", "secrets", verb, secret) {
 					t.Errorf("%s may %s Secret %s", g.subject, verb, secret)
 				}

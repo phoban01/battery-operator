@@ -104,6 +104,16 @@ rules:
 - apiGroups:
   - ""
   resourceNames:
+  - battery-flintlockd-client
+  resources:
+  - secrets
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resourceNames:
   - flintlockd-client-ca
   - flintlockd-serving-ca
   resources:

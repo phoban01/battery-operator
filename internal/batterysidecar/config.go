@@ -45,8 +45,19 @@ const (
 	// DefaultConfigFile is the configuration file's path.
 	DefaultConfigFile = ConfigDir + "/" + ConfigKey
 
+	// DefaultClientSecret is the name of the Secret, in the Operator's
+	// namespace, that cert-manager issues battery's flintlockd client
+	// certificate into (config/certificates/battery-client.yaml), and that
+	// the Manifests mount at TLSDir. The Operator's RBAC grants it access to
+	// this name only.
+	DefaultClientSecret = "battery-flintlockd-client"
+	// ClientCertKey is that Secret's key of the client certificate.
+	ClientCertKey = "tls.crt"
+
 	// TLSDir holds battery's flintlockd client certificate and key, and the
-	// serving CA's certificate (DP-005).
+	// serving CA's certificate (DP-005). The Operator's container mounts the
+	// same volume there, to see when a renewed certificate has reached it
+	// (DP-007).
 	TLSDir = "/etc/battery/tls"
 	// ClientCertFile, ClientKeyFile and ServingCAFile are the files in
 	// TLSDir.

@@ -54,11 +54,19 @@ const (
 // configMapKey is battery's ConfigMap in these tests.
 var configMapKey = client.ObjectKey{Namespace: "battery-system", Name: batterysidecar.DefaultConfigMap}
 
+// Two client certificates: the one battery starts with, and its renewal.
+var (
+	certificate1 = []byte("-----BEGIN CERTIFICATE-----\none\n-----END CERTIFICATE-----\n")
+	certificate2 = []byte("-----BEGIN CERTIFICATE-----\ntwo\n-----END CERTIFICATE-----\n")
+)
+
 // fakeRestarter records every restart of battery.
 type fakeRestarter struct {
 	mu sync.Mutex
 	// configs are the configurations battery was restarted with.
 	configs [][]byte
+	// certs are the client certificates battery was restarted with.
+	certs [][]byte
 	// at are the times of the restarts.
 	at []time.Time
 	// clock says when a restart happens.
@@ -69,7 +77,7 @@ type fakeRestarter struct {
 	during func()
 }
 
-func (f *fakeRestarter) Restart(_ context.Context, config []byte) error {
+func (f *fakeRestarter) Restart(_ context.Context, want batterysidecar.Mounts) error {
 	f.mu.Lock()
 	during, err := f.during, f.err
 	f.mu.Unlock()
@@ -81,7 +89,8 @@ func (f *fakeRestarter) Restart(_ context.Context, config []byte) error {
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.configs = append(f.configs, config)
+	f.configs = append(f.configs, want.Config)
+	f.certs = append(f.certs, want.ClientCertificate)
 	f.at = append(f.at, f.clock.Now())
 	return nil
 }
@@ -105,6 +114,8 @@ type harness struct {
 	restarter *fakeRestarter
 	pools     *fakePools
 	options   Options
+	// cert is the client certificate its Secret holds, nil for none.
+	cert []byte
 }
 
 func newScheme(t *testing.T) *runtime.Scheme {
@@ -151,6 +162,7 @@ func newHarness(t *testing.T, nodes ...*corev1.Node) *harness {
 		restarter: &fakeRestarter{clock: clk},
 		pools:     &fakePools{},
 		options:   Options{SettleTime: settle, RestartWindow: window, DrainTimeout: drain},
+		cert:      certificate1,
 	}
 }
 
@@ -167,15 +179,16 @@ func (h *harness) scope() *Scope {
 		h.t.Fatal(err)
 	}
 	return &Scope{
-		Nodes:     nodes.Items,
-		Config:    config,
-		State:     h.state,
-		HostSet:   h.hosts,
-		Pools:     h.pools,
-		Store:     h.store,
-		Restarter: h.restarter,
-		Log:       logr.Discard(),
-		Clock:     h.clock,
+		Nodes:             nodes.Items,
+		Config:            config,
+		ClientCertificate: h.cert,
+		State:             h.state,
+		HostSet:           h.hosts,
+		Pools:             h.pools,
+		Store:             h.store,
+		Restarter:         h.restarter,
+		Log:               logr.Discard(),
+		Clock:             h.clock,
 	}
 }
 

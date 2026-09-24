@@ -38,6 +38,18 @@ const ProcessName = "poolmgrd"
 // battery to answer.
 const DefaultPollInterval = 500 * time.Millisecond
 
+// DefaultMountTimeout is how long the Restarter waits for the Operator's
+// mounts to hold what battery is to restart with. The kubelet refreshes a
+// ConfigMap or Secret volume within about a minute or two of the object
+// changing.
+const DefaultMountTimeout = 5 * time.Minute
+
+// ErrMountTimeout is the cause when the Operator's mounts do not come to
+// hold what battery is to restart with within the mount timeout: the
+// object changed again meanwhile, and the caller has to read it anew.
+// battery has not been signalled.
+var ErrMountTimeout = errors.New("the mounted files did not change to what battery is to restart with")
+
 // Config configures the Restarter from the Operator's flags.
 type Config struct {
 	// ConfigMap names the ConfigMap, in the Operator's namespace, that holds
@@ -45,6 +57,11 @@ type Config struct {
 	ConfigMap string
 	// ConfigFile is the Operator's mount of that ConfigMap's ConfigKey.
 	ConfigFile string
+	// ClientSecret names the Secret, in the Operator's namespace, that holds
+	// battery's flintlockd client certificate: what cert-manager renews.
+	ClientSecret string
+	// ClientCertFile is the Operator's mount of that Secret's certificate.
+	ClientCertFile string
 }
 
 // BindFlags binds c to the Operator's command line flags.
@@ -54,18 +71,37 @@ func (c *Config) BindFlags(fs *flag.FlagSet) {
 			"The Operator's RBAC grants access to the default name only.")
 	fs.StringVar(&c.ConfigFile, "battery-config-file", DefaultConfigFile,
 		"Where the Operator's container mounts battery's configuration, the volume battery's container mounts too.")
+	fs.StringVar(&c.ClientSecret, "battery-client-secret", DefaultClientSecret,
+		"The Secret, in the Operator's namespace, holding battery's flintlockd client certificate; battery restarts "+
+			"when it changes. The Operator's RBAC grants access to the default name only.")
+	fs.StringVar(&c.ClientCertFile, "battery-client-cert-file", ClientCertFile,
+		"Where the Operator's container mounts battery's flintlockd client certificate, the volume battery's "+
+			"container mounts too.")
 }
 
-// Restarter restarts battery after its configuration changes (DP-006): the
-// single mechanism the Inventory Controller invokes. See the package
-// documentation for why it signals battery through a shared process
-// namespace.
+// Mounts is what battery is to restart with: what the Operator's mounts of
+// battery's volumes have to hold before battery is signalled.
+type Mounts struct {
+	// Config is battery's configuration, as just written to its ConfigMap.
+	Config []byte
+	// ClientCertificate is battery's flintlockd client certificate, as its
+	// Secret holds it; nil to restart without waiting for it.
+	ClientCertificate []byte
+}
+
+// Restarter restarts battery after its configuration or its client
+// certificate changes (DP-006, DP-007): the single mechanism the Inventory
+// Controller invokes. See the package documentation for why it signals
+// battery through a shared process namespace.
 //
 // It is also the gate the controllers' battery client waits on: Wait
 // returns only while no restart is in progress.
 type Restarter struct {
 	// ConfigFile is the Operator's mount of battery's configuration.
 	ConfigFile string
+	// ClientCertFile is the Operator's mount of battery's client
+	// certificate.
+	ClientCertFile string
 	// Processes finds and signals battery; ProcFS in production.
 	Processes Processes
 	// Ping returns nil once battery answers. In production it is the
@@ -76,6 +112,9 @@ type Restarter struct {
 	// PollInterval is how often each wait looks again;
 	// DefaultPollInterval when zero.
 	PollInterval time.Duration
+	// MountTimeout bounds the wait for the Operator's mounts to hold what
+	// battery is to restart with; DefaultMountTimeout when zero.
+	MountTimeout time.Duration
 
 	// restart serialises restarts.
 	restart sync.Mutex
@@ -86,24 +125,37 @@ type Restarter struct {
 	done chan struct{}
 }
 
-// Restart makes battery run with config, the content the caller has just
-// written to battery's ConfigMap. It returns once battery answers again,
-// or with an error, when ctx ends first or battery's processes cannot be
-// read or signalled. Wait's callers wait from just before battery is
-// signalled until Restart returns, however it returns. Concurrent calls
-// run one after the other.
-func (r *Restarter) Restart(ctx context.Context, config []byte) error {
+// Restart makes battery run with want: the configuration the caller has
+// just written to battery's ConfigMap, and the client certificate its
+// Secret holds. It returns once battery answers again, or with an error,
+// when ctx ends first, the mounts do not come to hold want within the
+// mount timeout (ErrMountTimeout), or battery's processes cannot be read
+// or signalled. Wait's callers wait from just before battery is signalled
+// until Restart returns, however it returns. Concurrent calls run one
+// after the other.
+func (r *Restarter) Restart(ctx context.Context, want Mounts) error {
 	r.restart.Lock()
 	defer r.restart.Unlock()
 
-	if err := r.poll(ctx, "the ConfigMap volume to hold the new configuration", func() (bool, error) {
-		got, err := os.ReadFile(r.ConfigFile)
-		if errors.Is(err, os.ErrNotExist) {
-			return false, nil // the volume is being swapped
-		}
-		return bytes.Equal(got, config), err
-	}); err != nil {
+	timeout := r.MountTimeout
+	if timeout <= 0 {
+		timeout = DefaultMountTimeout
+	}
+	deadline := r.clock().Now().Add(timeout)
+	if err := r.waitForFile(ctx, deadline, "the ConfigMap volume to hold the new configuration", r.ConfigFile,
+		want.Config); err != nil {
 		return err
+	}
+	if want.ClientCertificate != nil {
+		//= docs/requirements/06-deployment.md#battery-sidecar
+		//# When the client certificate in the Secret of DP-005 changes,
+		//# the Operator SHALL restart battery through the mechanism of DP-006, and
+		//# SHALL signal battery only once the Operator's own mount of that Secret
+		//# holds the new certificate.
+		if err := r.waitForFile(ctx, deadline, "the TLS volume to hold the client certificate", r.ClientCertFile,
+			want.ClientCertificate); err != nil {
+			return err
+		}
 	}
 
 	//= docs/requirements/06-deployment.md#battery-sidecar
@@ -169,10 +221,7 @@ func (r *Restarter) close() func() {
 
 // poll calls cond until it reports true or fails, or ctx ends.
 func (r *Restarter) poll(ctx context.Context, what string, cond func() (bool, error)) error {
-	c := r.Clock
-	if c == nil {
-		c = clock.Real{}
-	}
+	c := r.clock()
 	interval := r.PollInterval
 	if interval <= 0 {
 		interval = DefaultPollInterval
@@ -193,4 +242,30 @@ func (r *Restarter) poll(ctx context.Context, what string, cond func() (bool, er
 		case <-t.C():
 		}
 	}
+}
+
+// waitForFile polls until the file at path holds want, or fails with
+// ErrMountTimeout once deadline has passed. A file missing is a volume
+// being swapped, and is waited out too.
+func (r *Restarter) waitForFile(ctx context.Context, deadline time.Time, what, path string, want []byte) error {
+	return r.poll(ctx, what, func() (bool, error) {
+		got, err := os.ReadFile(path)
+		switch {
+		case err == nil && bytes.Equal(got, want):
+			return true, nil
+		case err != nil && !errors.Is(err, os.ErrNotExist):
+			return false, err
+		case r.clock().Now().After(deadline):
+			return false, ErrMountTimeout
+		}
+		return false, nil
+	})
+}
+
+// clock is the Restarter's Clock, clock.Real when nil.
+func (r *Restarter) clock() clock.Clock {
+	if r.Clock == nil {
+		return clock.Real{}
+	}
+	return r.Clock
 }
