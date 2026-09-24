@@ -243,14 +243,17 @@ func main() {
 	// not about to remove: it publishes them around each restart of battery,
 	// and the Pool Controller places Pools on them.
 	hosts := inventory.NewHostSet()
-	poolEvents := controller.NewPoolEvents(batteryClient, mgr.GetClient(), poolResync)
-	poolEvents.Log = ctrl.Log.WithName("pool-events")
+	// events is the Operator's one subscription to battery's Events stream,
+	// which the Pool and Claim Controllers share: each registers its side
+	// with it, and the manager runs it once.
+	events := controller.NewBatteryEvents(batteryClient, poolResync)
+	events.Log = ctrl.Log.WithName("battery-events")
 	if err := (&controller.PoolReconciler{
 		Client:  mgr.GetClient(),
 		Scheme:  mgr.GetScheme(),
 		Battery: batteryClient,
 		Hosts:   hosts,
-		Events:  poolEvents,
+		Events:  events,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "pool")
 		os.Exit(1)
@@ -262,8 +265,13 @@ func main() {
 		Battery:   batteryClient,
 		// CL-018: one of these reconciles is always kept from ClaimVM.
 		ConcurrentReconciles: claimConcurrentReconciles,
+		Events:               events,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "microvmclaim")
+		os.Exit(1)
+	}
+	if err := mgr.Add(events); err != nil {
+		setupLog.Error(err, "Failed to add the subscription to battery's events")
 		os.Exit(1)
 	}
 	if err := (&controller.InventoryReconciler{

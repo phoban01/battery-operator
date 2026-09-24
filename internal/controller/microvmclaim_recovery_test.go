@@ -183,8 +183,7 @@ func TestMicroVMClaimRecoveryAgainstTheFakeBattery(t *testing.T) {
 	}
 	out := make(chan event.GenericEvent, 16)
 	w := &claimEvents{
-		Battery: bc,
-		Reader:  c,
+		Reader: c,
 		// Not the reconciler's: see the test's comment.
 		Deleted: &claim.DeletedVMs{},
 		Out:     out,
@@ -195,13 +194,11 @@ func TestMicroVMClaimRecoveryAgainstTheFakeBattery(t *testing.T) {
 			Out:     out,
 			Log:     testr.New(t),
 		},
-		Retry: 10 * time.Millisecond,
-		Clock: clock.Real{},
-		Log:   testr.New(t),
+		Log: testr.New(t),
 	}
 	wctx, stop := context.WithCancel(ctx)
 	done := make(chan error, 1)
-	go func() { done <- w.Start(wctx) }()
+	go func() { done <- claimEventsOn(bc, w).Start(wctx) }()
 	defer func() {
 		stop()
 		if err := <-done; err != nil {
@@ -314,18 +311,15 @@ func TestClaimEventsRecoversAfterEachSubscription(t *testing.T) {
 	out := make(chan event.GenericEvent, 16)
 	leases := &claim.RecoveredLeases{}
 	w := &claimEvents{
-		Battery:  b,
 		Reader:   c,
 		Deleted:  &claim.DeletedVMs{},
 		Out:      out,
 		Recovery: &claimRecovery{Battery: b, Reader: c, Leases: leases, Out: out, Log: testr.New(t)},
-		Retry:    10 * time.Millisecond,
-		Clock:    clock.Real{},
 		Log:      testr.New(t),
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- w.Start(ctx) }()
+	go func() { done <- claimEventsOn(b, w).Start(ctx) }()
 
 	select {
 	case e := <-out:
