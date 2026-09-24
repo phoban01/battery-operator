@@ -17,6 +17,7 @@ limitations under the License.
 package fakebattery
 
 import (
+	"sync"
 	"testing"
 
 	poolmgrv1 "github.com/liquidmetal-dev/battery/api/proto/poolmgr/v1alpha1"
@@ -131,6 +132,53 @@ func TestReplenishmentStrategies(t *testing.T) {
 			t.Fatalf("status after the release = %+v, want 2 available and none leased", st)
 		}
 		if created, deleted := h.stubs[hostA].counts(); created != 3 || deleted != 1 {
+			t.Fatalf("host created %d and deleted %d microvms, want 3 and 1", created, deleted)
+		}
+	})
+
+	t.Run("replace on delete with a tick during the deletion", func(t *testing.T) {
+		h := newHarness(t, Config{}, hostA)
+		host := h.stubs[hostA]
+		spec := h.spec("pool", 2, hostA)
+		spec.Replenishment = replenishment{
+			Type: poolmgrv1.ReplenishmentStrategyType_REPLACE_ON_DELETE,
+		}
+		h.createPool(spec)
+		claim := h.claim("pool")
+
+		// The Host holds the release's deletion while a tick runs to the
+		// end. The MicroVM being deleted is replaced when its deletion
+		// finishes, so the tick must not replace it too.
+		gate := make(chan struct{})
+		var opened sync.Once
+		open := func() {
+			host.set(func(s *testHost) { s.deleteGate = nil })
+			opened.Do(func() { close(gate) })
+		}
+		// A failure below must not leave the deletion held, or stopping the
+		// fake waits for it until the test's timeout.
+		t.Cleanup(open)
+		host.set(func(s *testHost) { s.deleteGate = gate })
+		released := make(chan error, 1)
+		go func() { released <- h.client.ReleaseVM(h.ctx, claim.LeaseID) }()
+		h.waitDeleteCall(host)
+		h.tick()
+		h.waitTimers(1)
+		// The tick reserves under the lock it holds, so its effect is in the
+		// status by the time it has armed its timer again.
+		if st := h.pool("pool").Status; st.Available != 1 || st.Provisioning != 0 {
+			t.Fatalf("status after a tick during the deletion = %+v, want 1 available and none provisioning: the tick replaced a microvm still being deleted", st)
+		}
+
+		open()
+		if err := <-released; err != nil {
+			t.Fatalf("ReleaseVM once the host answered: %v", err)
+		}
+		h.collectUntil(poolmgrv1.EventType_VM_AVAILABLE)
+		if st := h.pool("pool").Status; st.Available != 2 || st.Leased != 0 || st.Provisioning != 0 {
+			t.Fatalf("status after the release = %+v, want 2 available and nothing else", st)
+		}
+		if created, deleted := host.counts(); created != 3 || deleted != 1 {
 			t.Fatalf("host created %d and deleted %d microvms, want 3 and 1", created, deleted)
 		}
 	})

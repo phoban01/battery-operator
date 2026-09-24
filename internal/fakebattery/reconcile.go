@@ -39,7 +39,10 @@ import (
 // MIN_SIZE_THRESHOLD, and battery tops the event-driven strategies up only
 // once, when a Pool's reconciler starts. The target is the idle warm size for
 // IMMEDIATE_ON_LEASE, where size is headroom rather than a ceiling, and the
-// total population for the other two.
+// total population for the other two. For REPLACE_ON_DELETE a MicroVM being
+// deleted still counts in that population, because its deletion starts its
+// own replacement once the Host confirms it, and a tick that replaced it as
+// well would overfill the Pool.
 type strategy struct {
 	typ     poolmgrv1.ReplenishmentStrategyType
 	size    int32
@@ -82,7 +85,7 @@ func (s strategy) tickDeficit(c counts) int {
 		}
 		deficit = s.size - (c.available + c.leased + c.provisioning)
 	case poolmgrv1.ReplenishmentStrategyType_REPLACE_ON_DELETE:
-		deficit = s.size - (c.available + c.leased + c.provisioning)
+		deficit = s.size - (c.available + c.leased + c.provisioning + c.deleting)
 	default:
 		return 0
 	}
