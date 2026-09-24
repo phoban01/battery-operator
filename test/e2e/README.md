@@ -29,7 +29,7 @@ It needs Docker, `kind`, `kubectl` and Dagger (devbox has all but Docker).
    `POOLMGRD_IMG`, which the Makefile derives from `go.mod`;
 3. installs cert-manager, at the version `setup_test.go` pins;
 4. deploys the overlay in `config/`, through a kustomization it writes to
-   `.run/` (not committed) that sets the images and battery's Hosts;
+   `.run/` (not committed) that sets the images;
 5. waits for the Operator, the Exec Agent and the fake `flintlockd`, runs
    the tests, and deletes the cluster.
 
@@ -49,12 +49,14 @@ needs. Nothing test-only goes in `config/` at the top of the repository.
 - `exec-agent-host-prerequisites.yaml`: Host prerequisites a kind node can
   satisfy. `/dev/null` stands in for `/dev/kvm`, and the stand-in thin pool
   for containerd's.
+- `manager-inventory-timing.yaml`: a settle time and a restart window of
+  five seconds for the Inventory Controller, instead of the Manifests'
+  30 seconds and a minute, so that the Hosts are admitted sooner.
 
-battery's Hosts are the kind workers, at their internal addresses, rendered
-with `internal/batterysidecar.Render` into battery's ConfigMap when the
-cluster exists, since kind picks the addresses. The Inventory Controller
-rewrites them from the Exec Agents' reports once it admits the Hosts; #99
-drops the static ones in favour of it.
+battery starts with no Hosts, as the Manifests ship it. The Inventory
+Controller gives it the kind workers once their Exec Agents report them
+ready, and restarts it; `TestPoolPlacementAndClaim` waits for that before
+it makes a Pool.
 
 ## CI
 

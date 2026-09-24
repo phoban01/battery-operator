@@ -1,0 +1,12 @@
+# The Inventory Controller's timings, shortened for kind. The Manifests'
+# defaults (a settle time of 30s, a restart window of a minute) suit a
+# fleet whose Hosts come and go; here battery starts with no Hosts and the
+# Inventory Controller admits both kind workers as soon as their Exec
+# Agents report them ready, so shorter ones only make the run quicker. The
+# drain timeout stays the default.
+- op: add
+  path: /spec/template/spec/containers/0/args/-
+  value: --inventory-settle-time=5s
+- op: add
+  path: /spec/template/spec/containers/0/args/-
+  value: --inventory-restart-window=5s
