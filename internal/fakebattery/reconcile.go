@@ -315,6 +315,10 @@ func (b *Battery) provision(ctx context.Context, vm *vmState) {
 		b.deleteOrphan(h, uid)
 		return
 	}
+	//= docs/requirements/10-battery.md#claiming
+	//# battery SHALL set a MicroVM's phase to `AVAILABLE` only when it
+	//# finishes provisioning the MicroVM, so that a MicroVM that has been leased
+	//# is never leased again.
 	b.setPhaseLocked(vm, poolmgrv1.VMPhase_AVAILABLE)
 	b.emitLocked(vm.pool, uid, poolmgrv1.EventType_VM_AVAILABLE, map[string]any{payloadHost: vm.host})
 	b.mu.Unlock()

@@ -124,6 +124,10 @@ func (r Renew) Reconcile(ctx context.Context, s *claimscope.Scope) (claimscope.R
 	//# SHALL call battery's `Heartbeat` for the claim's Lease, and SHALL write
 	//# the expiry time battery returns and the `renewTime` it relayed to the
 	//# claim's status in one write.
+
+	//= docs/requirements/02-claims.md#renewal
+	//# The Claim Controller SHALL call battery's `Heartbeat` only for
+	//# a lease id that a claim's status records.
 	expiresAt, err := s.Battery.Heartbeat(ctx, c.Status.LeaseID)
 	s.Called(methodHeartbeat, err)
 	switch {
@@ -163,6 +167,11 @@ func (r Renew) Reconcile(ctx context.Context, s *claimscope.Scope) (claimscope.R
 	c.Status.LeaseExpiresAt = &metav1.Time{Time: expiresAt}
 	c.Status.ObservedRenewTime = relayed
 	s.Log.V(1).Info("Renewed MicroVMClaim", "lease", c.Status.LeaseID, "expiresAt", expiresAt)
+
+	//= docs/requirements/02-claims.md#recovery
+	//# While a claim is `Bound` and the Lease expiry time in its
+	//# status has not passed, the Claim Controller SHALL reconcile the claim
+	//# again once that time has passed.
 	return claimscope.Result{RequeueAfter: until(s, expiresAt)}, nil
 }
 

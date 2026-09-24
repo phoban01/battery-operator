@@ -123,7 +123,6 @@ cannot finish its cluster fleet until the real resources exist.
 ### What the gRPC boundary makes hard
 These were found by reading battery v0.1.0, and still hold in v0.3.3. They
 are the price of option B, and the first two are worth raising upstream.
-and the first two are worth raising upstream.
 
 1. **Hosts are static configuration.** battery reads its `hosts:` list once
    at startup. It has no reload and no RPC to add or remove a Host. The

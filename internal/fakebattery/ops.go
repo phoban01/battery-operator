@@ -246,6 +246,12 @@ func (b *Battery) claimVM(ctx context.Context, ref PoolRef) (*claimResult, error
 		b.mu.Unlock()
 		return nil, status.Errorf(codes.ResourceExhausted, "no available vm in pool %s", ps.key)
 	}
+	//= docs/requirements/10-battery.md#claiming
+	//# battery SHALL move a MicroVM out of the phase `AVAILABLE` in
+	//# the same transaction in which `ClaimVM` selects it, so that two `ClaimVM`
+	//# calls never lease the same MicroVM.
+	//
+	// The fake's transaction is b.mu, held from the selection to here.
 	b.setPhaseLocked(vm, poolmgrv1.VMPhase_PRE_LEASE_HOOK_RUNNING)
 	hooks := ps.spec.PreLeaseCommands
 	b.mu.Unlock()

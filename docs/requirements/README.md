@@ -169,6 +169,8 @@ of date. `make duvet-models-write` rewrites it. `type=test` and
 | BA-001 | `specs/quint/claims.qnt` |
 | BA-003 | `specs/quint/claims.qnt` |
 | BA-004 | `specs/quint/claims.qnt` |
+| BA-005 | `specs/quint/claims.qnt` |
+| BA-006 | `specs/quint/claims.qnt` |
 | BA-010 | `specs/quint/claims.qnt` |
 | BA-011 | `specs/quint/claims.qnt` |
 | BA-020 | `specs/quint/claims.qnt` |
@@ -195,11 +197,13 @@ of date. `make duvet-models-write` rewrites it. `type=test` and
 | CL-015 | `specs/quint/claims.qnt` |
 | CL-016 | `specs/quint/claims.qnt` |
 | CL-017 | `specs/quint/claims.qnt` |
+| CL-019 | `specs/quint/claims.qnt` |
 | CL-020 | `specs/quint/claims.qnt` |
 | CL-021 | `specs/quint/claims.qnt` |
 | CL-022 | `specs/quint/claims.qnt` |
 | CL-030 | `specs/quint/claims.qnt` |
 | CL-031 | `specs/quint/claims.qnt` |
+| CL-032 | `specs/quint/claims.qnt` |
 | CL-040 | `specs/quint/claims.qnt` |
 | CL-042 | `specs/quint/claims.qnt` |
 | CT-001 | `specs/quint/certificates.qnt` |

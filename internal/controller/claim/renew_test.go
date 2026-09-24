@@ -173,9 +173,22 @@ func wantBound(t *testing.T, got *batteryv1alpha1.MicroVMClaim) {
 //# from battery's answer to `Heartbeat` or `ListLeases`, and SHALL NOT
 //# compute it.
 
-// TestRenewRelaysAPendingRenewal covers CL-010 and CL-011: a changed
-// renewTime becomes one Heartbeat for the claim's Lease, and battery's
-// expiry, however odd, is written with the relayed renewTime in one patch.
+//= docs/requirements/02-claims.md#renewal
+//= type=test
+//# The Claim Controller SHALL call battery's `Heartbeat` only for
+//# a lease id that a claim's status records.
+
+//= docs/requirements/02-claims.md#recovery
+//= type=test
+//# While a claim is `Bound` and the Lease expiry time in its
+//# status has not passed, the Claim Controller SHALL reconcile the claim
+//# again once that time has passed.
+
+// TestRenewRelaysAPendingRenewal covers CL-010, CL-011, CL-019 and CL-032:
+// a changed renewTime becomes one Heartbeat for the Lease the claim's
+// status records, battery's expiry, however odd, is written with the
+// relayed renewTime in one patch, and the claim is reconciled again when
+// that expiry passes.
 func TestRenewRelaysAPendingRenewal(t *testing.T) {
 	// Not start plus any threshold: the expiry is battery's, not worked out.
 	expires := start.Add(47 * time.Second)
