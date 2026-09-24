@@ -40,7 +40,7 @@ const lifecycleTimeout = 30 * time.Second
 // fake flintlockd, and dials it as the Operator does.
 func startFakeBattery(t *testing.T) (*fakebattery.Battery, *battery.Connection) {
 	t.Helper()
-	fl := fakeflintlock.New(fakeflintlock.Config{Name: "node-a"})
+	fl := fakeflintlock.New(fakeflintlock.Config{Name: nodeA})
 	flConn, err := fl.Conn()
 	if err != nil {
 		t.Fatalf("connecting to the fake flintlockd: %v", err)
@@ -50,7 +50,7 @@ func startFakeBattery(t *testing.T) (*fakebattery.Battery, *battery.Connection) 
 		_ = fl.Close()
 	})
 	hosts := fakebattery.NewHosts()
-	hosts.Add("node-a", "node-a:9090", flConn)
+	hosts.Add(nodeA, "node-a:9090", flConn)
 
 	b := fakebattery.New(fakebattery.Config{Hosts: hosts, ReconcileInterval: 10 * time.Millisecond})
 	ctx, cancel := context.WithCancel(context.Background())
@@ -102,10 +102,10 @@ func TestRenewalAndExpiryAgainstTheFakeBattery(t *testing.T) {
 
 	minSize := int32(1)
 	if _, err := conn.CreatePool(ctx, battery.PoolSpec{
-		Ref:            battery.PoolRef{Name: "small", Namespace: "ci"},
+		Ref:            battery.PoolRef{Name: testPool, Namespace: "ci"},
 		Template:       &types.MicroVMSpec{Namespace: "ci", Vcpu: 1, MemoryInMb: 256},
 		Size:           1,
-		FlintlockHosts: []string{"node-a"},
+		FlintlockHosts: []string{nodeA},
 		Replenishment: battery.ReplenishmentStrategy{
 			Type:    poolmgrv1.ReplenishmentStrategyType_MIN_SIZE_THRESHOLD,
 			MinSize: &minSize,

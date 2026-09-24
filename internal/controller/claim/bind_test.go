@@ -33,8 +33,8 @@ import (
 
 // leased is battery's answer to a successful ClaimVM in these tests.
 var leased = &battery.Claim{
-	LeaseID: "lease-1",
-	VMUID:   "vm-1",
+	LeaseID: testLease,
+	VMUID:   testVM,
 	Host:    battery.HostRef{Name: nodeA, Address: "10.0.0.1:9090"},
 }
 
@@ -65,7 +65,7 @@ func TestBindWritesTheLease(t *testing.T) {
 	if !s.Result.Stop {
 		t.Error("Bind did not stop the chain")
 	}
-	if calls := b.claimCalls(); len(calls) != 1 || calls[0] != (battery.PoolRef{Name: "small", Namespace: "ci"}) {
+	if calls := b.claimCalls(); len(calls) != 1 || calls[0] != (battery.PoolRef{Name: testPool, Namespace: "ci"}) {
 		t.Errorf("ClaimVM calls = %v, want one for ci/small", calls)
 	}
 	if err := s.Patch(ctx); err != nil {
@@ -80,7 +80,7 @@ func TestBindWritesTheLease(t *testing.T) {
 	if st.LeaseID != leased.LeaseID {
 		t.Errorf("leaseID = %q, want lease-1", st.LeaseID)
 	}
-	if st.MicroVM == nil || st.MicroVM.UID != "vm-1" {
+	if st.MicroVM == nil || st.MicroVM.UID != testVM {
 		t.Errorf("microVM = %+v, want uid vm-1", st.MicroVM)
 	}
 	if st.Host == nil || st.Host.NodeName != nodeA {

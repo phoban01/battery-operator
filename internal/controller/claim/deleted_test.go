@@ -41,7 +41,7 @@ import (
 // since battery deleted the Lease first.
 func TestExpireDeletedExpiresTheClaimOfADeletedMicroVM(t *testing.T) {
 	deleted := &DeletedVMs{Clock: clock.NewFake(start)}
-	deleted.Add("vm-1")
+	deleted.Add(testVM)
 	// A leaseStub with no functions panics if it is called.
 	s, c := newScope(t, renewed(), &leaseStub{})
 
@@ -83,11 +83,11 @@ func TestExpireDeletedLeavesOtherClaims(t *testing.T) {
 func TestDeletedVMsForgetsOldEntries(t *testing.T) {
 	clk := clock.NewFake(start)
 	d := &DeletedVMs{Retention: time.Minute, Clock: clk}
-	d.Add("vm-1")
+	d.Add(testVM)
 	clk.Advance(2 * time.Minute)
 	d.Add("vm-2")
-	if d.Has("vm-1") || !d.Has("vm-2") {
-		t.Errorf("Has(vm-1), Has(vm-2) = %t, %t, want false, true", d.Has("vm-1"), d.Has("vm-2"))
+	if d.Has(testVM) || !d.Has("vm-2") {
+		t.Errorf("Has(vm-1), Has(vm-2) = %t, %t, want false, true", d.Has(testVM), d.Has("vm-2"))
 	}
 }
 
@@ -100,7 +100,7 @@ func TestReportsDeletion(t *testing.T) {
 		poolmgrv1.EventType_VM_RELEASED:              false,
 		poolmgrv1.EventType_VM_CLAIMED:               false,
 	} {
-		if got := ReportsDeletion(&battery.Event{Type: typ, VMUID: "vm-1"}); got != want {
+		if got := ReportsDeletion(&battery.Event{Type: typ, VMUID: testVM}); got != want {
 			t.Errorf("ReportsDeletion(%s) = %t, want %t", typ, got, want)
 		}
 	}

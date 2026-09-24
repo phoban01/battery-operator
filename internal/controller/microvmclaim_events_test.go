@@ -115,7 +115,7 @@ func TestClaimEventsSendsTheClaimOfADeletedMicroVM(t *testing.T) {
 	}
 	c := fake.NewClientBuilder().
 		WithScheme(s).
-		WithObjects(claimOn("runner-1", "vm-1"), claimOn("runner-2", "vm-2")).
+		WithObjects(claimOn(testClaimName, testClaimVM), claimOn("runner-2", "vm-2")).
 		WithStatusSubresource(&batteryv1alpha1.MicroVMClaim{}).
 		WithIndex(&batteryv1alpha1.MicroVMClaim{}, claim.MicroVMUIDIndex, func(o client.Object) []string {
 			return claim.MicroVMUID(o.(*batteryv1alpha1.MicroVMClaim))
@@ -123,7 +123,7 @@ func TestClaimEventsSendsTheClaimOfADeletedMicroVM(t *testing.T) {
 		Build()
 	b := &subscribeStub{first: &scriptedStream{events: []*battery.Event{
 		{Type: poolmgrv1.EventType_VM_EXPIRING_SOON, VMUID: "vm-2"},
-		{Type: poolmgrv1.EventType_VM_DELETED_DUE_TO_EXPIRY, VMUID: "vm-1"},
+		{Type: poolmgrv1.EventType_VM_DELETED_DUE_TO_EXPIRY, VMUID: testClaimVM},
 	}}}
 	out := make(chan event.GenericEvent, 4)
 	w := &claimEvents{
@@ -141,7 +141,7 @@ func TestClaimEventsSendsTheClaimOfADeletedMicroVM(t *testing.T) {
 
 	select {
 	case e := <-out:
-		if e.Object.GetName() != "runner-1" {
+		if e.Object.GetName() != testClaimName {
 			t.Errorf("sent claim %s, want runner-1", e.Object.GetName())
 		}
 	case <-time.After(10 * time.Second):
@@ -164,10 +164,13 @@ func TestClaimEventsSendsTheClaimOfADeletedMicroVM(t *testing.T) {
 		t.Errorf("also sent %s, want only runner-1", e.Object.GetName())
 	default:
 	}
-	if !w.Deleted.Has("vm-1") || w.Deleted.Has("vm-2") {
-		t.Errorf("Deleted has vm-1, vm-2 = %t, %t, want true, false", w.Deleted.Has("vm-1"), w.Deleted.Has("vm-2"))
+	if !w.Deleted.Has(testClaimVM) || w.Deleted.Has("vm-2") {
+		t.Errorf("Deleted has vm-1, vm-2 = %t, %t, want true, false", w.Deleted.Has(testClaimVM), w.Deleted.Has("vm-2"))
 	}
 	if b.filter.Pool != nil {
 		t.Errorf("subscribed for Pool %v, want every Pool", b.filter.Pool)
 	}
 }
+
+// testClaimVM is the MicroVM of the claim these tests watch.
+const testClaimVM = "vm-1"

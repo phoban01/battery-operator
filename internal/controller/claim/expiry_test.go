@@ -33,9 +33,9 @@ import (
 // record is battery's record of lease-1, expiring at expires.
 func record(expires time.Time) *battery.LeaseRecord {
 	return &battery.LeaseRecord{
-		LeaseID:   "lease-1",
-		VMUID:     "vm-1",
-		Pool:      battery.PoolRef{Name: "small", Namespace: "ci"},
+		LeaseID:   testLease,
+		VMUID:     testVM,
+		Pool:      battery.PoolRef{Name: testPool, Namespace: "ci"},
 		ExpiresAt: expires,
 	}
 }
@@ -107,7 +107,7 @@ func TestCheckExpiryKeepsALeaseBatteryStillHolds(t *testing.T) {
 			if !res.Stop || res.RequeueAfter != 23*time.Second {
 				t.Errorf("result = %+v, want the chain stopped and a requeue at battery's expiry, 23s", res)
 			}
-			if len(b.lists) != 1 || b.lists[0] != (battery.PoolRef{Name: "small", Namespace: "ci"}) {
+			if len(b.lists) != 1 || b.lists[0] != (battery.PoolRef{Name: testPool, Namespace: "ci"}) {
 				t.Errorf("ListLeases calls = %v, want one for ci/small", b.lists)
 			}
 			got := patched(t, s, c)

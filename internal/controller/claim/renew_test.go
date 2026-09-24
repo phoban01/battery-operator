@@ -94,9 +94,9 @@ func boundClaim() *batteryv1alpha1.MicroVMClaim {
 	bound := metav1.NewTime(start.Add(-10 * time.Second))
 	c.Status = batteryv1alpha1.MicroVMClaimStatus{
 		Phase:             batteryv1alpha1.MicroVMClaimBound,
-		LeaseID:           "lease-1",
-		MicroVM:           &batteryv1alpha1.MicroVMReference{UID: "vm-1"},
-		Host:              &batteryv1alpha1.HostReference{NodeName: "node-a"},
+		LeaseID:           testLease,
+		MicroVM:           &batteryv1alpha1.MicroVMReference{UID: testVM},
+		Host:              &batteryv1alpha1.HostReference{NodeName: nodeA},
 		BoundTime:         &bound,
 		LeaseExpiresAt:    &exp,
 		ObservedRenewTime: micro(start.Add(-10 * time.Second)),
@@ -189,7 +189,7 @@ func TestRenewRelaysAPendingRenewal(t *testing.T) {
 	if !res.Stop || res.RequeueAfter != 47*time.Second {
 		t.Errorf("result = %+v, want the chain stopped and a requeue at the expiry, 47s", res)
 	}
-	if len(b.heartbeats) != 1 || b.heartbeats[0] != "lease-1" {
+	if len(b.heartbeats) != 1 || b.heartbeats[0] != testLease {
 		t.Errorf("Heartbeat calls = %v, want one for lease-1", b.heartbeats)
 	}
 	got := patched(t, s, c)
