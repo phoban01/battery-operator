@@ -212,6 +212,10 @@ func (in *MicroVMClaimStatus) DeepCopyInto(out *MicroVMClaimStatus) {
 		in, out := &in.LeaseExpiresAt, &out.LeaseExpiresAt
 		*out = (*in).DeepCopy()
 	}
+	if in.ObservedRenewTime != nil {
+		in, out := &in.ObservedRenewTime, &out.ObservedRenewTime
+		*out = (*in).DeepCopy()
+	}
 	if in.Conditions != nil {
 		in, out := &in.Conditions, &out.Conditions
 		*out = make([]v1.Condition, len(*in))

@@ -71,7 +71,7 @@ func answers(c *battery.Claim, err error) *stubBattery {
 // claimKey is aClaim's key.
 var claimKey = client.ObjectKey{Namespace: "ci", Name: "runner-1"}
 
-// aClaim is the claim "runner-1" in "ci" on the Pool "small".
+// aClaim is the claim "runner-1" in "ci" on the Pool testPool.
 func aClaim(finalizers ...string) *batteryv1alpha1.MicroVMClaim {
 	return &batteryv1alpha1.MicroVMClaim{
 		ObjectMeta: metav1.ObjectMeta{
@@ -81,7 +81,7 @@ func aClaim(finalizers ...string) *batteryv1alpha1.MicroVMClaim {
 			Finalizers: finalizers,
 		},
 		Spec: batteryv1alpha1.MicroVMClaimSpec{
-			PoolRef:            batteryv1alpha1.PoolReference{Name: "small"},
+			PoolRef:            batteryv1alpha1.PoolReference{Name: testPool},
 			ServiceAccountName: "runner",
 		},
 	}
@@ -130,3 +130,11 @@ func scopeFor(t *testing.T, c client.Client, key client.ObjectKey, b battery.Cli
 	s.Clock = clock.NewFake(start)
 	return s
 }
+
+// The names the claim tests use: aClaim's Pool, and the MicroVM of
+// battery's answer to its ClaimVM (testLease is in release_test.go, nodeA
+// in agentaddress_test.go).
+const (
+	testPool = "small"
+	testVM   = "vm-1"
+)

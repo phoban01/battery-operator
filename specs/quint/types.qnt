@@ -106,11 +106,11 @@ module types {
     hasFinalizer: bool,
     // metadata.deletionTimestamp is set
     deleting: bool,
-    // The spec.renewTime the Claim Controller last relayed to battery.
-    // CL-010 needs the controller to know that spec.renewTime changed; the
-    // v1alpha1 status has no field for it, and where it lives is #10's
-    // choice. The models keep it with the claim, so it survives a restart
-    // of the controller.
+    // status.observedRenewTime: the spec.renewTime the Claim Controller
+    // last relayed to battery, or recorded when it bound the claim. A
+    // claim has a pending renewal while spec.renewTime differs from it
+    // (CL-010). It is in the claim's status, written with battery's expiry
+    // in one write, so it survives a restart of the controller.
     observedRenewTime: int,
   }
 

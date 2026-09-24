@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -52,12 +53,21 @@ import (
 // was lost. Bind never looks for that Lease, in battery or anywhere else:
 // it writes only the lease id of the answer it got, and the lost Lease is
 // an orphan like any other.
-type Bind struct{}
+//
+// With Slots set, Bind calls ClaimVM only while it holds one of their
+// slots, so that a slow ClaimVM never holds up every reconcile (CL-018).
+type Bind struct {
+	// Slots bounds the ClaimVM calls in flight; nil does not bound them.
+	Slots *BindSlots
+	// SlotWait is how long a claim that found no slot waits; zero is
+	// DefaultSlotWait.
+	SlotWait time.Duration
+}
 
 var _ claimscope.Subreconciler = Bind{}
 
 // Reconcile implements claimscope.Subreconciler.
-func (Bind) Reconcile(ctx context.Context, s *claimscope.Scope) (claimscope.Result, error) {
+func (b Bind) Reconcile(ctx context.Context, s *claimscope.Scope) (claimscope.Result, error) {
 	if s.Claim.Status.LeaseID != "" {
 		return claimscope.Result{}, nil
 	}
@@ -88,6 +98,26 @@ func (Bind) Reconcile(ctx context.Context, s *claimscope.Scope) (claimscope.Resu
 		return claimscope.Result{Stop: true}, nil
 	}
 
+	//= docs/requirements/02-claims.md#renewal
+	//# While battery has not yet answered `ClaimVM` calls for other
+	//# claims, the Claim Controller SHALL still reconcile a Bound claim that has
+	//# a pending renewal.
+	if b.Slots != nil {
+		if !b.Slots.tryAcquire() {
+			wait := b.SlotWait
+			if wait <= 0 {
+				wait = DefaultSlotWait
+			}
+			s.Log.V(1).Info("Deferred ClaimVM for MicroVMClaim while other ClaimVM calls are in flight", "retryAfter", wait)
+			return claimscope.Result{Stop: true, RequeueAfter: wait}, nil
+		}
+		defer b.Slots.release()
+	}
+
+	// The renewTime the claim has now is recorded as relayed: the new
+	// Lease runs from later than any renewal before it (02-claims.md,
+	// Renewal).
+	renewTime := s.Claim.Spec.RenewTime.DeepCopy()
 	pool := battery.PoolRef{Name: s.Claim.Spec.PoolRef.Name, Namespace: s.Claim.Namespace}
 	claimed, err := s.Battery.ClaimVM(ctx, pool)
 	s.Called(methodClaimVM, err)
@@ -137,6 +167,10 @@ func (Bind) Reconcile(ctx context.Context, s *claimscope.Scope) (claimscope.Resu
 	// The Exec Agent's address is not battery's to give (CL-005).
 	st.Host = &batteryv1alpha1.HostReference{NodeName: claimed.Host.Name}
 	st.BoundTime = &now
+	// battery's answer carries no expiry; CheckExpiry reads it with
+	// ListLeases once the binding is written (CL-016).
+	st.LeaseExpiresAt = nil
+	st.ObservedRenewTime = renewTime
 	st.Phase = batteryv1alpha1.MicroVMClaimBound
 	meta.SetStatusCondition(&st.Conditions, metav1.Condition{
 		Type:               batteryv1alpha1.ConditionBound,

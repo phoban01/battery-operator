@@ -28,8 +28,12 @@ import (
 	"github.com/phoban01/battery-operator/internal/controller/claimscope"
 )
 
-// methodClaimVM names ClaimVM in a claimscope.BatteryCall.
-const methodClaimVM = "ClaimVM"
+// The Client methods, as a claimscope.BatteryCall names them.
+const (
+	methodClaimVM    = "ClaimVM"
+	methodHeartbeat  = "Heartbeat"
+	methodListLeases = "ListLeases"
+)
 
 // failedInTransit reports whether a call to battery ended without an
 // answer saying what battery did (the glossary's "fails in transit"): the

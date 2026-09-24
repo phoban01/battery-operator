@@ -64,6 +64,10 @@ use. It contains no requirements.
   battery v0.3.3 gives that answer when `ReleaseVM` could not yet delete the
   MicroVM. battery may or may not have acted on a call that fails in
   transit.
+- **Pending renewal**: a Bound claim has one while its `spec.renewTime`
+  differs from the last `renewTime` the Claim Controller relayed to battery
+  with `Heartbeat`, or recorded when it bound the claim. The claim's status
+  records that `renewTime` (02-claims.md, Renewal).
 - **Holder**: the ServiceAccount a claim names in `spec.serviceAccountName`,
   the only identity the Exec Agent lets use the claim's MicroVM.
 - **Claim token**: a ServiceAccount token for the Holder, requested with
