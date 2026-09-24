@@ -8,9 +8,9 @@
 // CertificateSigningRequests and certificates of 09-certificates.md. They
 // keep only the fields a model reasons about, rather than every field of
 // the Go types. The claim lifecycle model (claims.qnt) uses the claim,
-// Lease and condition types; the Pool, battery Pool, Node and Host types
-// are for the pools and inventory model (#47), which adds to them as it
-// needs; the certificates model (certificates.qnt) uses the last section.
+// Lease and condition types; the pools and inventory model (pools.qnt)
+// uses the Pool, battery Pool and Node types; the certificates model
+// (certificates.qnt) uses the last section.
 //
 // Times are whole ticks of one clock, shared by battery and the Operator.
 module types {
@@ -190,6 +190,48 @@ module types {
     status: PoolStatus,
     hasFinalizer: bool,
     deleting: bool,
+  }
+
+  // A Pool's place in the API server, as ClaimSlot is a claim's. Once a
+  // Pool is gone, a Pool of the same name can be created again.
+  type PoolSlot = PoolUnborn | PoolLive(Pool) | PoolGone(Pool)
+
+  pure val emptyPoolStatus: PoolStatus = {
+    observedGeneration: 0,
+    available: 0,
+    leased: 0,
+    provisioning: 0,
+    quarantined: 0,
+    ready: unknownCondition,
+    exhausted: unknownCondition,
+  }
+
+  // A new Pool; metadata.generation starts at 1.
+  pure def newPool(name: PoolName, spec: PoolSpec): Pool = {
+    name: name,
+    generation: 1,
+    spec: spec,
+    status: emptyPoolStatus,
+    hasFinalizer: false,
+    deleting: false,
+  }
+
+  // The Pool a slot holds, or holds last. Only meaningful for PoolLive and
+  // PoolGone.
+  pure def poolIn(slot: PoolSlot): Pool = match slot {
+    | PoolLive(o) => o
+    | PoolGone(o) => o
+    | PoolUnborn => newPool("", { size: 0, heartbeatExpiryThreshold: 0, nodeSelector: Set() })
+  }
+
+  pure def isLivePool(slot: PoolSlot): bool = match slot {
+    | PoolLive(_) => true
+    | _ => false
+  }
+
+  pure def isGonePool(slot: PoolSlot): bool = match slot {
+    | PoolGone(_) => true
+    | _ => false
   }
 
   // ---------------------------------------------------------------------
