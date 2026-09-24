@@ -146,9 +146,10 @@ func (b *Battery) dropLeaseLocked(leaseID string) {
 	}
 }
 
-// counts is a Pool's population by phase.
+// counts is a Pool's population by phase. deleting is not part of a Pool's
+// status; the tick needs it for REPLACE_ON_DELETE.
 type counts struct {
-	available, leased, provisioning, quarantined int32
+	available, leased, provisioning, quarantined, deleting int32
 }
 
 func (c counts) status() poolStatus {
@@ -157,7 +158,7 @@ func (c counts) status() poolStatus {
 
 // countsLocked summarises a Pool's MicroVMs the way battery's CountVMs does:
 // PRE_LEASE_HOOK_RUNNING counts as leased, CREATE_HOOK_RUNNING as
-// provisioning, and DELETING and FAILED count nowhere.
+// provisioning, and DELETING and FAILED count nowhere in the status.
 func (b *Battery) countsLocked(key poolKey) counts {
 	var c counts
 	for _, vm := range b.vms {
@@ -173,7 +174,9 @@ func (b *Battery) countsLocked(key poolKey) counts {
 			c.provisioning++
 		case poolmgrv1.VMPhase_QUARANTINED:
 			c.quarantined++
-		case poolmgrv1.VMPhase_DELETING, poolmgrv1.VMPhase_FAILED:
+		case poolmgrv1.VMPhase_DELETING:
+			c.deleting++
+		case poolmgrv1.VMPhase_FAILED:
 		}
 	}
 	return c
