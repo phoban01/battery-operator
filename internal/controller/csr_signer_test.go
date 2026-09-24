@@ -250,8 +250,9 @@ func TestSignerChoosesTheValidity(t *testing.T) {
 func TestSignerDeniesARequestThatFailsACheck(t *testing.T) {
 	//= docs/requirements/09-certificates.md#approval
 	//= type=test
-	//# If a request for any of the three signer names fails any check,
-	//# then the Operator SHALL deny it with a reason that names the check.
+	//# If a request for any of the three signer names fails any check
+	//# and does not carry the condition `Approved`, then the Operator SHALL deny
+	//# it with a reason that names the check.
 
 	//= docs/requirements/09-certificates.md#signing
 	//= type=test
@@ -460,6 +461,68 @@ func TestSignerSignsOnlyWhatPassesEveryCheckWhoeverApprovedIt(t *testing.T) {
 			t.Errorf("Approved reason = %q, want the admin's", got)
 		}
 	})
+}
+
+func TestSignerMarksAnApprovedRequestThatFailsACheckFailed(t *testing.T) {
+	//= docs/requirements/09-certificates.md#signing
+	//= type=test
+	//# If a request for any of the three signer names carries the
+	//# condition `Approved` and fails any check of [Approval](#approval), then
+	//# the Operator SHALL mark it `Failed`, with a reason that names the check,
+	//# and never sign it.
+
+	//= docs/requirements/09-certificates.md#approval
+	//= type=test
+	//# If a request for any of the three signer names fails any check
+	//# and does not carry the condition `Approved`, then the Operator SHALL deny
+	//# it with a reason that names the check.
+
+	for _, tc := range []struct {
+		name   string
+		user   string
+		node   string
+		r      request
+		reason string
+	}{
+		{"a serving request from another ServiceAccount",
+			otherUser, nodeA, servingRequest(nodeA, nodeAIP), ReasonRequester},
+		{"a client request whose requester has no Node",
+			execAgentUser, "", clientRequest(nodeA), ReasonNodeName},
+		{"an Exec Agent serving request whose requester's Node does not exist",
+			execAgentUser, nodeGone, execAgentServingRequest(nodeGone, nodeGoneIP), ReasonNodeNotFound},
+		{"a serving request for another Node",
+			execAgentUser, nodeA, servingRequest(nodeB, nodeBIP), ReasonSubjectAltNames},
+		{"a client request for another Node's Exec Agent",
+			execAgentUser, nodeA, clientRequest(nodeB), ReasonSubjectAltNames},
+		{"an Exec Agent serving request for another Node",
+			execAgentUser, nodeA, execAgentServingRequest(nodeB, nodeBIP), ReasonSubjectAltNames},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newSigner(t)
+			name := s.submit(t, tc.user, tc.node, tc.r)
+			s.approveAsAdmin(t, name)
+			csr := s.reconcile(t, name)
+			failed := condition(csr, certificatesv1.CertificateFailed)
+			if failed == nil || failed.Status != corev1.ConditionTrue {
+				t.Fatalf("conditions = %+v, want Failed", csr.Status.Conditions)
+			}
+			if failed.Reason != tc.reason {
+				t.Errorf("Failed reason = %q, want %q", failed.Reason, tc.reason)
+			}
+			if !strings.Contains(failed.Message, "Approved, but failed a check") {
+				t.Errorf("Failed message = %q", failed.Message)
+			}
+			// An approved request is not denied: Denied cannot be added
+			// beside Approved.
+			if condition(csr, certificatesv1.CertificateDenied) != nil {
+				t.Error("an approved request was denied as well")
+			}
+			// Once Failed, it stays unsigned.
+			if csr := s.reconcile(t, name); len(csr.Status.Certificate) != 0 {
+				t.Error("an approved request that failed a check was signed")
+			}
+		})
+	}
 }
 
 func TestSignerLeavesOtherSignerNamesAlone(t *testing.T) {

@@ -18,7 +18,7 @@
 // - the Operator's signer: it re-checks every approved request, whoever
 //   approved it, signs it with the matching CA only when it passes (CT-002,
 //   CT-003, CT-006), sets the subject itself (CT-007), and marks a request
-//   someone else approved that fails a check Failed;
+//   someone else approved that fails a check Failed (CT-008);
 // - the environment: the CA Secrets can be unreadable for a while, so an
 //   approved request waits to be signed.
 //
@@ -392,12 +392,19 @@ module certificates {
   }
 
   //@= docs/requirements/09-certificates.md#approval
-  //@# If a request for any of the three signer names fails any check,
-  //@# then the Operator SHALL deny it with a reason that names the check.
+  //@# If a request for any of the three signer names fails any check
+  //@# and does not carry the condition `Approved`, then the Operator SHALL deny
+  //@# it with a reason that names the check.
   //
   //@= docs/requirements/09-certificates.md#signing
   //@# The Operator SHALL sign a request only when it passes every
   //@# check of [Approval](#approval) for its signer name, whoever approved it.
+  //
+  //@= docs/requirements/09-certificates.md#signing
+  //@# If a request for any of the three signer names carries the
+  //@# condition `Approved` and fails any check of [Approval](#approval), then
+  //@# the Operator SHALL mark it `Failed`, with a reason that names the check,
+  //@# and never sign it.
   //
   // One reconcile. A request nobody has decided is denied with the check
   // it fails, or approved and, when the CA Secret can be read, signed. An
@@ -541,17 +548,51 @@ module certificates {
       isNone(csr(id).certificate),
     })
 
-  // CT-013: the Operator denies a request, or marks it Failed, only for a
-  // check it fails, and names that check.
+  // CT-013 and CT-008: the Operator denies a request, or marks it Failed,
+  // only for a check it fails, and names that check.
   val refusalNamesTheCheck: bool =
     csrs.keys().forall(id => and {
       deniedBy(csr(id).decision, OperatorApprover) implies deniedReason(csr(id).decision) == review(csr(id)),
       isSome(csr(id).failed) implies csr(id).failed == review(csr(id)),
     })
 
-  // CT-001, CT-006 and CT-013: once the Operator has nothing left to do and
-  // can read its CAs, every request for its signer names is settled:
-  // signed, Denied or Failed.
+  //@= docs/requirements/09-certificates.md#approval
+  //@# If a request for any of the three signer names fails any check
+  //@# and does not carry the condition `Approved`, then the Operator SHALL deny
+  //@# it with a reason that names the check.
+  //
+  // CT-013: once the Operator is idle, every request for its signer names
+  // that fails a check and is not Approved is Denied.
+  val unapprovedFailingDenied: bool =
+    operatorIdle implies
+      csrs.keys().forall(id => and {
+        isOurSigner(csr(id).signer),
+        not(passes(csr(id))),
+        not(isApproved(csr(id).decision)),
+      } implies isDenied(csr(id).decision))
+
+  //@= docs/requirements/09-certificates.md#signing
+  //@# If a request for any of the three signer names carries the
+  //@# condition `Approved` and fails any check of [Approval](#approval), then
+  //@# the Operator SHALL mark it `Failed`, with a reason that names the check,
+  //@# and never sign it.
+  //
+  // CT-008: a request for the Operator's signer names that is Approved and
+  // fails a check is never signed, and is Failed once the Operator is
+  // idle.
+  val approvedFailingFailed: bool =
+    csrs.keys().forall(id => and {
+      isOurSigner(csr(id).signer),
+      isApproved(csr(id).decision),
+      not(passes(csr(id))),
+    } implies and {
+      isNone(csr(id).certificate),
+      operatorIdle implies isSome(csr(id).failed),
+    })
+
+  // CT-001, CT-006, CT-008 and CT-013: once the Operator has nothing left
+  // to do and can read its CAs, every request for its signer names is
+  // settled: signed, Denied or Failed.
   val idleSettled: bool =
     (operatorIdle and caReadable) implies
       csrs.keys().forall(id => isOurSigner(csr(id).signer) implies or {
@@ -572,17 +613,10 @@ module certificates {
     caAndUsagesMatchSigner,
     onlyOurSignerNames,
     refusalNamesTheCheck,
+    unapprovedFailingDenied,
+    approvedFailingFailed,
     idleSettled,
   }
-
-  // CT-013 as written: once the Operator is idle, every request for its
-  // signer names that fails a check is Denied. Not in safety: a request
-  // someone else approved cannot be Denied, and the Operator marks it
-  // Failed instead, which the requirements do not mention (#76).
-  // certificates_test.qnt reaches the violation.
-  val failingRequestsDenied: bool =
-    operatorIdle implies
-      csrs.keys().forall(id => (isOurSigner(csr(id).signer) and not(passes(csr(id)))) implies isDenied(csr(id).decision))
 
   // ---------------------------------------------------------------------
   // Witnesses: states quint run reports reaching, to show the simulation

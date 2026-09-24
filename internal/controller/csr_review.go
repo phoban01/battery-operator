@@ -91,10 +91,6 @@ type reviewed struct {
 // fails. An error means the review could not be made and has to be retried.
 func (r *CertificateSigningRequestReconciler) review(ctx context.Context, csr *certificatesv1.CertificateSigningRequest) (*reviewed, *denial, error) {
 	//= docs/requirements/09-certificates.md#approval
-	//# If a request for any of the three signer names fails any check,
-	//# then the Operator SHALL deny it with a reason that names the check.
-	//
-	//= docs/requirements/09-certificates.md#approval
 	//# The Operator SHALL approve a
 	//# `battery.liquidmetal-x.dev/flintlockd-serving` request only when the
 	//# requester is the Exec Agent's ServiceAccount, the requester's

@@ -83,7 +83,7 @@ module certificates_test {
         safety,
       })
 
-  // CT-006: a request someone else approved is checked again, marked
+  // CT-006, CT-008: a request someone else approved is checked again, marked
   // Failed with the check it fails, and never signed.
   run foreignApprovalRecheckedTest =
     init
@@ -117,15 +117,28 @@ module certificates_test {
       .then(opReconcile(0))
       .fail()
 
-  // CT-013 as written does not hold: the failing request someone else
-  // approved ends Failed, not Denied (#76).
-  run failedNotDeniedTest =
+  // CT-013 and CT-008: of two requests that fail the same check, the one
+  // nobody approved is Denied, and the one someone else approved is marked
+  // Failed, not Denied; both name the check (#76).
+  run failedOrDeniedTest =
     init
       .then(compromise("n1"))
       .then(copyOf(agentOn("n1"), "n2", FlintlockdServing, "10.0.0.2"))
+      .then(copyOf(agentOn("n1"), "n2", FlintlockdServing, "10.0.0.2"))
       .then(foreignDecide(0, true, CheckRequester))
       .then(opReconcile(0))
-      .expect(and { safety, not(failingRequestsDenied) })
+      .then(opReconcile(1))
+      .expect(and {
+        csr(0).decision == ApprovedBy(ForeignApprover),
+        csr(0).failed == Some(CheckSubjectAltNames),
+        csr(1).decision == DeniedBy({ approver: OperatorApprover, reason: CheckSubjectAltNames }),
+        isNone(csr(1).failed),
+        certified == Set(),
+        operatorIdle,
+        unapprovedFailingDenied,
+        approvedFailingFailed,
+        safety,
+      })
 
   // CT-007: the subject the request asks for is ignored.
   run subjectIgnoredTest =
