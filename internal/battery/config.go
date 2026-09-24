@@ -43,7 +43,12 @@ const DefaultAddress = "127.0.0.1:50051"
 // MinTime of 5 minutes, and a client that pings more often eventually gets
 // GOAWAY ENHANCE_YOUR_CALM ("too_many_pings") and has to reconnect.
 const (
-	DefaultCallTimeout      = 10 * time.Second
+	DefaultCallTimeout = 10 * time.Second
+	// DefaultClaimTimeout is ClaimVM's deadline. ClaimVM runs the Pool's
+	// pre-lease hooks before battery commits the Lease, and a deadline that
+	// passes during them costs the Pool a MicroVM (DP-013), so it is much
+	// longer than DefaultCallTimeout.
+	DefaultClaimTimeout     = 2 * time.Minute
 	DefaultKeepaliveTime    = 6 * time.Minute
 	DefaultKeepaliveTimeout = 10 * time.Second
 	DefaultReconnectBase    = time.Second
@@ -64,9 +69,13 @@ type Config struct {
 	// TLS is the client's TLS material. The connection is plaintext when it
 	// is empty, which is what a sidecar on loopback needs.
 	TLS TLSConfig
-	// CallTimeout is the deadline of every unary call. The Subscribe stream
-	// is not a unary call and lives as long as its caller's context.
+	// CallTimeout is the deadline of every unary call but ClaimVM. The
+	// Subscribe stream is not a unary call and lives as long as its
+	// caller's context.
 	CallTimeout time.Duration
+	// ClaimTimeout is the deadline of ClaimVM, which runs the Pool's
+	// pre-lease hooks. Set it above the time those hooks can take.
+	ClaimTimeout time.Duration
 	// KeepaliveTime and KeepaliveTimeout are the connection's HTTP/2
 	// keepalive settings.
 	KeepaliveTime    time.Duration
@@ -96,7 +105,9 @@ func (c *Config) BindFlags(fs *flag.FlagSet) {
 	fs.StringVar(&c.Address, "battery-address", DefaultAddress,
 		"battery's gRPC address, host:port. It has to be a loopback address: battery runs as a sidecar.")
 	fs.DurationVar(&c.CallTimeout, "battery-call-timeout", DefaultCallTimeout,
-		"The deadline of every unary call to battery.")
+		"The deadline of every unary call to battery but ClaimVM.")
+	fs.DurationVar(&c.ClaimTimeout, "battery-claim-timeout", DefaultClaimTimeout,
+		"The deadline of ClaimVM calls to battery. Set it above the time the Pools' pre-lease hooks can take.")
 	fs.StringVar(&c.TLS.CAFile, "battery-ca-file", "",
 		"The CA that verifies battery's serving certificate. Setting any TLS file turns TLS on.")
 	fs.StringVar(&c.TLS.CertFile, "battery-cert-file", "",
@@ -117,6 +128,9 @@ func (c *Config) BindFlags(fs *flag.FlagSet) {
 func (c Config) withDefaults() Config {
 	if c.CallTimeout <= 0 {
 		c.CallTimeout = DefaultCallTimeout
+	}
+	if c.ClaimTimeout <= 0 {
+		c.ClaimTimeout = DefaultClaimTimeout
 	}
 	if c.KeepaliveTime <= 0 {
 		c.KeepaliveTime = DefaultKeepaliveTime

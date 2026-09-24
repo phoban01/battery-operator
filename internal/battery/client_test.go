@@ -403,13 +403,13 @@ func TestDialRefusesAnAddressOffLoopback(t *testing.T) {
 
 // TestEveryUnaryCallHasADeadline covers the deadline half of DP-010: a
 // battery that never answers ClaimVM, because its latency is measured on a
-// clock that does not move, is given up on after the call timeout, as
+// clock that does not move, is given up on after the ClaimVM timeout, as
 // ErrUnavailable, although the caller set no deadline. A caller's own
 // earlier deadline still wins.
 func TestEveryUnaryCallHasADeadline(t *testing.T) {
 	clk := clock.NewFake(testEpoch)
 	b := startBattery(t, fakebattery.Config{Clock: clk})
-	c := dial(t, battery.Config{Address: b.Addr(), CallTimeout: 200 * time.Millisecond})
+	c := dial(t, battery.Config{Address: b.Addr(), CallTimeout: time.Hour, ClaimTimeout: 200 * time.Millisecond})
 	b.SetFaults(fakebattery.Faults{ClaimLatency: time.Hour})
 
 	start := time.Now()
@@ -418,7 +418,7 @@ func TestEveryUnaryCallHasADeadline(t *testing.T) {
 		t.Errorf("ClaimVM that battery never answers: got %v, want ErrUnavailable", err)
 	}
 	if took := time.Since(start); took > 10*time.Second {
-		t.Errorf("ClaimVM returned after %v, want about the 200ms call timeout", took)
+		t.Errorf("ClaimVM returned after %v, want about the 200ms ClaimVM timeout", took)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)

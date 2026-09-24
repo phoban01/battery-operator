@@ -59,6 +59,23 @@ const (
 	// ReasonLeaseExpired means the Holder stopped renewing and the Lease
 	// lapsed.
 	ReasonLeaseExpired = "LeaseExpired"
+	// ReasonBatteryUnavailable means the last call to battery for the claim
+	// failed in transit: battery may or may not have acted on it.
+	ReasonBatteryUnavailable = "BatteryUnavailable"
+)
+
+// ConditionSynced is the condition type that says whether battery answered
+// the Claim Controller's last call for a MicroVMClaim. While it is false,
+// the claim's status may be stale; its phase stays what battery last said.
+const ConditionSynced = "Synced"
+
+// Reasons for the Synced condition. It also uses ReasonBatteryUnavailable.
+const (
+	// ReasonSynced means battery answered the last call for the claim.
+	ReasonSynced = "Synced"
+	// ReasonBatteryError means battery failed the last call for the claim
+	// with an error that says nothing about the claim's Lease or Pool.
+	ReasonBatteryError = "BatteryError"
 )
 
 // PoolReference names a Pool in the claim's own namespace.
@@ -171,7 +188,7 @@ type MicroVMClaimStatus struct {
 	// +optional
 	LeaseExpiresAt *metav1.Time `json:"leaseExpiresAt,omitempty"`
 
-	// conditions hold the claim's Bound condition.
+	// conditions hold the claim's Bound and Synced conditions.
 	// +listType=map
 	// +listMapKey=type
 	// +optional

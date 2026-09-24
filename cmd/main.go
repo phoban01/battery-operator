@@ -219,6 +219,15 @@ func main() {
 		setupLog.Error(err, "Failed to create controller", "controller", "pool")
 		os.Exit(1)
 	}
+	if err := (&controller.MicroVMClaimReconciler{
+		Client:    mgr.GetClient(),
+		Scheme:    mgr.GetScheme(),
+		APIReader: mgr.GetAPIReader(),
+		Battery:   batteryConn,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "Failed to create controller", "controller", "microvmclaim")
+		os.Exit(1)
+	}
 	// +kubebuilder:scaffold:builder
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
