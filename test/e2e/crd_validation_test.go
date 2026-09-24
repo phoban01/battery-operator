@@ -114,14 +114,15 @@ func TestCRDValidation(t *testing.T) {
 				{"serviceAccountName", func(c *batteryv1alpha1.MicroVMClaim) { c.Spec.ServiceAccountName = "someone-else" }, "spec.serviceAccountName"},
 			} {
 				t.Run(tc.name, func(t *testing.T) {
-					// The Claim Controller writes the claim too, so the
-					// update starts from what is there now.
+					// The Claim Controller writes the claim too, so the change
+					// is a merge patch, which no write of its can conflict with.
 					var got batteryv1alpha1.MicroVMClaim
 					if err := c.Get(ctx, client.ObjectKeyFromObject(claim), &got); err != nil {
 						t.Fatal(err)
 					}
+					before := got.DeepCopy()
 					tc.mutate(&got)
-					wantInvalid(t, c.Update(ctx, &got, client.DryRunAll), tc.field)
+					wantInvalid(t, c.Patch(ctx, &got, client.MergeFrom(before), client.DryRunAll), tc.field)
 				})
 			}
 			return ctx
