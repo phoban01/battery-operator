@@ -50,6 +50,9 @@ func poolChain() []poolSubreconciler {
 		poolDeclaration{},
 		poolUpdate{},
 		poolRejection{},
+		poolCounts{},
+		poolExhaustion{},
+		poolReadiness{},
 	}
 }
 
@@ -116,9 +119,10 @@ type poolDeclaration struct{}
 
 func (poolDeclaration) Reconcile(ctx context.Context, s *poolScope) (poolNext, error) {
 	ref := poolRef(s.Pool)
-	_, err := s.Battery.GetPool(ctx, ref)
+	held, err := s.Battery.GetPool(ctx, ref)
 	switch {
 	case err == nil:
+		s.held = held
 		return poolContinue, nil
 	case !errors.Is(err, battery.ErrNotFound):
 		return poolStop, fmt.Errorf("getting Pool %s from battery: %w", ref, err)
@@ -128,9 +132,10 @@ func (poolDeclaration) Reconcile(ctx context.Context, s *poolScope) (poolNext, e
 	//# When a Pool exists that battery does not hold, the Pool
 	//# Controller SHALL create it in battery with `CreatePool`, under the Pool's
 	//# namespace and name.
-	_, err = s.Battery.CreatePool(ctx, poolSpecToBattery(s.Pool))
+	held, err = s.Battery.CreatePool(ctx, poolSpecToBattery(s.Pool))
 	switch {
 	case err == nil:
+		s.held = held
 		s.Pool.Status.ObservedGeneration = s.Pool.Generation
 		s.Log.Info("Created Pool in battery", "pool", ref.String(), "generation", s.Pool.Generation)
 		return poolContinue, nil
@@ -160,9 +165,10 @@ func (poolUpdate) Reconcile(ctx context.Context, s *poolScope) (poolNext, error)
 	//# to battery with `UpdatePool` and then set `status.observedGeneration` to
 	//# that generation.
 	ref := poolRef(s.Pool)
-	_, err := s.Battery.UpdatePool(ctx, poolSpecToBattery(s.Pool))
+	held, err := s.Battery.UpdatePool(ctx, poolSpecToBattery(s.Pool))
 	switch {
 	case err == nil:
+		s.held = held
 		s.Pool.Status.ObservedGeneration = s.Pool.Generation
 		s.Log.Info("Updated Pool in battery", "pool", ref.String(), "generation", s.Pool.Generation)
 		return poolContinue, nil

@@ -304,7 +304,7 @@ func TestPoolBatteryRefusesIsRejected(t *testing.T) {
 }
 
 // TestAcceptedPoolClearsItsRejection: once battery accepts a new spec, the
-// Rejected condition goes.
+// Rejected condition goes, and Ready is poolReadiness's to say (PO-022).
 func TestAcceptedPoolClearsItsRejection(t *testing.T) {
 	b := newStubBattery()
 	pool := finalizedPool()
@@ -318,7 +318,7 @@ func TestAcceptedPoolClearsItsRejection(t *testing.T) {
 	if err := runPoolChain(context.Background(), s, poolChain()); err != nil {
 		t.Fatalf("chain: %v", err)
 	}
-	if ready := readyCondition(s.Pool); ready != nil {
-		t.Errorf("Ready = %+v, want it cleared", ready)
+	if ready := readyCondition(s.Pool); ready == nil || ready.Reason == PoolReasonRejected {
+		t.Errorf("Ready = %+v, want the rejection cleared and Ready set from battery's answer", ready)
 	}
 }

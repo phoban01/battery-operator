@@ -37,7 +37,19 @@ import (
 // as battery knows none of a Pool's until #20 resolves them.
 func startPoolFakeBattery(t *testing.T) battery.Client {
 	t.Helper()
-	b := fakebattery.New(fakebattery.Config{ReconcileInterval: 10 * time.Millisecond})
+	bc, _ := startPoolFakeBatteryWith(t, fakebattery.Config{})
+	return bc
+}
+
+// startPoolFakeBatteryWith is startPoolFakeBattery for cfg, with a 10ms
+// reconcile interval unless cfg sets one. It returns the fake too, for its
+// fault switches.
+func startPoolFakeBatteryWith(t *testing.T, cfg fakebattery.Config) (battery.Client, *fakebattery.Battery) {
+	t.Helper()
+	if cfg.ReconcileInterval == 0 {
+		cfg.ReconcileInterval = 10 * time.Millisecond
+	}
+	b := fakebattery.New(cfg)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- b.Serve(ctx) }()
@@ -59,7 +71,7 @@ func startPoolFakeBattery(t *testing.T) battery.Client {
 		t.Fatalf("Dial: %v", err)
 	}
 	t.Cleanup(func() { _ = conn.Close() })
-	return conn
+	return conn, b
 }
 
 // TestPoolLifecycleAgainstTheFakeBattery drives the Pool Controller through

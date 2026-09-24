@@ -20,6 +20,7 @@ import (
 	"crypto/tls"
 	"flag"
 	"os"
+	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -69,6 +70,9 @@ func main() {
 	var signerConfig controller.SignerConfig
 	var batteryConfig battery.Config
 	var sidecarConfig batterysidecar.Config
+	var poolResync time.Duration
+	flag.DurationVar(&poolResync, "pool-resync-interval", controller.DefaultPoolResync,
+		"How often every Pool's status is refreshed from battery while the subscription to battery's events is down.")
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
@@ -225,10 +229,13 @@ func main() {
 		setupLog.Error(err, "Failed to create controller", "controller", "certificatesigningrequest")
 		os.Exit(1)
 	}
+	poolEvents := controller.NewPoolEvents(batteryClient, mgr.GetClient(), poolResync)
+	poolEvents.Log = ctrl.Log.WithName("pool-events")
 	if err := (&controller.PoolReconciler{
 		Client:  mgr.GetClient(),
 		Scheme:  mgr.GetScheme(),
 		Battery: batteryClient,
+		Events:  poolEvents,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "pool")
 		os.Exit(1)
