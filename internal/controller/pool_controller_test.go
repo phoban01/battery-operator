@@ -25,6 +25,9 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	batteryv1alpha1 "github.com/phoban01/battery-operator/api/v1alpha1"
 	"github.com/phoban01/battery-operator/internal/battery"
@@ -211,4 +214,109 @@ func TestPoolTheFakeBatteryRefusesIsRejected(t *testing.T) {
 	if got.Status.ObservedGeneration != 0 {
 		t.Errorf("observedGeneration = %d, want 0", got.Status.ObservedGeneration)
 	}
+}
+
+// finalizerCheckingBattery is stubBattery that fails the test when
+// CreatePool comes for a Pool the API server holds without the Pool
+// Controller's finalizer.
+type finalizerCheckingBattery struct {
+	*stubBattery
+	t   *testing.T
+	k8s client.Client
+}
+
+func (b finalizerCheckingBattery) CreatePool(ctx context.Context, spec battery.PoolSpec) (*battery.Pool, error) {
+	stored := &batteryv1alpha1.Pool{}
+	key := types.NamespacedName{Namespace: spec.Ref.Namespace, Name: spec.Ref.Name}
+	switch err := b.k8s.Get(ctx, key, stored); {
+	case err != nil:
+		b.t.Errorf("CreatePool %s for a Pool the API server does not hold: %v", spec.Ref, err)
+	case !controllerutil.ContainsFinalizer(stored, PoolFinalizer):
+		b.t.Errorf("CreatePool %s before the API server stored the finalizer: finalizers %v", spec.Ref, stored.Finalizers)
+	}
+	return b.stubBattery.CreatePool(ctx, spec)
+}
+
+//= docs/requirements/03-pools.md#declaration
+//= type=test
+//# When a Pool exists that battery does not hold, the Pool
+//# Controller SHALL add the finalizer `battery.liquidmetal-x.dev/pool` to the
+//# Pool before it creates it in battery with `CreatePool`, under the Pool's
+//# namespace and name.
+
+// TestPoolIsNotCreatedBeforeItsFinalizerIsStored covers the order of
+// PO-001 through the reconciler and a fake client: while the API server
+// refuses the patch that adds the finalizer, battery hears nothing of the
+// Pool, and a Pool deleted then goes at once and leaves nothing in battery
+// (#72). battery checks, at CreatePool, that the stored Pool has the
+// finalizer.
+func TestPoolIsNotCreatedBeforeItsFinalizerIsStored(t *testing.T) {
+	ctx := context.Background()
+	key := types.NamespacedName{Namespace: testPoolNamespace, Name: testPoolName}
+
+	setup := func(t *testing.T) (*PoolReconciler, *stubBattery, client.Client, *bool) {
+		refusePatch := true
+		k8s := fake.NewClientBuilder().
+			WithScheme(poolTestScheme(t)).
+			WithObjects(testPool()).
+			WithStatusSubresource(&batteryv1alpha1.Pool{}).
+			WithInterceptorFuncs(interceptor.Funcs{
+				Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+					if refusePatch {
+						return apierrors.NewServiceUnavailable("the API server is away")
+					}
+					return c.Patch(ctx, obj, patch, opts...)
+				},
+			}).
+			Build()
+		b := newStubBattery()
+		r := &PoolReconciler{
+			Client:  k8s,
+			Battery: finalizerCheckingBattery{stubBattery: b, t: t, k8s: k8s},
+			Hosts:   newStubHosts(),
+			Clock:   clock.NewFake(poolTestEpoch),
+		}
+		return r, b, k8s, &refusePatch
+	}
+
+	t.Run("the finalizer is stored, then the Pool is created", func(t *testing.T) {
+		r, b, _, refusePatch := setup(t)
+		for range 2 {
+			if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key}); err == nil {
+				t.Fatal("Reconcile: nil error while the finalizer's patch fails")
+			}
+			wantCalls(t, b)
+		}
+
+		*refusePatch = false
+		if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key}); err != nil {
+			t.Fatalf("Reconcile: %v", err)
+		}
+		wantCalls(t, b)
+
+		if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key}); err != nil {
+			t.Fatalf("Reconcile: %v", err)
+		}
+		wantCalls(t, b, "GetPool ci/runners", "CreatePool ci/runners")
+	})
+
+	t.Run("a Pool deleted before its finalizer is stored leaves nothing in battery", func(t *testing.T) {
+		r, b, k8s, _ := setup(t)
+		if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key}); err == nil {
+			t.Fatal("Reconcile: nil error while the finalizer's patch fails")
+		}
+		if err := k8s.Delete(ctx, testPool()); err != nil {
+			t.Fatalf("Delete Pool: %v", err)
+		}
+		if err := k8s.Get(ctx, key, &batteryv1alpha1.Pool{}); !apierrors.IsNotFound(err) {
+			t.Fatalf("Get Pool after deletion: %v, want NotFound: it had no finalizer", err)
+		}
+		if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key}); err != nil {
+			t.Fatalf("Reconcile: %v", err)
+		}
+		wantCalls(t, b)
+		if _, ok := b.spec(battery.PoolRef{Namespace: testPoolNamespace, Name: testPoolName}); ok {
+			t.Error("battery holds a Pool the cluster no longer has")
+		}
+	})
 }

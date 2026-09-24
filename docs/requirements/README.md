@@ -227,6 +227,7 @@ of date. `make duvet-models-write` rewrites it. `type=test` and
 | PO-001 | `specs/quint/pools.qnt` |
 | PO-002 | `specs/quint/pools.qnt` |
 | PO-003 | `specs/quint/pools.qnt` |
+| PO-004 | `specs/quint/pools.qnt` |
 | PO-010 | `specs/quint/pools.qnt` |
 | PO-011 | `specs/quint/pools.qnt` |
 | PO-012 | `specs/quint/pools.qnt` |

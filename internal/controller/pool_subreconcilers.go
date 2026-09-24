@@ -108,6 +108,12 @@ func (poolFinalizer) Reconcile(_ context.Context, s *poolScope) (poolNext, error
 	//# The Pool Controller SHALL add a finalizer to each Pool, and when
 	//# the Pool is deleted SHALL call `DeletePool` and remove the finalizer only
 	//# once battery has deleted the Pool or reported it unknown.
+	//
+	//= docs/requirements/03-pools.md#declaration
+	//# When a Pool exists that battery does not hold, the Pool
+	//# Controller SHALL add the finalizer `battery.liquidmetal-x.dev/pool` to the
+	//# Pool before it creates it in battery with `CreatePool`, under the Pool's
+	//# namespace and name.
 	if controllerutil.AddFinalizer(s.Pool, PoolFinalizer) {
 		return poolStop, nil
 	}
@@ -132,8 +138,18 @@ func (poolDeclaration) Reconcile(ctx context.Context, s *poolScope) (poolNext, e
 
 	//= docs/requirements/03-pools.md#declaration
 	//# When a Pool exists that battery does not hold, the Pool
-	//# Controller SHALL create it in battery with `CreatePool`, under the Pool's
+	//# Controller SHALL add the finalizer `battery.liquidmetal-x.dev/pool` to the
+	//# Pool before it creates it in battery with `CreatePool`, under the Pool's
 	//# namespace and name.
+	//
+	// The finalizer counts once the API server has stored it, which is when
+	// the Pool is read back with it. poolFinalizer ends the chain when it
+	// adds one; this looks at the Pool as fetched, not as the chain has
+	// changed it, so that no order of the chain can create in battery a Pool
+	// the API server could still delete at once.
+	if !controllerutil.ContainsFinalizer(s.fetched, PoolFinalizer) {
+		return poolStop, nil
+	}
 	held, err = s.Battery.CreatePool(ctx, poolSpecToBattery(s.Pool, s.hosts))
 	switch {
 	case err == nil:

@@ -12,9 +12,10 @@
 //   renewal of battery's client certificate in the same windows (DP-007,
 //   DP-008), and before a restart that removes Hosts, have the Pools drop
 //   them (IN-013);
-// - the Pool Controller: the finalizer, CreatePool, UpdatePool on a new
-//   generation or a new set of matching Hosts, the NoEligibleHost
-//   condition, and DeletePool under the finalizer (PO-001 to PO-003,
+// - the Pool Controller: the finalizer, CreatePool once it is stored,
+//   UpdatePool on a new generation or a new set of matching Hosts, the
+//   Rejected condition for a spec battery refuses and the NoEligibleHost
+//   condition, and DeletePool under the finalizer (PO-001 to PO-004,
 //   PO-010 to PO-012);
 // - battery v0.3.3: it reads its Hosts from its configuration, and its
 //   client certificate from its Secret's volume, only when it
@@ -22,10 +23,12 @@
 //   Pool's flintlock_hosts (internal/reconciler/hostpick.go). It does not
 //   check flintlock_hosts against its Hosts: CreatePool and UpdatePool take
 //   any name, and provisioning on a Host it does not know fails
-//   (ErrUnknownHost);
+//   (ErrUnknownHost). It refuses a spec whose heartbeat expiry threshold
+//   is not positive, which stands here for every spec it refuses (PO-004);
 // - the environment: Nodes are labelled, cordoned, uncordoned, deleted and
 //   created again, their Node reports flip between ready and not ready,
-//   Pools are created, changed and deleted, leased MicroVMs are released,
+//   Pools are created, changed (to a spec battery refuses, too) and
+//   deleted, leased MicroVMs are released,
 //   cert-manager renews battery's client certificate,
 //   and time passes.
 //
@@ -71,6 +74,8 @@ module pools {
   pure val SELECTORS: Set[Set[Label]] = Set(Set(), Set(ZONE_A), Set(ZONE_B), Set(GPU))
   pure val SIZES: Set[int] = Set(0, 1, 2)
   pure val EXPIRY: Time = 3
+  // Heartbeat expiry thresholds a Pool's spec may have: battery refuses 0.
+  pure val EXPIRIES: Set[Time] = Set(EXPIRY, 0)
 
   // ---------------------------------------------------------------------
   // State
@@ -203,6 +208,9 @@ module pools {
   pure def readyFor(hosts: Set[HostName]): Condition =
     if (hosts == Set()) { status: CondFalse, reason: NoEligibleHost } else unknownCondition
 
+  // Ready for a spec battery refuses (PO-004).
+  pure val rejectedCondition: Condition = { status: CondFalse, reason: Rejected }
+
   // The Pool as the Pool Controller declares it to battery.
   def declared(p: PoolName): BatteryPool = {
     name: p,
@@ -210,6 +218,10 @@ module pools {
     heartbeatExpiryThreshold: obj(p).spec.heartbeatExpiryThreshold,
     flintlockHosts: resolve(p),
   }
+
+  // battery refuses the Pool's spec: CreatePool and UpdatePool answer
+  // INVALID_ARGUMENT and change nothing in battery.
+  def refused(p: PoolName): bool = obj(p).spec.heartbeatExpiryThreshold <= 0
 
   def vmCount(p: PoolName, h: HostName): int =
     battery.vms.filter(v => v.pool == p and v.host == h).size()
@@ -339,6 +351,19 @@ module pools {
       ...obj(p),
       generation: obj(p).generation + 1,
       spec: { ...obj(p).spec, size: n, nodeSelector: sel },
+    })),
+    now' = now, secret' = secret, nodes' = nodes, present' = present, changedAt' = changedAt, battery' = battery, inv' = inv, hist' = hist,
+  }
+
+  // A change to the heartbeat expiry threshold: to 0, a spec that passed
+  // admission and that battery refuses (PO-004), or back.
+  action changePoolExpiry(p: PoolName, t: Time): bool = all {
+    live(p), not(obj(p).deleting),
+    obj(p).spec.heartbeatExpiryThreshold != t,
+    pools' = pools.set(p, PoolLive({
+      ...obj(p),
+      generation: obj(p).generation + 1,
+      spec: { ...obj(p).spec, heartbeatExpiryThreshold: t },
     })),
     now' = now, secret' = secret, nodes' = nodes, present' = present, changedAt' = changedAt, battery' = battery, inv' = inv, hist' = hist,
   }
@@ -545,8 +570,8 @@ module pools {
   // Host (IN-013). The Pool Controller acts within far less than the
   // timeout, so the model lets the timeout pass only once the Pool
   // Controller has nothing left to do: the Pool is one it cannot update,
-  // which in this model is a Pool battery holds that the cluster does not
-  // (#72).
+  // which in this model is a Pool whose spec battery refuses (PO-004,
+  // 03-pools.md, Placement).
   action invRestartPastDrain: bool = all {
     poolsNamingLeaving != Set(),
     poolControllerIdle,
@@ -574,13 +599,13 @@ module pools {
 
   //@= docs/requirements/03-pools.md#declaration
   //@# When a Pool exists that battery does not hold, the Pool
-  //@# Controller SHALL create it in battery with `CreatePool`, under the Pool's
+  //@# Controller SHALL add the finalizer `battery.liquidmetal-x.dev/pool` to the
+  //@# Pool before it creates it in battery with `CreatePool`, under the Pool's
   //@# namespace and name.
   //
-  // Nothing in 03-pools.md orders CreatePool after the finalizer, as CL-001
-  // does for ClaimVM, so this does not wait for it (#72).
+  // The finalizer is stored: ctlAddFinalizer is the API server's write.
   def canCreate(p: PoolName): bool = and {
-    live(p), not(obj(p).deleting), battery.up, not(inBattery(p)),
+    live(p), not(obj(p).deleting), obj(p).hasFinalizer, battery.up, not(inBattery(p)), not(refused(p)),
   }
 
   action ctlCreatePool(p: PoolName): bool = all {
@@ -596,7 +621,7 @@ module pools {
   //@# to battery with `UpdatePool` and then set `status.observedGeneration` to
   //@# that generation.
   def canUpdate(p: PoolName): bool = and {
-    live(p), not(obj(p).deleting), battery.up, inBattery(p),
+    live(p), not(obj(p).deleting), battery.up, inBattery(p), not(refused(p)),
     or {
       obj(p).generation != obj(p).status.observedGeneration,
       hostsChanged(p),
@@ -621,6 +646,27 @@ module pools {
       staleAfterDrain: hist.staleAfterDrain.exclude(Set(p)),
     },
     now' = now, secret' = secret, nodes' = nodes, present' = present, changedAt' = changedAt, inv' = inv,
+  }
+
+  //@= docs/requirements/03-pools.md#declaration
+  //@# If battery refuses a Pool's spec, then the Pool Controller SHALL
+  //@# set the Pool's condition `Ready` false with the reason `Rejected` and
+  //@# battery's message.
+  //
+  // CreatePool or UpdatePool, refused, changes nothing in battery: a Pool
+  // battery holds keeps the flintlock_hosts of the last spec it accepted,
+  // and its observedGeneration stays. Rejected stands over NoEligibleHost
+  // (03-pools.md, Placement). The Pool Controller calls again on each
+  // reconcile, to the same answer; the model has no step for that.
+  def canReject(p: PoolName): bool = and {
+    live(p), not(obj(p).deleting), obj(p).hasFinalizer, battery.up, refused(p),
+    obj(p).status.ready != rejectedCondition,
+  }
+
+  action ctlRejectPool(p: PoolName): bool = all {
+    canReject(p),
+    pools' = setPool(p, { ...obj(p), status: { ...obj(p).status, ready: rejectedCondition } }),
+    now' = now, secret' = secret, nodes' = nodes, present' = present, changedAt' = changedAt, battery' = battery, inv' = inv, hist' = hist,
   }
 
   def canDelete(p: PoolName): bool = and {
@@ -649,6 +695,7 @@ module pools {
       not(canAddFinalizer(p)),
       not(canCreate(p)),
       not(canUpdate(p)),
+      not(canReject(p)),
       not(canDelete(p)),
     }),
   }
@@ -663,6 +710,7 @@ module pools {
     nondet sel = SELECTORS.oneOf()
     nondet n = SIZES.oneOf()
     nondet ready = Set(true, false).oneOf()
+    nondet expiry = EXPIRIES.oneOf()
     any {
       // environment
       cordon(h),
@@ -673,6 +721,7 @@ module pools {
       createNode(h, labels, ready),
       createPool(p, sel, n),
       changePool(p, sel, n),
+      changePoolExpiry(p, expiry),
       deletePool(p),
       tick,
       renewCertificate,
@@ -691,6 +740,7 @@ module pools {
       ctlAddFinalizer(p),
       ctlCreatePool(p),
       ctlUpdatePool(p),
+      ctlRejectPool(p),
       ctlDeletePool(p),
     }
   }
@@ -699,11 +749,12 @@ module pools {
   // Invariants. Each names the requirement or ADR consequence it checks.
 
   // PO-010, PO-011, PO-002: once the Pool Controller has nothing left to
-  // do, battery holds every live Pool with its current spec, and its
-  // flintlock_hosts are exactly the Hosts published to it (battery's, less
-  // any a restart is about to remove) that the Pool's selector matches.
+  // do, battery holds every live Pool whose spec it accepts with its
+  // current spec, and its flintlock_hosts are exactly the Hosts published
+  // to it (battery's, less any a restart is about to remove) that the
+  // Pool's selector matches.
   val poolHostsMatchSelector: bool =
-    poolControllerIdle implies POOLS.forall(p => (live(p) and not(obj(p).deleting)) implies and {
+    poolControllerIdle implies POOLS.forall(p => (live(p) and not(obj(p).deleting) and not(refused(p))) implies and {
       inBattery(p),
       battery.pools.get(p).flintlockHosts == inv.published.filter(h => and {
         present.contains(h),
@@ -713,11 +764,19 @@ module pools {
       obj(p).status.observedGeneration == obj(p).generation,
     })
 
-  // PO-012: once the Pool Controller is idle, a live Pool says
-  // NoEligibleHost exactly when its selector matches no Host.
+  // PO-012: once the Pool Controller is idle, a live Pool whose spec
+  // battery accepts says NoEligibleHost exactly when its selector matches
+  // no Host.
   val noEligibleHostWhenNoneMatch: bool =
-    poolControllerIdle implies POOLS.forall(p => (live(p) and not(obj(p).deleting)) implies
+    poolControllerIdle implies POOLS.forall(p => (live(p) and not(obj(p).deleting) and not(refused(p))) implies
       ((obj(p).status.ready.reason == NoEligibleHost) iff (resolve(p) == Set())))
+
+  // PO-004 over PO-012 (03-pools.md, Placement): once the Pool Controller
+  // is idle, a live Pool whose spec battery refuses says Rejected, whether
+  // or not its selector matches a Host.
+  val rejectedStandsOverNoEligibleHost: bool =
+    poolControllerIdle implies POOLS.forall(p => (live(p) and not(obj(p).deleting) and refused(p)) implies
+      obj(p).status.ready == rejectedCondition)
 
   // PO-003: a Pool whose finalizer the Pool Controller removed is not in
   // battery.
@@ -758,8 +817,8 @@ module pools {
   // it cannot provision on. A Host joins the Pools only after the restart
   // that gives battery it, and leaves them before the restart that takes
   // it away. The one exception is a Pool the Pool Controller cannot update
-  // when the drain timeout passes (a Pool battery holds that the cluster
-  // does not, #72), until the Pool Controller next writes it.
+  // when the drain timeout passes (a Pool whose spec battery refuses,
+  // PO-004), until the Pool Controller next writes it.
   val poolsNameKnownHosts: bool =
     battery.up implies battery.pools.keys().forall(p =>
       hist.staleAfterDrain.contains(p) or battery.pools.get(p).flintlockHosts.subseteq(battery.hosts))
@@ -775,11 +834,25 @@ module pools {
   val certificateFollowsSecret: bool =
     (battery.up and battery.cert != secret.cert) implies now - secret.renewedAt <= WINDOW
 
+  //@= docs/requirements/03-pools.md#declaration
+  //@# When a Pool exists that battery does not hold, the Pool
+  //@# Controller SHALL add the finalizer `battery.liquidmetal-x.dev/pool` to the
+  //@# Pool before it creates it in battery with `CreatePool`, under the Pool's
+  //@# namespace and name.
+  //
+  // PO-001 with PO-003: a Pool gone from the API server is not in battery.
+  // A Pool reaches battery only with its finalizer stored, so it leaves the
+  // API server only through DeletePool (#72).
+  val goneLeavesNothing: bool =
+    POOLS.forall(p => isGonePool(slot(p)) implies not(inBattery(p)))
+
   // All the invariants CI checks.
   val safety: bool = and {
     poolHostsMatchSelector,
     noEligibleHostWhenNoneMatch,
+    rejectedStandsOverNoEligibleHost,
     finalizerRemovedOnlyAfterDelete,
+    goneLeavesNothing,
     hostsFollowNodes,
     noNewVMOnFormerHost,
     restartOnlyForSettledChanges,
@@ -787,14 +860,6 @@ module pools {
     poolsNameKnownHosts,
     certificateFollowsSecret,
   }
-
-  // Findings: properties the requirements do not yet guarantee. Not in
-  // safety; pools_test.qnt reaches each violation.
-
-  // A gone Pool leaves nothing in battery. Fails when the Pool is deleted
-  // after CreatePool but before its finalizer (#72).
-  val goneLeavesNothing: bool =
-    POOLS.forall(p => isGonePool(slot(p)) implies not(inBattery(p)))
 
   // ---------------------------------------------------------------------
   // Witnesses: states quint run reports reaching, to show the simulation
@@ -823,10 +888,14 @@ module pools {
     POOLS.exists(p => live(p) and obj(p).status.ready.reason == NoEligibleHost)
   // a Pool was deleted in battery under its finalizer
   val witnessPoolDeleted: bool = hist.finalized != Set()
+  // a live Pool whose selector matches no Host says Rejected, because
+  // battery refuses its spec
+  val witnessRejectedWithoutHost: bool =
+    POOLS.exists(p => live(p) and obj(p).status.ready == rejectedCondition and resolve(p) == Set())
   // the Inventory Controller published fewer Hosts while a Pool in battery
   // named one about to leave, and the Pool dropped it before the restart
   val witnessDrainedForPool: bool = hist.drainsWithPools > 0 and hist.restarts.length() > 0
   // battery tried to provision on a Host it does not know: since IN-013,
-  // only for a Pool the cluster lacks, after the drain timeout
+  // only for a Pool whose spec battery refuses, after the drain timeout
   val witnessUnknownHostPicked: bool = hist.unknownHostPicks > 0
 }

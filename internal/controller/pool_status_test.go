@@ -210,3 +210,58 @@ func TestPoolReadyNeedsBatteryAHostAndItsSize(t *testing.T) {
 		wantCondition(t, s.Pool, batteryv1alpha1.PoolConditionReady, metav1.ConditionFalse, PoolReasonRejected)
 	})
 }
+
+//= docs/requirements/03-pools.md#declaration
+//= type=test
+//# If battery refuses a Pool's spec, then the Pool Controller SHALL
+//# set the Pool's condition `Ready` false with the reason `Rejected` and
+//# battery's message.
+
+// TestRejectedStandsOverNoEligibleHost: while battery refuses a Pool's
+// spec, Ready says Rejected even when the Pool's selector matches no Host
+// (03-pools.md, Placement), and battery's Pool keeps the Hosts of the last
+// spec battery accepted, since the refused UpdatePool cannot carry the new
+// ones.
+func TestRejectedStandsOverNoEligibleHost(t *testing.T) {
+	const msg = "spec.heartbeat_expiry_threshold must be positive"
+	refusal := fmt.Errorf("%w: %s", battery.ErrInvalid, msg)
+
+	t.Run("battery does not hold the Pool", func(t *testing.T) {
+		b := newStubBattery()
+		b.createErr = refusal
+		s := runStatusChain(t, finalizedPool(), b)
+		if len(s.hosts) != 0 {
+			t.Fatalf("hosts = %v, want none", s.hosts)
+		}
+		wantCalls(t, b, "GetPool ci/runners", "CreatePool ci/runners")
+		wantCondition(t, s.Pool, batteryv1alpha1.PoolConditionReady, metav1.ConditionFalse, PoolReasonRejected)
+		if ready := readyCondition(s.Pool); ready != nil && ready.Message != msg {
+			t.Errorf("Ready message = %q, want battery's %q", ready.Message, msg)
+		}
+	})
+
+	t.Run("battery holds the Pool on a Host the selector no longer matches", func(t *testing.T) {
+		b := newStubBattery()
+		pool := declaredPool()
+		holdPool(b, pool, []string{testHostA}, battery.PoolStatus{Available: 2, Leased: 1})
+		pool.Generation = 2
+		pool.Spec.Placement.NodeSelector = map[string]string{"zone": "c"}
+		b.updateErr = refusal
+
+		s := runStatusChain(t, pool, b, testHostA)
+		if len(s.hosts) != 0 {
+			t.Fatalf("hosts = %v, want none: the selector matches no Host", s.hosts)
+		}
+		wantCalls(t, b, "GetPool ci/runners", "UpdatePool ci/runners")
+		wantCondition(t, s.Pool, batteryv1alpha1.PoolConditionReady, metav1.ConditionFalse, PoolReasonRejected)
+		if spec, _ := b.spec(poolRef(pool)); len(spec.FlintlockHosts) != 1 || spec.FlintlockHosts[0] != testHostA {
+			t.Errorf("battery's flintlock_hosts = %v, want the accepted spec's [%s]", spec.FlintlockHosts, testHostA)
+		}
+		if s.Pool.Status.Available != 2 || s.Pool.Status.Leased != 1 {
+			t.Errorf("counts = %d available, %d leased; want battery's 2 and 1", s.Pool.Status.Available, s.Pool.Status.Leased)
+		}
+		if s.Pool.Status.ObservedGeneration != 1 {
+			t.Errorf("observedGeneration = %d, want 1: battery did not accept generation 2", s.Pool.Status.ObservedGeneration)
+		}
+	})
+}
