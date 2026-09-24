@@ -20,6 +20,11 @@ limitations under the License.
 // internal/controller runs them as a chain and patches the claim once at
 // the end.
 //
+// Release comes first. For a claim being deleted it calls battery's
+// ReleaseVM for the claim's Lease, if it has one, removes the release
+// finalizer once the Lease is gone, and stops the chain (CL-020, CL-021,
+// CL-022).
+//
 // Binding is three steps, in this order:
 //
 //   - EnsureFinalizer puts the release finalizer on the claim, and stops

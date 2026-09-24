@@ -46,7 +46,8 @@ type MicroVMClaimReconciler struct {
 	Battery battery.Client
 	// Clock defaults to clock.Real.
 	Clock clock.Clock
-	// Backoff is how a Pending claim is retried; zero is
+	// Backoff is how a Pending claim, and a release that battery did not
+	// answer, are retried; zero is
 	// claim.DefaultBackoff.
 	Backoff claim.Backoff
 }
@@ -92,6 +93,7 @@ func (r *MicroVMClaimReconciler) chain() claimscope.Chain {
 	}
 	return claimscope.Chain{
 		Steps: []claimscope.Subreconciler{
+			claim.Release{Backoff: backoff},
 			claim.EnsureFinalizer{},
 			claim.Bind{},
 			claim.Pending{Backoff: backoff},

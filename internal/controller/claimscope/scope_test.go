@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -211,5 +212,65 @@ func TestPatchRefusesAStaleFinalizerList(t *testing.T) {
 	s.Claim.Finalizers = append(s.Claim.Finalizers, batteryv1alpha1.ReleaseFinalizer)
 	if err := s.Patch(ctx); err == nil {
 		t.Error("Patch replaced a finalizer list it had not seen")
+	}
+}
+
+// aDeletedClaim is aClaim with the release finalizer, deleted.
+func aDeletedClaim() *batteryv1alpha1.MicroVMClaim {
+	cl := aClaim()
+	cl.Finalizers = []string{batteryv1alpha1.ReleaseFinalizer}
+	deleted := metav1.NewTime(time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC))
+	cl.DeletionTimestamp = &deleted
+	return cl
+}
+
+// TestPatchOfTheLastFinalizerWritesNoStatus: removing the last finalizer
+// of a deleted claim deletes it, so there is no status left to write.
+func TestPatchOfTheLastFinalizerWritesNoStatus(t *testing.T) {
+	ctx := context.Background()
+	var patches, statusPatches int
+	c := newClient(t, aDeletedClaim(), &patches, &statusPatches)
+	s := scopeOf(t, c)
+	s.Claim.Finalizers = nil
+	s.Claim.Status.Phase = batteryv1alpha1.MicroVMClaimPending
+
+	if err := s.Patch(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if patches != 1 || statusPatches != 0 {
+		t.Errorf("sent %d patches and %d status patches, want only the metadata patch", patches, statusPatches)
+	}
+	if err := c.Get(ctx, client.ObjectKeyFromObject(s.Claim), &batteryv1alpha1.MicroVMClaim{}); !apierrors.IsNotFound(err) {
+		t.Errorf("Get = %v, want the claim gone", err)
+	}
+	if s.Claim.Status.Phase != batteryv1alpha1.MicroVMClaimPending {
+		t.Errorf("phase = %q, want the chain's status kept on the scope", s.Claim.Status.Phase)
+	}
+}
+
+// TestPatchOfTheLastFinalizerOfAGoneClaim: a claim that went away before
+// the patch removed its last finalizer is not an error.
+func TestPatchOfTheLastFinalizerOfAGoneClaim(t *testing.T) {
+	ctx := context.Background()
+	var patches, statusPatches int
+	c := newClient(t, aDeletedClaim(), &patches, &statusPatches)
+	s := scopeOf(t, c)
+
+	// An earlier reconcile removed the finalizer, and the claim is gone.
+	other := &batteryv1alpha1.MicroVMClaim{}
+	if err := c.Get(ctx, client.ObjectKeyFromObject(s.Claim), other); err != nil {
+		t.Fatal(err)
+	}
+	other.Finalizers = nil
+	if err := c.Update(ctx, other); err != nil {
+		t.Fatal(err)
+	}
+
+	s.Claim.Finalizers = nil
+	if err := s.Patch(ctx); err != nil {
+		t.Errorf("Patch = %v, want nil for a claim already gone", err)
+	}
+	if statusPatches != 0 {
+		t.Errorf("sent %d status patches, want none", statusPatches)
 	}
 }
