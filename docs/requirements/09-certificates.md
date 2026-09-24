@@ -33,6 +33,10 @@ What the Exec Agent requests is in `05-exec-agent.md#certificates`.
 - **CT-007** The Operator SHALL set the subject of every certificate it
   issues to a common name of the requester's Node name, ignoring the
   subject the request asks for.
+- **CT-008** If a request for any of the three signer names carries the
+  condition `Approved` and fails any check of [Approval](#approval), then
+  the Operator SHALL mark it `Failed`, with a reason that names the check,
+  and never sign it.
 
 Nothing else in a cluster approves or signs a signer name it does not know,
 so the Operator is the only authority over these certificates, and the
@@ -40,7 +44,9 @@ cluster's cert-manager and its approval settings are untouched.
 
 CT-006 makes the checks hold even for a request someone else approved:
 anyone granted `approve` on one of these signer names could otherwise have
-the Operator sign whatever they approve. CT-007 keeps a requester from
+the Operator sign whatever they approve. The API server lets nobody
+withdraw `Approved`, or add `Denied` beside it, so CT-008 marks such a
+request `Failed` where CT-013 denies one that nobody has approved. CT-007 keeps a requester from
 choosing a name that a verifier might one day trust, since nothing checks
 the requested subject.
 
@@ -62,8 +68,9 @@ the requested subject.
   are digital signature and key encipherment, with server auth for
   `flintlockd-serving` and `exec-agent-serving`, or with client auth for
   `flintlockd-client`.
-- **CT-013** If a request for any of the three signer names fails any check,
-  then the Operator SHALL deny it with a reason that names the check.
+- **CT-013** If a request for any of the three signer names fails any check
+  and does not carry the condition `Approved`, then the Operator SHALL deny
+  it with a reason that names the check.
 - **CT-014** The Operator SHALL approve a
   `battery.liquidmetal-x.dev/exec-agent-serving` request only when the
   requester is the Exec Agent's ServiceAccount, the requester's

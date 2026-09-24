@@ -166,7 +166,8 @@ object has been deleted, and the Operator as approver and signer of
 - **the Operator:** one step is one reconcile of
   `CertificateSigningRequestReconciler`: review the request against the
   checks of CT-010 to CT-014, then deny it or approve and sign it; or, for
-  a request already approved by anyone, mark it Failed or sign it (CT-006).
+  a request already approved by anyone, mark it Failed or sign it (CT-006,
+  CT-008).
   It sets the subject itself (CT-007) and signs with its signer name's CA
   (CT-002).
 - **the environment:** the CA Secrets can be unreadable, so an approved
@@ -185,7 +186,9 @@ Invariants, all in `safety`:
 | `identitiesInTrustDomain` | every certificate's SPIFFE ID is in the configured trust domain, and never battery's (CT-020) |
 | `caAndUsagesMatchSigner` | the signer name's CA and key usages, and no DNS name (CT-002, CT-012) |
 | `onlyOurSignerNames` | the Operator does nothing with another signer name (CT-001) |
-| `refusalNamesTheCheck` | a `Denied` or `Failed` condition names a check the request fails (CT-013) |
+| `refusalNamesTheCheck` | a `Denied` or `Failed` condition names a check the request fails (CT-013, CT-008) |
+| `unapprovedFailingDenied` | once the Operator is idle, every request for its signer names that fails a check and is not approved is Denied (CT-013) |
+| `approvedFailingFailed` | an approved request for its signer names that fails a check is never signed, and is Failed once the Operator is idle (CT-008) |
 | `idleSettled` | once the Operator is idle and can read its CAs, every request for its signer names is signed, Denied or Failed |
 
 `noCertForAnotherNode` checks the addresses a Host really holds, not the
@@ -195,10 +198,10 @@ kubelet can list another Host's address on its own Node; the step
 `kubeletReportsAddresses` does that, is not in `step`, and the scenario
 test `compromisedKubeletTest` reaches the violation (#75).
 
-`failingRequestsDenied` (CT-013 as written: every request that fails a
-check is Denied) does not hold, and is not in `safety`. A request someone
-else approved can't be Denied; the Operator marks it Failed instead, which
-no requirement mentions (#76). `failedNotDeniedTest` reaches it.
+A request someone else approved can't be Denied, since the API server
+lets nobody withdraw `Approved` or add `Denied` beside it. CT-013 denies
+only a failing request that is not approved, and CT-008 marks an approved
+one Failed (#76); `failedOrDeniedTest` shows both.
 
 A Host whose Node is gone still obtains its client certificate: CT-011,
 unlike CT-010 and CT-014, does not ask for an existing Node, and the code

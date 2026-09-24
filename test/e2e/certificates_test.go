@@ -270,8 +270,9 @@ func TestSigner(t *testing.T) {
 		Assess("a request from anyone but the Exec Agent is denied, and one for another signer left alone", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
 			//= docs/requirements/09-certificates.md#approval
 			//= type=test
-			//# If a request for any of the three signer names fails any check,
-			//# then the Operator SHALL deny it with a reason that names the check.
+			//# If a request for any of the three signer names fails any check
+			//# and does not carry the condition `Approved`, then the Operator SHALL deny
+			//# it with a reason that names the check.
 			c := mustClient(t, cfg)
 			// The suite's own identity, which the API server records on the
 			// request, is the cluster's admin, not the Exec Agent.

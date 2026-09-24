@@ -96,6 +96,10 @@ func (r *CertificateSigningRequestReconciler) Reconcile(ctx context.Context, req
 
 	if !hasCondition(csr, certificatesv1.CertificateApproved) {
 		if d != nil {
+			//= docs/requirements/09-certificates.md#approval
+			//# If a request for any of the three signer names fails any check
+			//# and does not carry the condition `Approved`, then the Operator SHALL deny
+			//# it with a reason that names the check.
 			if err := r.setCondition(ctx, csr, certificatesv1.CertificateDenied, d.reason, d.message); err != nil {
 				return ctrl.Result{}, err
 			}
@@ -113,6 +117,11 @@ func (r *CertificateSigningRequestReconciler) Reconcile(ctx context.Context, req
 			return ctrl.Result{}, nil
 		}
 	} else if d != nil {
+		//= docs/requirements/09-certificates.md#signing
+		//# If a request for any of the three signer names carries the
+		//# condition `Approved` and fails any check of [Approval](#approval), then
+		//# the Operator SHALL mark it `Failed`, with a reason that names the check,
+		//# and never sign it.
 		msg := "Approved, but failed a check, so it is not signed: " + d.message
 		if err := r.setCondition(ctx, csr, certificatesv1.CertificateFailed, d.reason, msg); err != nil {
 			return ctrl.Result{}, err
