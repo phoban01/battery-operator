@@ -192,6 +192,17 @@ of date. `make duvet-models-write` rewrites it. `type=test` and
 | EA-061 | `specs/quint/certificates.qnt` |
 | EA-062 | `specs/quint/certificates.qnt` |
 | EA-068 | `specs/quint/certificates.qnt` |
+| IN-001 | `specs/quint/pools.qnt` |
+| IN-002 | `specs/quint/pools.qnt` |
+| IN-010 | `specs/quint/pools.qnt` |
+| IN-011 | `specs/quint/pools.qnt` |
+| IN-012 | `specs/quint/pools.qnt` |
+| PO-001 | `specs/quint/pools.qnt` |
+| PO-002 | `specs/quint/pools.qnt` |
+| PO-003 | `specs/quint/pools.qnt` |
+| PO-010 | `specs/quint/pools.qnt` |
+| PO-011 | `specs/quint/pools.qnt` |
+| PO-012 | `specs/quint/pools.qnt` |
 <!-- END modelled -->
 
 ## The coverage gate

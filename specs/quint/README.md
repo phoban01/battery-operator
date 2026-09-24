@@ -8,13 +8,13 @@ code. They do not replace Go tests. How they cite requirements is in
 
 | Module | Covers |
 |--------|--------|
-| `types.qnt` | The shared types: `Pool` and `MicroVMClaim` (spec, status, phase, conditions), battery's Leases, MicroVMs and Pools, Nodes, Node reports and Hosts |
+| `types.qnt` | The shared types: `Pool` and `MicroVMClaim` (spec, status, phase, conditions) and their places in the API server, battery's Leases, MicroVMs and Pools, Nodes, Node reports and Hosts |
 | `claims.qnt` | The claim lifecycle against battery (CL-001 to CL-042; ADR 0001, consequences 2 to 4) |
 | `claims_test.qnt` | Scenario tests for `claims.qnt`, one interleaving each |
 | `certificates.qnt` | Certificate approval and signing (CT-001 to CT-020; EA-061, EA-062, EA-068; ADR 0003 and ADR 0004) |
 | `certificates_test.qnt` | Scenario tests for `certificates.qnt` |
-
-Still to come: pools, placement and inventory (#47).
+| `pools.qnt` | Pools, placement and inventory: the Pool Controller and the Inventory Controller against battery (PO-001 to PO-012, IN-001 to IN-012; ADR 0001, consequence 1) |
+| `pools_test.qnt` | Scenario tests for `pools.qnt` |
 
 ## Running them
 
@@ -35,6 +35,11 @@ quint run specs/quint/claims.qnt --invariant safety --max-steps 60 --max-samples
 quint run specs/quint/certificates.qnt --invariant safety --max-steps 60 --max-samples 20000 \
   --witnesses witnessAgentFullyCertified witnessForeignApprovalFailed witnessForeignApprovalSigned \
   witnessAnotherHostDenied witnessSubjectIgnored witnessApprovedAwaitingCA
+quint test specs/quint/pools_test.qnt
+quint run specs/quint/pools.qnt --invariant safety --max-steps 60 --max-samples 20000 \
+  --witnesses witnessFlapAbsorbed witnessRestart witnessBatchedRestart witnessTwoRestarts \
+  witnessVMOnFormerHost witnessPlacementUpdated witnessNoEligibleHost \
+  witnessPoolDeleted witnessUnknownHostPicked
 ```
 
 A violation prints the trace that breaks the invariant and the seed that
@@ -180,6 +185,74 @@ The witnesses show an Exec Agent with all three certificates, a request
 someone else approved both Failed and signed, a compromised agent denied
 for another Host's address or SPIFFE ID, a requested subject ignored, and an
 approved request waiting for the CA.
+
+## The pools and inventory model
+
+`pools.qnt` has three Hosts, two Pools and battery v0.1.0 as a sidecar
+that reads its Hosts from its configuration only when it starts (ADR 0001,
+consequence 1). The steps are:
+
+- **the Inventory Controller:** a Node is a Host while it exists, is
+  schedulable and its Node report says ready (IN-001). A change in that
+  settles for the settle time (IN-011). When a settled change is waiting,
+  the controller opens a restart window; when the window closes, it writes
+  every change settled by then to battery's configuration and restarts
+  battery once (IN-010, IN-012). A window whose changes flapped back closes
+  without a restart.
+- **the Pool Controller:** add the finalizer, `CreatePool`, `UpdatePool` on
+  a new generation or a new set of matching Hosts, the `NoEligibleHost`
+  condition, and `DeletePool` under the finalizer (PO-001 to PO-003,
+  PO-010 to PO-012). It resolves a selector against the Hosts battery runs
+  with whose Nodes exist.
+- **battery:** replenishes each Pool on the least loaded Host in its
+  `flintlock_hosts`, as its `PickHost` does. It does not check
+  `flintlock_hosts` against its Hosts, and provisioning on a Host it does
+  not know fails.
+- **the environment:** Nodes are labelled, cordoned, uncordoned, deleted
+  and created again; Node reports flip; Pools are created, changed and
+  deleted; leased MicroVMs are released; time passes. The controllers act
+  promptly: time does not pass while a restart window is waiting to open
+  or close, or while battery is restarting.
+
+The requirements do not define the restart window (#74). The model's
+reading is above: restarts are at least a window apart, and every change
+settled in a window goes into its restart.
+
+Invariants, all in `safety`:
+
+| Invariant | Checks |
+|-----------|--------|
+| `poolHostsMatchSelector` | once the Pool Controller is idle, battery holds every live Pool at its current spec, and its `flintlock_hosts` are exactly the Hosts battery runs with that its selector matches (PO-002, PO-010, PO-011) |
+| `noEligibleHostWhenNoneMatch` | once the Pool Controller is idle, a Pool says `NoEligibleHost` exactly when its selector matches no Host (PO-012) |
+| `finalizerRemovedOnlyAfterDelete` | a Pool whose finalizer the controller removed is not in battery (PO-003) |
+| `hostsFollowNodes` | battery's Hosts are the Nodes that are Hosts, except for a change younger than the settle time plus one restart window (IN-001, IN-002, IN-010, IN-011) |
+| `noNewVMOnFormerHost` | a cordoned, deleted or not-ready Host gets no new MicroVM once its change has settled and its window has closed (IN-001, IN-002) |
+| `restartOnlyForSettledChanges` | a restart applies only changes that have held for the settle time, so a flapping report restarts nothing (IN-011) |
+| `restartsOncePerWindow` | battery restarts at most once per restart window (IN-012) |
+
+The bound in `hostsFollowNodes` and `noNewVMOnFormerHost`, the settle time
+plus one restart window, is tight: one tick less fails. Until then a
+cordoned Host still gets new MicroVMs (#74).
+
+Two properties do not hold, and are not in `safety`; a scenario test in
+`pools_test.qnt` reaches each:
+
+- `goneLeavesNothing`: a Pool gone from the API server is not in battery.
+  Nothing orders `CreatePool` after the finalizer, so a Pool deleted in
+  between leaves its battery Pool behind (#72,
+  `poolDeletedBeforeFinalizerTest`).
+- `poolsNameKnownHosts`: every Pool in battery names only Hosts battery
+  knows. After a restart that removes a Host, Pools name it until the Pool
+  Controller's `UpdatePool`, and battery's `PickHost` keeps choosing it
+  and failing, so the Pool does not replenish (#73,
+  `removedHostStallsPoolTest`).
+
+The witnesses show that the simulation reaches a flap absorbed within the
+settle time, a restart, a restart that batches two Hosts, two restarts, a
+MicroVM placed on a Host whose Node had stopped being a Host (within the
+bound), an `UpdatePool` for a changed set of Hosts, a Pool with
+`NoEligibleHost`, a Pool deleted under its finalizer, and battery picking a
+Host it does not know.
 
 ## Conventions
 

@@ -68,3 +68,8 @@ check specs/quint/claims.qnt safety \
 check specs/quint/certificates.qnt safety \
   witnessAgentFullyCertified witnessForeignApprovalFailed witnessForeignApprovalSigned \
   witnessAnotherHostDenied witnessSubjectIgnored witnessApprovedAwaitingCA
+
+check specs/quint/pools.qnt safety \
+  witnessFlapAbsorbed witnessRestart witnessBatchedRestart witnessTwoRestarts \
+  witnessVMOnFormerHost witnessPlacementUpdated witnessNoEligibleHost \
+  witnessPoolDeleted witnessUnknownHostPicked
