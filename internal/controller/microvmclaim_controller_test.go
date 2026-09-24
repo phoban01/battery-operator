@@ -92,7 +92,7 @@ func (s *claimVMStub) ClaimVM(context.Context, battery.PoolRef) (*battery.Claim,
 	if err != nil {
 		return nil, err
 	}
-	return &battery.Claim{LeaseID: testClaimLease, VMUID: "vm-1", Host: battery.HostRef{Name: "node-a"}}, nil
+	return &battery.Claim{LeaseID: testClaimLease, VMUID: "vm-1", Host: battery.HostRef{Name: nodeA}}, nil
 }
 
 // ListLeases lists lease-1, expiring at 12:00:30 on the test's day.
@@ -114,7 +114,7 @@ func (s *claimVMStub) ListLeases(context.Context, *battery.PoolRef) ([]*battery.
 func TestMicroVMClaimReconcilerBindsAfterTheFinalizer(t *testing.T) {
 	ctx := context.Background()
 	s, c := newClaimFakeClient(t, testClaim(), &corev1.Node{ObjectMeta: metav1.ObjectMeta{
-		Name:        "node-a",
+		Name:        nodeA,
 		Annotations: map[string]string{execagent.AnnotationAddress: "10.0.0.7:7443"},
 	}})
 	b := &claimVMStub{answers: []error{battery.ErrExhausted, nil}}
@@ -314,7 +314,7 @@ func TestMicroVMClaimReconcilerRenewsWhenTheNodeCannotBeRead(t *testing.T) {
 		Phase:             batteryv1alpha1.MicroVMClaimBound,
 		LeaseID:           testClaimLease,
 		MicroVM:           &batteryv1alpha1.MicroVMReference{UID: testClaimVM},
-		Host:              &batteryv1alpha1.HostReference{NodeName: "node-a"},
+		Host:              &batteryv1alpha1.HostReference{NodeName: nodeA},
 		LeaseExpiresAt:    &expires,
 		ObservedRenewTime: &relayed,
 	}
