@@ -1,0 +1,15 @@
+# The certificates cert-manager issues for the Operator (ADR 0003, decision
+# 4; docs/requirements/09-certificates.md#spiffe-identity): the serving CA
+# and the flintlockd client CA, and battery's flintlockd client certificate.
+# cert-manager has to be installed in the cluster first.
+#
+# The Secret names are written out, not prefixed by kustomize: the Operator
+# reads the CA Secrets by their default names (flintlockd-serving-ca and
+# flintlockd-client-ca), and its RBAC grants those names only.
+resources:
+- issuers.yaml
+- cas.yaml
+- battery-client.yaml
+
+configurations:
+- kustomizeconfig.yaml

@@ -79,6 +79,18 @@ rules:
 - apiGroups:
   - ""
   resourceNames:
+  - battery-operator-battery-config
+  resources:
+  - configmaps
+  verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - ""
+  resourceNames:
   - flintlockd-ca
   resources:
   - configmaps

@@ -74,3 +74,9 @@ func HostID(trustDomain, node string) string {
 func ExecAgentID(trustDomain, node string) string {
 	return "spiffe://" + trustDomain + "/flintlock/client/exec-agent/" + node
 }
+
+// BatteryID is the SPIFFE ID of battery's flintlockd client certificate,
+// which cert-manager issues from the flintlockd client CA (CT-023).
+func BatteryID(trustDomain string) string {
+	return "spiffe://" + trustDomain + "/flintlock/client/battery"
+}

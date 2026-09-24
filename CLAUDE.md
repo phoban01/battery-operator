@@ -132,7 +132,9 @@ Now:
 |------|------|
 | `cmd/main.go` | The Operator's manager entry point |
 | `internal/battery/` | The Operator's battery gRPC client (#8); pins battery v0.3.3 |
-| `config/` | Kustomize Manifests, from kubebuilder |
+| `internal/batterysidecar/` | battery as the Operator's sidecar: its configuration file, and restarting it (DP-006) |
+| `config/` | Kustomize Manifests, from kubebuilder; `config/default` is the entry point, with battery as a sidecar and cert-manager's certificates (`config/certificates`) |
+| `internal/manifests/` | Tests of the Manifests as `kustomize build` renders them |
 | `test/e2e/`, `test/utils/` | kubebuilder's e2e tests, against kind |
 | `docs/adr/` | Architecture decision records |
 | `docs/requirements/` | EARS requirements, `.duvet/` their configs (code, and models) and snapshot |

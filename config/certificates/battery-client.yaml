@@ -1,0 +1,39 @@
+# battery's flintlockd client certificate (ADR 0003, decision 4), mounted
+# into battery's container by the Operator's Deployment (DP-005). Its only
+# subject alternative name is battery's SPIFFE ID; it has no common name.
+# The trust domain has to be the Operator's --trust-domain.
+#
+# poolmgrd v0.3.3 loads its client certificate once, at startup, so a
+# renewed certificate takes effect only when battery restarts (#83).
+#= docs/requirements/09-certificates.md#spiffe-identity
+#/ The Manifests SHALL issue battery's client certificate from the
+#/ `flintlockd` client CA with cert-manager, naming
+#/ `spiffe://<trust domain>/flintlock/client/battery` as its only subject
+#/ alternative name.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: battery-flintlockd-client
+  namespace: system
+  labels:
+    app.kubernetes.io/name: battery-operator
+    app.kubernetes.io/component: battery
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  secretName: battery-flintlockd-client
+  uris:
+  - spiffe://battery.liquidmetal-x.dev/flintlock/client/battery
+  duration: 2160h
+  renewBefore: 720h
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
+  usages:
+  - digital signature
+  - key encipherment
+  - client auth
+  issuerRef:
+    group: cert-manager.io
+    kind: Issuer
+    name: flintlockd-client-ca

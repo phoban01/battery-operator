@@ -1,0 +1,31 @@
+# selfsigned issues the two CAs, each its own root. flintlockd-client-ca
+# issues battery's client certificate from the flintlockd client CA; the
+# Exec Agents' client certificates come from the same CA, signed by the
+# Operator through CertificateSigningRequests (CT-002), not by cert-manager.
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: selfsigned
+  namespace: system
+  labels:
+    app.kubernetes.io/name: battery-operator
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  selfSigned: {}
+---
+#= docs/requirements/09-certificates.md#spiffe-identity
+#/ The Manifests SHALL issue battery's client certificate from the
+#/ `flintlockd` client CA with cert-manager, naming
+#/ `spiffe://<trust domain>/flintlock/client/battery` as its only subject
+#/ alternative name.
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: flintlockd-client-ca
+  namespace: system
+  labels:
+    app.kubernetes.io/name: battery-operator
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  ca:
+    secretName: flintlockd-client-ca
