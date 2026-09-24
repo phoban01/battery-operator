@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -118,19 +119,14 @@ func TestPoolStatusFollowsBatteryEvents(t *testing.T) {
 	bc, fb := startPoolFakeBatteryWith(t, fakebattery.Config{Hosts: hosts})
 
 	pool := finalizedPool()
-	k8s := newPoolFakeClient(t, pool)
-	r := &PoolReconciler{Client: k8s, Battery: bc, Clock: clock.NewFake(poolTestEpoch)}
+	k8s := newPoolFakeClient(t, pool, &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: testHostA}})
+	r := &PoolReconciler{Client: k8s, Battery: bc, Hosts: newStubHosts(testHostA), Clock: clock.NewFake(poolTestEpoch)}
 	key := client.ObjectKeyFromObject(pool)
 	ref := poolRef(pool)
 
-	// Declare the Pool, then place it on host-a in battery, as #20 will.
+	// Declare the Pool, which places it on host-a.
 	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key}); err != nil {
 		t.Fatalf("Reconcile: %v", err)
-	}
-	placed := poolSpecToBattery(pool)
-	placed.FlintlockHosts = []string{testHostA}
-	if _, err := bc.UpdatePool(ctx, placed); err != nil {
-		t.Fatalf("UpdatePool: %v", err)
 	}
 
 	events := NewPoolEvents(bc, k8s, time.Hour)

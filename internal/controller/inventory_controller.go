@@ -54,7 +54,11 @@ type InventoryReconciler struct {
 	// Hosts is where the Hosts battery runs with are published for the
 	// Pool Controller.
 	Hosts *inventory.HostSet
-	// Options are the settle time and the restart window.
+	// Pools lists the Pools battery holds, so that a restart that removes
+	// a Host waits for them to drop it (IN-013): the battery client.
+	Pools inventory.PoolLister
+	// Options are the settle time, the restart window and the drain
+	// timeout.
 	Options inventory.Options
 	// Clock defaults to clock.Real.
 	Clock clock.Clock
@@ -87,6 +91,7 @@ func (r *InventoryReconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ct
 		Config:    config,
 		State:     r.state,
 		HostSet:   r.Hosts,
+		Pools:     r.Pools,
 		Store:     r.Store,
 		Restarter: r.Restarter,
 		Log:       logf.FromContext(ctx),
@@ -102,8 +107,8 @@ func (r *InventoryReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	if err := r.Options.Validate(); err != nil {
 		return err
 	}
-	if r.Store == nil || r.Restarter == nil || r.Hosts == nil {
-		return errors.New("the Inventory Controller needs a Store, a Restarter and a HostSet")
+	if r.Store == nil || r.Restarter == nil || r.Hosts == nil || r.Pools == nil {
+		return errors.New("the Inventory Controller needs a Store, a Restarter, a HostSet and battery's Pools")
 	}
 	return ctrl.NewControllerManagedBy(mgr).
 		Named("inventory").

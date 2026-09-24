@@ -13,7 +13,7 @@ code. They do not replace Go tests. How they cite requirements is in
 | `claims_test.qnt` | Scenario tests for `claims.qnt`, one interleaving each |
 | `certificates.qnt` | Certificate approval and signing (CT-001 to CT-020; EA-061, EA-062, EA-068; ADR 0003 and ADR 0004) |
 | `certificates_test.qnt` | Scenario tests for `certificates.qnt` |
-| `pools.qnt` | Pools, placement and inventory: the Pool Controller and the Inventory Controller against battery (PO-001 to PO-012, IN-001 to IN-012; ADR 0001, consequence 1) |
+| `pools.qnt` | Pools, placement and inventory: the Pool Controller and the Inventory Controller against battery (PO-001 to PO-012, IN-001 to IN-013; ADR 0001, consequence 1) |
 | `pools_test.qnt` | Scenario tests for `pools.qnt` |
 
 ## Running them
@@ -39,7 +39,7 @@ quint test specs/quint/pools_test.qnt
 quint run specs/quint/pools.qnt --invariant safety --max-steps 60 --max-samples 20000 \
   --witnesses witnessFlapAbsorbed witnessRestart witnessBatchedRestart witnessTwoRestarts \
   witnessVMOnFormerHost witnessPlacementUpdated witnessNoEligibleHost \
-  witnessPoolDeleted witnessUnknownHostPicked
+  witnessPoolDeleted witnessDrainedForPool
 ```
 
 A violation prints the trace that breaks the invariant and the seed that
@@ -225,12 +225,16 @@ consequence 1). The steps are:
   the controller opens a restart window; when the window closes, it writes
   every change settled by then to battery's configuration and restarts
   battery once (IN-010, IN-012). A window whose changes flapped back closes
-  without a restart.
+  without a restart. Before a restart that removes Hosts, it publishes the
+  Hosts that remain and restarts only once no Pool in battery names a
+  leaving Host, or, standing for the drain timeout, once the Pool
+  Controller has nothing left to do (IN-013). It publishes a joining Host
+  only once battery has restarted with it.
 - **the Pool Controller:** add the finalizer, `CreatePool`, `UpdatePool` on
   a new generation or a new set of matching Hosts, the `NoEligibleHost`
   condition, and `DeletePool` under the finalizer (PO-001 to PO-003,
-  PO-010 to PO-012). It resolves a selector against the Hosts battery runs
-  with whose Nodes exist.
+  PO-010 to PO-012). It resolves a selector against the Hosts the
+  Inventory Controller has published whose Nodes exist.
 - **battery:** replenishes each Pool on the least loaded Host in its
   `flintlock_hosts`, as its `PickHost` does. It does not check
   `flintlock_hosts` against its Hosts, and provisioning on a Host it does
@@ -248,37 +252,43 @@ Invariants, all in `safety`:
 
 | Invariant | Checks |
 |-----------|--------|
-| `poolHostsMatchSelector` | once the Pool Controller is idle, battery holds every live Pool at its current spec, and its `flintlock_hosts` are exactly the Hosts battery runs with that its selector matches (PO-002, PO-010, PO-011) |
+| `poolHostsMatchSelector` | once the Pool Controller is idle, battery holds every live Pool at its current spec, and its `flintlock_hosts` are exactly the published Hosts that its selector matches (PO-002, PO-010, PO-011) |
 | `noEligibleHostWhenNoneMatch` | once the Pool Controller is idle, a Pool says `NoEligibleHost` exactly when its selector matches no Host (PO-012) |
 | `finalizerRemovedOnlyAfterDelete` | a Pool whose finalizer the controller removed is not in battery (PO-003) |
 | `hostsFollowNodes` | battery's Hosts are the Nodes that are Hosts, except for a change younger than the settle time plus one restart window (IN-001, IN-002, IN-010, IN-011) |
 | `noNewVMOnFormerHost` | a cordoned, deleted or not-ready Host gets no new MicroVM once its change has settled and its window has closed (IN-001, IN-002) |
 | `restartOnlyForSettledChanges` | a restart applies only changes that have held for the settle time, so a flapping report restarts nothing (IN-011) |
 | `restartsOncePerWindow` | battery restarts at most once per restart window (IN-012) |
+| `poolsNameKnownHosts` | while battery runs, every Pool in battery names only Hosts battery knows, so `PickHost` never picks one it cannot provision on; the one exception is a Pool the Pool Controller cannot update when the drain timeout passes, until it is next written (IN-013, #73) |
 
 The bound in `hostsFollowNodes` and `noNewVMOnFormerHost`, the settle time
 plus one restart window, is tight: one tick less fails. Until then a
 cordoned Host still gets new MicroVMs, as 04-inventory.md says.
 
-Two properties do not hold, and are not in `safety`; a scenario test in
-`pools_test.qnt` reaches each:
+`poolsNameKnownHosts` was a finding (#73): before IN-013, a restart that
+removed a Host left the Pools naming it until the Pool Controller's
+`UpdatePool`, and battery's `PickHost` kept choosing it and failing.
+`removedHostDrainedTest` walks that scenario now, and
+`restartWaitsForThePoolsTest` shows the restart refused while the Pool
+still names the Host. The Go code stands the drain timeout's wait for a
+Pool the Pool Controller cannot update; the model lets the timeout pass
+only once the Pool Controller has nothing left to do, which leaves a Pool
+battery holds that the cluster does not (#72, `orphanPastDrainTest`).
+
+One property does not hold, and is not in `safety`; a scenario test in
+`pools_test.qnt` reaches it:
 
 - `goneLeavesNothing`: a Pool gone from the API server is not in battery.
   Nothing orders `CreatePool` after the finalizer, so a Pool deleted in
   between leaves its battery Pool behind (#72,
   `poolDeletedBeforeFinalizerTest`).
-- `poolsNameKnownHosts`: every Pool in battery names only Hosts battery
-  knows. After a restart that removes a Host, Pools name it until the Pool
-  Controller's `UpdatePool`, and battery's `PickHost` keeps choosing it
-  and failing, so the Pool does not replenish (#73,
-  `removedHostStallsPoolTest`).
 
 The witnesses show that the simulation reaches a flap absorbed within the
 settle time, a restart, a restart that batches two Hosts, two restarts, a
 MicroVM placed on a Host whose Node had stopped being a Host (within the
 bound), an `UpdatePool` for a changed set of Hosts, a Pool with
-`NoEligibleHost`, a Pool deleted under its finalizer, and battery picking a
-Host it does not know.
+`NoEligibleHost`, a Pool deleted under its finalizer, and a Pool dropping a
+leaving Host before the restart that removes it.
 
 ## Conventions
 

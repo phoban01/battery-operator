@@ -39,8 +39,8 @@ const (
 	PoolReasonBelowSize = "BelowSize"
 	// PoolReasonNotInBattery: battery does not hold the Pool (PO-022).
 	PoolReasonNotInBattery = "NotInBattery"
-	// PoolReasonNoEligibleHost: no Host can run the Pool's MicroVMs
-	// (PO-022; PO-012 once #20 resolves the selector).
+	// PoolReasonNoEligibleHost: the Pool's selector matches no Host
+	// (PO-012, PO-022).
 	PoolReasonNoEligibleHost = "NoEligibleHost"
 
 	// PoolReasonNoneAvailable: Exhausted is true; battery reports no
@@ -115,11 +115,12 @@ func (poolExhaustion) Reconcile(_ context.Context, s *poolScope) (poolNext, erro
 	return poolContinue, nil
 }
 
-// poolReadiness sets the Ready condition from battery's answer and the
-// counts, unless poolRejection has already set it to battery's refusal of
-// the spec, which then stands.
+// poolReadiness sets the Ready condition from the Hosts poolPlacement
+// found, battery's answer and the counts, unless poolRejection has already
+// set it to battery's refusal of the spec, which then stands.
 //
-// Which Hosts the Pool's selector matches is poolHostsMatched's to say.
+// A selector that matches no Host is reported first, whether or not
+// battery holds the Pool: it is what the Pool's owner has to change.
 type poolReadiness struct{}
 
 func (poolReadiness) Reconcile(_ context.Context, s *poolScope) (poolNext, error) {
@@ -134,12 +135,16 @@ func (poolReadiness) Reconcile(_ context.Context, s *poolScope) (poolNext, error
 	st := s.Pool.Status
 	total := st.Available + st.Leased + st.Provisioning
 	switch {
+	case len(s.hosts) == 0:
+		//= docs/requirements/03-pools.md#placement
+		//# While a Pool's selector matches no Host, the Pool Controller
+		//# SHALL set the Pool's condition `Ready` false with the reason
+		//# `NoEligibleHost`.
+		s.setCondition(batteryv1alpha1.PoolConditionReady, metav1.ConditionFalse,
+			PoolReasonNoEligibleHost, "The Pool's node selector matches no Host")
 	case s.held == nil:
 		s.setCondition(batteryv1alpha1.PoolConditionReady, metav1.ConditionFalse,
 			PoolReasonNotInBattery, "battery does not hold the Pool")
-	case !poolHostsMatched(s):
-		s.setCondition(batteryv1alpha1.PoolConditionReady, metav1.ConditionFalse,
-			PoolReasonNoEligibleHost, "No Host can run the Pool's MicroVMs")
 	case total < s.Pool.Spec.Size:
 		s.setCondition(batteryv1alpha1.PoolConditionReady, metav1.ConditionFalse, PoolReasonBelowSize,
 			fmt.Sprintf("%d of %d MicroVMs are available, leased or provisioning", total, s.Pool.Spec.Size))
@@ -148,18 +153,4 @@ func (poolReadiness) Reconcile(_ context.Context, s *poolScope) (poolNext, error
 			fmt.Sprintf("%d of %d MicroVMs are available, leased or provisioning", total, s.Pool.Spec.Size))
 	}
 	return poolContinue, nil
-}
-
-// poolHostsMatched reports whether the Pool's selector matches a Host, the
-// second clause of PO-022.
-//
-// Until #20 resolves spec.placement.nodeSelector against the Hosts (PO-010),
-// this is whether battery's Pool lists a Host in its flintlock_hosts. Once
-// #20 lands, PO-010 makes that list exactly the Hosts the selector matches,
-// so the answer is the same; #20 replaces this with the matches its
-// placement subreconciler leaves in the scope, which also gives PO-012 its
-// NoEligibleHost. Until then, every Pool the Pool Controller declares has
-// an empty flintlock_hosts (poolSpecToBattery) and so is not Ready.
-func poolHostsMatched(s *poolScope) bool {
-	return s.held != nil && len(s.held.Spec.FlintlockHosts) > 0
 }

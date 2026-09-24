@@ -35,8 +35,11 @@ covers the rest.
 
 battery v0.3.3 has each Pool list its Hosts by name. The Pool Controller
 resolves the selector against the Hosts the Inventory Controller has given
-battery, so adding a Host to the cluster reaches every Pool that selects it
-with no change to any Pool (ADR 0001, consequence 1).
+battery and is not about to remove (IN-013), so adding a Host to the
+cluster reaches every Pool that selects it with no change to any Pool
+(ADR 0001, consequence 1). It watches those Hosts and the Nodes' labels,
+so a Host joining or leaving, or a Node relabelled into or out of a
+selector, updates the Pools at once.
 
 ## Status {#pool-status}
 

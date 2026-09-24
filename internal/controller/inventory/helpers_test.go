@@ -30,6 +30,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
+	"github.com/phoban01/battery-operator/internal/battery"
 	"github.com/phoban01/battery-operator/internal/batterysidecar"
 	"github.com/phoban01/battery-operator/internal/clock"
 )
@@ -39,6 +40,7 @@ import (
 const (
 	settle = 30 * time.Second
 	window = time.Minute
+	drain  = 10 * time.Second
 )
 
 // Two Hosts and their flintlockd addresses.
@@ -101,6 +103,7 @@ type harness struct {
 	state     *State
 	hosts     *HostSet
 	restarter *fakeRestarter
+	pools     *fakePools
 	options   Options
 }
 
@@ -146,7 +149,8 @@ func newHarness(t *testing.T, nodes ...*corev1.Node) *harness {
 		state:     NewState(),
 		hosts:     NewHostSet(),
 		restarter: &fakeRestarter{clock: clk},
-		options:   Options{SettleTime: settle, RestartWindow: window},
+		pools:     &fakePools{},
+		options:   Options{SettleTime: settle, RestartWindow: window, DrainTimeout: drain},
 	}
 }
 
@@ -167,6 +171,7 @@ func (h *harness) scope() *Scope {
 		Config:    config,
 		State:     h.state,
 		HostSet:   h.hosts,
+		Pools:     h.pools,
 		Store:     h.store,
 		Restarter: h.restarter,
 		Log:       logr.Discard(),
@@ -286,4 +291,47 @@ func hostsOf(f *batterysidecar.File) Hosts {
 		out[h.Name] = h.Address
 	}
 	return out
+}
+
+// fakePools is battery's Pools as Drain lists them: each Pool's
+// flintlock_hosts.
+type fakePools struct {
+	mu    sync.Mutex
+	hosts map[string][]string
+	err   error
+	lists int
+}
+
+func (f *fakePools) ListPools(context.Context, string) ([]*battery.Pool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lists++
+	if f.err != nil {
+		return nil, f.err
+	}
+	var out []*battery.Pool
+	for name, hosts := range f.hosts {
+		out = append(out, &battery.Pool{Spec: battery.PoolSpec{
+			Ref:            battery.PoolRef{Namespace: "ci", Name: name},
+			FlintlockHosts: hosts,
+		}})
+	}
+	return out, nil
+}
+
+// set places the Pool of that name on hosts.
+func (f *fakePools) set(name string, hosts ...string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.hosts == nil {
+		f.hosts = map[string][]string{}
+	}
+	f.hosts[name] = hosts
+}
+
+// fail makes ListPools fail with err, or succeed again with nil.
+func (f *fakePools) fail(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.err = err
 }

@@ -7,8 +7,9 @@
 // consequence 1):
 //
 // - the Inventory Controller: decide which Nodes are Hosts (IN-001,
-//   IN-002), let a change settle (IN-011), and apply the settled changes in
-//   one restart of battery per restart window (IN-010, IN-012);
+//   IN-002), let a change settle (IN-011), apply the settled changes in
+//   one restart of battery per restart window (IN-010, IN-012), and before
+//   a restart that removes Hosts, have the Pools drop them (IN-013);
 // - the Pool Controller: the finalizer, CreatePool, UpdatePool on a new
 //   generation or a new set of matching Hosts, the NoEligibleHost
 //   condition, and DeletePool under the finalizer (PO-001 to PO-003,
@@ -24,9 +25,11 @@
 //   Pools are created, changed and deleted, leased MicroVMs are released,
 //   and time passes.
 //
-// The Pool Controller resolves a selector against the Hosts battery is
-// running with, which are the Hosts "the Inventory Controller has given
-// battery" (03-pools.md, Placement), and against the Nodes that exist.
+// The Pool Controller resolves a selector against the Hosts the Inventory
+// Controller has published: the Hosts battery is running with, less any a
+// restart is about to remove (IN-013), which are the Hosts "the Inventory
+// Controller has given battery" (03-pools.md, Placement), and against the
+// Nodes that exist.
 //
 // Time: the controllers act promptly. Time does not pass while the
 // Inventory Controller has a restart window to open or close, or while
@@ -86,6 +89,10 @@ module pools {
     config: Set[HostName],
     // when the open restart window opened (IN-012)
     window: Option[Time],
+    // the Hosts published to the Pool Controller (the HostSet): the Hosts
+    // battery runs with, less those a restart is about to remove (IN-013).
+    // A Host joins it only once battery has restarted with it.
+    published: Set[HostName],
   }
 
   // A restart of battery, and the age of each change it applied.
@@ -108,6 +115,15 @@ module pools {
     placementUpdates: int,
     // provisioning attempts battery made on a Host it does not know
     unknownHostPicks: int,
+    // times the Inventory Controller published fewer Hosts while a Pool in
+    // battery named one it is about to remove (IN-013)
+    drainsWithPools: int,
+    // restarts that removed a Host a Pool in battery still named, after
+    // the drain timeout (IN-013)
+    restartsPastDrain: int,
+    // the Pools in battery that named a Host such a restart removed, until
+    // the Pool Controller next writes them
+    staleAfterDrain: Set[PoolName],
   }
 
   var now: Time
@@ -157,10 +173,10 @@ module pools {
 
   pure def matches(selector: Set[Label], labels: Set[Label]): bool = selector.subseteq(labels)
 
-  // The Hosts a Pool's selector matches: the Hosts battery runs with whose
-  // Nodes exist and match.
+  // The Hosts a Pool's selector matches: the Hosts published to the Pool
+  // Controller (IN-013) whose Nodes exist and match.
   def resolve(p: PoolName): Set[HostName] =
-    battery.hosts.filter(h => present.contains(h) and matches(obj(p).spec.nodeSelector, nodes.get(h).labels))
+    inv.published.filter(h => present.contains(h) and matches(obj(p).spec.nodeSelector, nodes.get(h).labels))
 
   //@= docs/requirements/03-pools.md#placement
   //@# While a Pool's selector matches no Host, the Pool Controller
@@ -215,7 +231,7 @@ module pools {
     changedAt' = HOSTS.mapBy(_ => 0),
     pools' = POOLS.mapBy(_ => PoolUnborn),
     battery' = { up: true, hosts: HOSTS, pools: Map(), vms: Set(), nextVM: 1 },
-    inv' = { config: HOSTS, window: None },
+    inv' = { config: HOSTS, window: None, published: HOSTS },
     hist' = {
       restarts: List(),
       births: Set(),
@@ -223,6 +239,9 @@ module pools {
       finalized: Set(),
       placementUpdates: 0,
       unknownHostPicks: 0,
+      drainsWithPools: 0,
+      restartsPastDrain: 0,
+      staleAfterDrain: Set(),
     },
   }
 
@@ -368,11 +387,15 @@ module pools {
   }
 
   // battery starts, and reads its Hosts from its configuration (ADR 0001,
-  // consequence 1). Its Pools and MicroVMs survive in its database.
+  // consequence 1). Its Pools and MicroVMs survive in its database. The
+  // restart returns once battery answers, and the Inventory Controller
+  // publishes the Hosts it runs with: a joining Host reaches the Pool
+  // Controller only now.
   action batteryStart: bool = all {
     not(battery.up),
     battery' = { ...battery, up: true, hosts: inv.config },
-    now' = now, nodes' = nodes, present' = present, changedAt' = changedAt, pools' = pools, inv' = inv, hist' = hist,
+    inv' = { ...inv, published: inv.config },
+    now' = now, nodes' = nodes, present' = present, changedAt' = changedAt, pools' = pools, hist' = hist,
   }
 
   // ---------------------------------------------------------------------
@@ -404,27 +427,82 @@ module pools {
   //
   // The window closes: every change that has settled by now goes into one
   // restart. If the changes flapped back meanwhile, there is nothing to
-  // apply and battery is left alone.
+  // apply and battery is left alone, and any Host a drain held back from
+  // the Pool Controller is published again.
   action invCloseWindow: bool = all {
     canCloseWindow,
     desired == inv.config,
-    inv' = { ...inv, window: None },
+    inv' = { ...inv, window: None, published: inv.config },
     now' = now, nodes' = nodes, present' = present, changedAt' = changedAt, pools' = pools, battery' = battery, hist' = hist,
+  }
+
+  // The Hosts the next restart would remove.
+  def leaving: Set[HostName] = inv.config.exclude(desired)
+
+  // The Pools in battery that name a Host the next restart would remove.
+  def poolsNamingLeaving: Set[PoolName] =
+    battery.pools.keys().filter(p => battery.pools.get(p).flintlockHosts.intersect(leaving) != Set())
+
+  // The Hosts the Pool Controller should resolve against before the
+  // restart: battery's, less the leaving ones. A joining Host waits for
+  // the restart.
+  def remaining: Set[HostName] = inv.config.intersect(desired)
+
+  //@= docs/requirements/04-inventory.md#applying
+  //@# When a restart of battery would remove a Host, the Inventory
+  //@# Controller SHALL first give the Pool Controller the Hosts that remain,
+  //@# and SHALL restart battery only once no Pool in battery names the removed
+  //@# Host in its `flintlock_hosts` or the configured drain timeout has passed.
+  //
+  // Drain: the window has closed with Hosts to remove; publish the Hosts
+  // that remain, so the Pool Controller drops the leaving ones.
+  action invDrain: bool = all {
+    canCloseWindow,
+    desired != inv.config,
+    inv.published != remaining,
+    inv' = { ...inv, published: remaining },
+    hist' = if (poolsNamingLeaving != Set()) { ...hist, drainsWithPools: hist.drainsWithPools + 1 } else hist,
+    now' = now, nodes' = nodes, present' = present, changedAt' = changedAt, pools' = pools, battery' = battery,
+  }
+
+  // Write the configuration and restart battery.
+  action restartWith(pastDrain: bool): bool = all {
+    canCloseWindow,
+    desired != inv.config,
+    inv.published == remaining,
+    val changed = desired.exclude(inv.config).union(inv.config.exclude(desired))
+    all {
+      inv' = { ...inv, config: desired, window: None },
+      battery' = { ...battery, up: false },
+      hist' = { ...hist,
+        restarts: hist.restarts.append({ at: now, changed: changed, ages: changed.map(h => age(h)) }),
+        restartsPastDrain: if (pastDrain) hist.restartsPastDrain + 1 else hist.restartsPastDrain,
+        staleAfterDrain: if (pastDrain) hist.staleAfterDrain.union(poolsNamingLeaving) else hist.staleAfterDrain,
+      },
+    },
+    now' = now, nodes' = nodes, present' = present, changedAt' = changedAt, pools' = pools,
   }
 
   //@= docs/requirements/04-inventory.md#applying
   //@# When the set of Hosts changes, the Inventory Controller SHALL
   //@# write the new list to battery's configuration and restart battery.
+  //
+  // Once no Pool in battery names a leaving Host (IN-013).
   action invRestart: bool = all {
-    canCloseWindow,
-    desired != inv.config,
-    val changed = desired.exclude(inv.config).union(inv.config.exclude(desired))
-    all {
-      inv' = { config: desired, window: None },
-      battery' = { ...battery, up: false },
-      hist' = { ...hist, restarts: hist.restarts.append({ at: now, changed: changed, ages: changed.map(h => age(h)) }) },
-    },
-    now' = now, nodes' = nodes, present' = present, changedAt' = changedAt, pools' = pools,
+    poolsNamingLeaving == Set(),
+    restartWith(false),
+  }
+
+  // The drain timeout passed with a Pool in battery still naming a leaving
+  // Host (IN-013). The Pool Controller acts within far less than the
+  // timeout, so the model lets the timeout pass only once the Pool
+  // Controller has nothing left to do: the Pool is one it cannot update,
+  // which in this model is a Pool battery holds that the cluster does not
+  // (#72).
+  action invRestartPastDrain: bool = all {
+    poolsNamingLeaving != Set(),
+    poolControllerIdle,
+    restartWith(true),
   }
 
   // ---------------------------------------------------------------------
@@ -490,7 +568,10 @@ module pools {
     canUpdate(p),
     battery' = { ...battery, pools: battery.pools.set(p, declared(p)) },
     pools' = setPool(p, { ...obj(p), status: { ...obj(p).status, observedGeneration: obj(p).generation, ready: readyFor(resolve(p)) } }),
-    hist' = if (hostsChanged(p)) { ...hist, placementUpdates: hist.placementUpdates + 1 } else hist,
+    hist' = { ...hist,
+      placementUpdates: if (hostsChanged(p)) hist.placementUpdates + 1 else hist.placementUpdates,
+      staleAfterDrain: hist.staleAfterDrain.exclude(Set(p)),
+    },
     now' = now, nodes' = nodes, present' = present, changedAt' = changedAt, inv' = inv,
   }
 
@@ -509,7 +590,7 @@ module pools {
       vms: battery.vms.filter(v => v.pool != p),
     },
     pools' = pools.set(p, PoolGone({ ...obj(p), hasFinalizer: false })),
-    hist' = { ...hist, finalized: hist.finalized.union(Set(p)) },
+    hist' = { ...hist, finalized: hist.finalized.union(Set(p)), staleAfterDrain: hist.staleAfterDrain.exclude(Set(p)) },
     now' = now, nodes' = nodes, present' = present, changedAt' = changedAt, inv' = inv,
   }
 
@@ -554,7 +635,9 @@ module pools {
       // the Inventory Controller
       invOpenWindow,
       invCloseWindow,
+      invDrain,
       invRestart,
+      invRestartPastDrain,
       // the Pool Controller
       ctlAddFinalizer(p),
       ctlCreatePool(p),
@@ -568,12 +651,12 @@ module pools {
 
   // PO-010, PO-011, PO-002: once the Pool Controller has nothing left to
   // do, battery holds every live Pool with its current spec, and its
-  // flintlock_hosts are exactly the Hosts battery runs with that the
-  // Pool's selector matches.
+  // flintlock_hosts are exactly the Hosts published to it (battery's, less
+  // any a restart is about to remove) that the Pool's selector matches.
   val poolHostsMatchSelector: bool =
     poolControllerIdle implies POOLS.forall(p => (live(p) and not(obj(p).deleting)) implies and {
       inBattery(p),
-      battery.pools.get(p).flintlockHosts == battery.hosts.filter(h => and {
+      battery.pools.get(p).flintlockHosts == inv.published.filter(h => and {
         present.contains(h),
         obj(p).spec.nodeSelector.subseteq(nodes.get(h).labels),
       }),
@@ -619,6 +702,17 @@ module pools {
     hist.restarts.indices().forall(i =>
       i > 0 implies hist.restarts[i].at - hist.restarts[i - 1].at >= WINDOW)
 
+  // IN-013 (#73): while battery runs, every Pool in battery names only
+  // Hosts battery knows, so battery v0.3.3's PickHost never picks a Host
+  // it cannot provision on. A Host joins the Pools only after the restart
+  // that gives battery it, and leaves them before the restart that takes
+  // it away. The one exception is a Pool the Pool Controller cannot update
+  // when the drain timeout passes (a Pool battery holds that the cluster
+  // does not, #72), until the Pool Controller next writes it.
+  val poolsNameKnownHosts: bool =
+    battery.up implies battery.pools.keys().forall(p =>
+      hist.staleAfterDrain.contains(p) or battery.pools.get(p).flintlockHosts.subseteq(battery.hosts))
+
   // All the invariants CI checks.
   val safety: bool = and {
     poolHostsMatchSelector,
@@ -628,6 +722,7 @@ module pools {
     noNewVMOnFormerHost,
     restartOnlyForSettledChanges,
     restartsOncePerWindow,
+    poolsNameKnownHosts,
   }
 
   // Findings: properties the requirements do not yet guarantee. Not in
@@ -637,14 +732,6 @@ module pools {
   // after CreatePool but before its finalizer (#72).
   val goneLeavesNothing: bool =
     POOLS.forall(p => isGonePool(slot(p)) implies not(inBattery(p)))
-
-  // Every Pool in battery names only Hosts battery knows. Fails from the
-  // restart that removes a Host until the Pool Controller's UpdatePool;
-  // meanwhile battery v0.3.3 picks the removed Host, which has no MicroVMs,
-  // and fails to provision (#73).
-  val poolsNameKnownHosts: bool =
-    battery.up implies battery.pools.keys().forall(p =>
-      battery.pools.get(p).flintlockHosts.subseteq(battery.hosts))
 
   // ---------------------------------------------------------------------
   // Witnesses: states quint run reports reaching, to show the simulation
@@ -668,6 +755,10 @@ module pools {
     POOLS.exists(p => live(p) and obj(p).status.ready.reason == NoEligibleHost)
   // a Pool was deleted in battery under its finalizer
   val witnessPoolDeleted: bool = hist.finalized != Set()
-  // battery tried to provision on a Host it does not know
+  // the Inventory Controller published fewer Hosts while a Pool in battery
+  // named one about to leave, and the Pool dropped it before the restart
+  val witnessDrainedForPool: bool = hist.drainsWithPools > 0 and hist.restarts.length() > 0
+  // battery tried to provision on a Host it does not know: since IN-013,
+  // only for a Pool the cluster lacks, after the drain timeout
   val witnessUnknownHostPicked: bool = hist.unknownHostPicks > 0
 }

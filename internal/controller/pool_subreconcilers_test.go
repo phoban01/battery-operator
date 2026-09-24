@@ -112,7 +112,7 @@ func TestDeletedPoolLeavesBatteryBeforeItsFinalizer(t *testing.T) {
 			b := newStubBattery()
 			pool := deletedPool()
 			if tc.held {
-				b.pools[poolRef(pool)] = poolSpecToBattery(pool)
+				b.pools[poolRef(pool)] = poolSpecToBattery(pool, nil)
 			}
 			b.deleteErr = tc.deleteErr
 			s := newTestPoolScope(pool, b)
@@ -185,7 +185,7 @@ func TestPoolBatteryHoldsIsNotCreatedAgain(t *testing.T) {
 	b := newStubBattery()
 	pool := finalizedPool()
 	pool.Status.ObservedGeneration = 1
-	b.pools[poolRef(pool)] = poolSpecToBattery(pool)
+	b.pools[poolRef(pool)] = poolSpecToBattery(pool, nil)
 	s := newTestPoolScope(pool, b)
 	if err := runPoolChain(context.Background(), s, poolChain()); err != nil {
 		t.Fatalf("chain: %v", err)
@@ -219,7 +219,7 @@ func TestPoolIsNotCreatedWhileBatteryIsUnavailable(t *testing.T) {
 func TestPoolWhoseGenerationMovedIsUpdated(t *testing.T) {
 	b := newStubBattery()
 	pool := finalizedPool()
-	b.pools[poolRef(pool)] = poolSpecToBattery(pool)
+	b.pools[poolRef(pool)] = poolSpecToBattery(pool, nil)
 	pool.Status.ObservedGeneration = 1
 	pool.Generation = 2
 	pool.Spec.Size = 5
@@ -241,7 +241,7 @@ func TestPoolWhoseGenerationMovedIsUpdated(t *testing.T) {
 func TestFailedUpdateLeavesObservedGeneration(t *testing.T) {
 	b := newStubBattery()
 	pool := finalizedPool()
-	b.pools[poolRef(pool)] = poolSpecToBattery(pool)
+	b.pools[poolRef(pool)] = poolSpecToBattery(pool, nil)
 	pool.Status.ObservedGeneration = 1
 	pool.Generation = 2
 	b.updateErr = battery.ErrUnavailable
@@ -277,7 +277,7 @@ func TestPoolBatteryRefusesIsRejected(t *testing.T) {
 			b := newStubBattery()
 			pool := finalizedPool()
 			if tc.held {
-				b.pools[poolRef(pool)] = poolSpecToBattery(pool)
+				b.pools[poolRef(pool)] = poolSpecToBattery(pool, nil)
 				pool.Status.ObservedGeneration = 1
 				pool.Generation = 2
 			}
@@ -308,7 +308,7 @@ func TestPoolBatteryRefusesIsRejected(t *testing.T) {
 func TestAcceptedPoolClearsItsRejection(t *testing.T) {
 	b := newStubBattery()
 	pool := finalizedPool()
-	b.pools[poolRef(pool)] = poolSpecToBattery(pool)
+	b.pools[poolRef(pool)] = poolSpecToBattery(pool, nil)
 	pool.Status.ObservedGeneration = 1
 	pool.Generation = 2
 	meta.SetStatusCondition(&pool.Status.Conditions, metav1.Condition{

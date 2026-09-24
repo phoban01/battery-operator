@@ -49,8 +49,10 @@ type poolScope struct {
 
 	Client  client.Client
 	Battery battery.Client
-	Log     logr.Logger
-	Clock   clock.Clock
+	// Hosts resolves the Pool's selector to the Hosts it matches.
+	Hosts PoolHosts
+	Log   logr.Logger
+	Clock clock.Clock
 
 	// Result is the result so far.
 	Result ctrl.Result
@@ -64,14 +66,21 @@ type poolScope struct {
 	// hold the Pool. The status subreconcilers read battery's PoolStatus
 	// from it (PO-020).
 	held *battery.Pool
+
+	// hosts are the names, sorted, of the Hosts the Pool's selector
+	// matches, as poolPlacement resolved them in this reconcile: the
+	// Pool's flintlock_hosts in battery (PO-010).
+	hosts []string
 }
 
-func newPoolScope(pool *batteryv1alpha1.Pool, c client.Client, b battery.Client, log logr.Logger, clk clock.Clock) *poolScope {
+func newPoolScope(pool *batteryv1alpha1.Pool, c client.Client, b battery.Client, hosts PoolHosts,
+	log logr.Logger, clk clock.Clock) *poolScope {
 	return &poolScope{
 		Pool:    pool,
 		fetched: pool.DeepCopy(),
 		Client:  c,
 		Battery: b,
+		Hosts:   hosts,
 		Log:     log,
 		Clock:   clk,
 	}

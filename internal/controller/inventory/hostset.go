@@ -50,11 +50,13 @@ func (h Hosts) List() []batterysidecar.Host {
 // published the Hosts battery runs with.
 var ErrNotSynced = errors.New("the Inventory Controller has not yet published battery's Hosts")
 
-// HostSet is the Hosts the Inventory Controller has given battery: the
-// Hosts battery runs with, which is what the Pool Controller resolves a
-// Pool's selector against (03-pools.md, Placement). It changes only once
-// battery has restarted with a new set and answers again, never on the
-// decision alone, so that no Pool names a Host before battery knows it.
+// HostSet is the Hosts the Inventory Controller has given battery and is
+// not about to take away, which is what the Pool Controller resolves a
+// Pool's selector against (03-pools.md, Placement). It gains a Host only
+// once battery has restarted with it and answers again, never on the
+// decision alone, so that no Pool names a Host before battery knows it;
+// and it loses a Host before the restart that removes it (Drain), so that
+// the Pools drop it while battery still knows it (IN-013).
 //
 // It is safe for concurrent use.
 type HostSet struct {

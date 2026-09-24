@@ -18,11 +18,13 @@ package controller
 
 import (
 	"context"
+	"slices"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/go-logr/logr"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -32,6 +34,7 @@ import (
 	batteryv1alpha1 "github.com/phoban01/battery-operator/api/v1alpha1"
 	"github.com/phoban01/battery-operator/internal/battery"
 	"github.com/phoban01/battery-operator/internal/clock"
+	"github.com/phoban01/battery-operator/internal/controller/inventory"
 )
 
 // The test Pool's name and namespace.
@@ -191,8 +194,83 @@ func newPoolFakeClient(t *testing.T, objs ...client.Object) client.Client {
 		Build()
 }
 
-// newTestPoolScope is a scope for pool, with no Kubernetes client: the
+// newTestPoolScope is a scope for pool whose Kubernetes client holds a
+// Node, unlabelled, for each of hosts, and whose Hosts are those. The
+// test Pool's selector is empty, so it matches them all. The
 // subreconcilers never write to the API server.
-func newTestPoolScope(pool *batteryv1alpha1.Pool, b battery.Client) *poolScope {
-	return newPoolScope(pool, nil, b, logr.Discard(), clock.NewFake(poolTestEpoch))
+func newTestPoolScope(pool *batteryv1alpha1.Pool, b battery.Client, hosts ...string) *poolScope {
+	nodes := make([]client.Object, 0, len(hosts))
+	for _, h := range hosts {
+		nodes = append(nodes, &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: h}})
+	}
+	c := fake.NewClientBuilder().WithObjects(nodes...).Build()
+	return newPoolScope(pool, c, b, newStubHosts(hosts...), logr.Discard(), clock.NewFake(poolTestEpoch))
+}
+
+// stubHosts is PoolHosts for the Pool Controller's tests: the Hosts the
+// Inventory Controller has published, matched against the Nodes as
+// inventory.HostSet matches them.
+type stubHosts struct {
+	mu      sync.Mutex
+	names   map[string]bool
+	synced  bool
+	changed chan struct{}
+}
+
+// newStubHosts is a stubHosts published with the Hosts named.
+func newStubHosts(names ...string) *stubHosts {
+	h := &stubHosts{changed: make(chan struct{})}
+	h.publish(names...)
+	return h
+}
+
+// unsyncedStubHosts is a stubHosts the Inventory Controller has not yet
+// published.
+func unsyncedStubHosts() *stubHosts {
+	return &stubHosts{changed: make(chan struct{})}
+}
+
+// publish replaces the Hosts and wakes Changed's waiters.
+func (h *stubHosts) publish(names ...string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.names = map[string]bool{}
+	for _, n := range names {
+		h.names[n] = true
+	}
+	h.synced = true
+	close(h.changed)
+	h.changed = make(chan struct{})
+}
+
+func (h *stubHosts) Synced() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.synced
+}
+
+func (h *stubHosts) Changed() <-chan struct{} {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.changed
+}
+
+func (h *stubHosts) Matching(ctx context.Context, r client.Reader, selector map[string]string) ([]string, error) {
+	if !h.Synced() {
+		return nil, inventory.ErrNotSynced
+	}
+	nodes := &corev1.NodeList{}
+	if err := r.List(ctx, nodes, client.MatchingLabels(selector)); err != nil {
+		return nil, err
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	var names []string
+	for _, n := range nodes.Items {
+		if h.names[n.Name] {
+			names = append(names, n.Name)
+		}
+	}
+	slices.Sort(names)
+	return names, nil
 }
