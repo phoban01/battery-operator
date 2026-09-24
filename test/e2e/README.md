@@ -73,3 +73,14 @@ One `Test*` function per area, each running `testenv.Test` with
 objects, `Assess` steps that cite the requirements they check
 (`//= type=test`), and dry runs (`client.DryRunAll`) wherever the API
 server's answer is the point.
+
+## A smaller cluster
+
+`KIND_CONFIG=<file>` creates the cluster from another kind configuration,
+for example a single control plane labelled
+`battery.liquidmetal-x.dev/host=true`. The cases that need a second Host or
+a Node that is no Host are then skipped. It helps where a multi-node kind
+cluster cannot pass pod traffic between its nodes: a host firewall that
+filters bridged traffic by reverse path (NixOS's default,
+`networking.firewall.checkReversePath`) drops it, and the API server then
+cannot reach cert-manager's webhook.

@@ -62,8 +62,8 @@ func TestExecAgentAdmissionPolicy(t *testing.T) {
 	// Node of another Host and one that is no Host, and clients with the
 	// agent's identity, with and without its node.
 	var (
-		host, otherHost, notHost string
-		asAgent, asAgentNoNode   client.Client
+		host, otherHost, otherGuardHost, notHost string
+		asAgent, asAgentNoNode                   client.Client
 	)
 
 	f := features.New("the Exec Agent's admission policy").
@@ -73,15 +73,16 @@ func TestExecAgentAdmissionPolicy(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(hosts) < 2 {
-				t.Fatalf("the cluster has %d Hosts, want 2", len(hosts))
+			// kind-config.yaml has two Hosts and a control plane that is
+			// none. A smaller cluster (KIND_CONFIG) skips the cases that
+			// need those Nodes; a guard for another Host needs only a name.
+			host, otherHost, otherGuardHost = hosts[0].Name, "", "e2e-another-host"
+			if len(hosts) > 1 {
+				otherHost, otherGuardHost = hosts[1].Name, hosts[1].Name
 			}
-			host, otherHost = hosts[0].Name, hosts[1].Name
-			n, err := nonHostNode(ctx, c)
-			if err != nil {
-				t.Fatal(err)
+			if n, err := nonHostNode(ctx, c); err == nil {
+				notHost = n.Name
 			}
-			notHost = n.Name
 
 			pod, err := execAgentPod(ctx, c, host)
 			if err != nil {
@@ -136,6 +137,9 @@ func TestExecAgentAdmissionPolicy(t *testing.T) {
 				}},
 			} {
 				t.Run(tc.name, func(t *testing.T) {
+					if tc.node == "" {
+						t.Skip("the cluster has no such Node")
+					}
 					wantRefused(t, patchNode(ctx, c, tc.client, tc.node, tc.mutate))
 				})
 			}
@@ -168,9 +172,9 @@ func TestExecAgentAdmissionPolicy(t *testing.T) {
 				name string
 				obj  client.Object
 			}{
-				{"its own guard pod on another Host", guardPod(execagent.GuardName(host), otherHost)},
-				{"another Host's guard pod", guardPod(execagent.GuardName(otherHost), otherHost)},
-				{"another Host's guard budget", guardBudget(execagent.GuardName(otherHost))},
+				{"its own guard pod on another Host", guardPod(execagent.GuardName(host), otherGuardHost)},
+				{"another Host's guard pod", guardPod(execagent.GuardName(otherGuardHost), otherGuardHost)},
+				{"another Host's guard budget", guardBudget(execagent.GuardName(otherGuardHost))},
 				{"a guard pod with a ServiceAccount token", func() client.Object {
 					p := guardPod(execagent.GuardName(host), host)
 					p.Spec.AutomountServiceAccountToken = nil
@@ -184,12 +188,12 @@ func TestExecAgentAdmissionPolicy(t *testing.T) {
 			// And no other Host's guard may be deleted: one made by the
 			// cluster's administrator stands in for it.
 			c := mustClient(t, cfg)
-			budget := guardBudget(execagent.GuardName(otherHost))
+			budget := guardBudget(execagent.GuardName(otherGuardHost))
 			if err := c.Create(ctx, budget); err != nil {
 				t.Fatalf("creating another Host's guard budget: %v", err)
 			}
 			defer func() { _ = c.Delete(ctx, budget) }()
-			wantRefused(t, asAgent.Delete(ctx, guardBudget(execagent.GuardName(otherHost))))
+			wantRefused(t, asAgent.Delete(ctx, guardBudget(execagent.GuardName(otherGuardHost))))
 			return ctx
 		}).
 		Feature()
