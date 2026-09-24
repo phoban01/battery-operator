@@ -93,6 +93,15 @@ func (s *claimVMStub) ClaimVM(context.Context, battery.PoolRef) (*battery.Claim,
 	return &battery.Claim{LeaseID: testClaimLease, VMUID: "vm-1", Host: battery.HostRef{Name: "node-a"}}, nil
 }
 
+// ListLeases lists lease-1, expiring at 12:00:30 on the test's day.
+func (s *claimVMStub) ListLeases(context.Context, *battery.PoolRef) ([]*battery.LeaseRecord, error) {
+	return []*battery.LeaseRecord{{
+		LeaseID:   "lease-1",
+		VMUID:     "vm-1",
+		ExpiresAt: time.Date(2026, 9, 24, 12, 0, 30, 0, time.UTC),
+	}}, nil
+}
+
 // TestMicroVMClaimReconcilerBindsAfterTheFinalizer drives the controller
 // through a claim's binding, one reconcile at a time, as the watch on the
 // claim would: the finalizer is written first, an exhausted Pool leaves
@@ -156,9 +165,11 @@ func TestMicroVMClaimReconcilerBindsAfterTheFinalizer(t *testing.T) {
 		t.Errorf("Synced is not true after battery answered: %+v", got.Status.Conditions)
 	}
 
-	// Later: a Bound claim is not claimed again, and takes its Exec
-	// Agent's address from the Node.
-	if _, err := r.Reconcile(ctx, req); err != nil {
+	// Later: a Bound claim is not claimed again, takes its Exec Agent's
+	// address from the Node, and reads its expiry from battery; it is
+	// reconciled again when that passes.
+	res, err = r.Reconcile(ctx, req)
+	if err != nil {
 		t.Fatal(err)
 	}
 	if err := c.Get(ctx, key, got); err != nil {
@@ -169,6 +180,15 @@ func TestMicroVMClaimReconcilerBindsAfterTheFinalizer(t *testing.T) {
 	}
 	if b.calls != 2 {
 		t.Errorf("ClaimVM calls = %d, want 2", b.calls)
+	}
+	if res.RequeueAfter != 30*time.Second {
+		t.Errorf("RequeueAfter = %s, want 30s, at the Lease's expiry", res.RequeueAfter)
+	}
+	if err := c.Get(ctx, key, got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Status.LeaseExpiresAt == nil || !got.Status.LeaseExpiresAt.Time.Equal(time.Date(2026, 9, 24, 12, 0, 30, 0, time.UTC)) {
+		t.Errorf("leaseExpiresAt = %v, want battery's 12:00:30", got.Status.LeaseExpiresAt)
 	}
 }
 
