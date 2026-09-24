@@ -35,7 +35,8 @@
       "test": "make test",
       "lint": "make lint",
       "duvet": "make duvet",
-      "coverage-gate": "hack/duvet-coverage.sh \"$@\""
+      "coverage-gate": "hack/duvet-coverage.sh \"$@\"",
+      "coverage-ratchet": "hack/duvet-coverage.sh --base \"${1:-origin/main}\""
     }
   }
 }

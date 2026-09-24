@@ -133,7 +133,8 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          # the snapshot guard below diffs against the base branch
+          # the snapshot guard and the citation ratchet below need the base
+          # branch and main's history
           fetch-depth: 0
       # The snapshot records every requirement's status. It changes only at
       # milestones, so that parallel branches do not all conflict on it.
@@ -171,22 +172,39 @@ jobs:
             .duvet/reports/models.html
             .duvet/reports/models.json
           if-no-files-found: error
-      - name: coverage gate over the IDs the PR owns
-        if: github.event_name == 'pull_request'
+      # The coverage gate over the IDs a PR owns, and the citation ratchet
+      # over every requirement (docs/requirements/README.md). A PR ratchets
+      # against the merge base of its target branch and its head; a push to
+      # main against the commit main was at before it. A tag's commit was
+      # ratcheted when it reached main.
+      - name: coverage gate and citation ratchet
+        if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
         env:
+          EVENT: ${{ github.event_name }}
           PR_BODY: ${{ github.event.pull_request.body }}
+          BASE_REF: ${{ github.base_ref }}
+          BEFORE: ${{ github.event.before }}
         run: |
-          ids=$(printf '%s\n' "$PR_BODY" | tr -d '\r' | sed -n 's/^Owns:[[:space:]]*//p' | tr ',' ' ' | xargs || true)
-          if [ -z "$ids" ]; then
-            echo "::error::PR body has no 'Owns:' line; list the requirement IDs this PR implements (docs/requirements/README.md). A PR that implements no requirement, such as a tooling or docs change, says 'Owns: none'."
-            exit 1
+          ids=none
+          base=""
+          if [ "$EVENT" = pull_request ]; then
+            ids=$(printf '%s\n' "$PR_BODY" | tr -d '\r' | sed -n 's/^Owns:[[:space:]]*//p' | tr ',' ' ' | xargs || true)
+            if [ -z "$ids" ]; then
+              echo "::error::PR body has no 'Owns:' line; list the requirement IDs this PR implements (docs/requirements/README.md). A PR that implements no requirement, such as a tooling or docs change, says 'Owns: none'."
+              exit 1
+            fi
+            base=$(git merge-base "origin/$BASE_REF" HEAD)
+          elif git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
+            base=$BEFORE
+          else
+            # before is all zeros when the push created the branch
+            echo "no previous commit of main to ratchet against"
           fi
-          if [ "$ids" = "none" ]; then
-            echo "no requirement IDs claimed; skipping the coverage gate"
+          echo "gating on: $ids; ratchet base: ${base:-none}"
+          if [ "$ids" = none ] && [ -z "$base" ]; then
             exit 0
           fi
-          echo "gating on: $ids"
-          dagger --progress=plain call requirements --owns="$ids"
+          dagger --progress=plain call requirements --owns="$ids" ${base:+--base="$base"}
 
   # Publishes both images, for linux/amd64 and linux/arm64, once every check
   # has passed on a push to main or of a version tag, and never from a pull

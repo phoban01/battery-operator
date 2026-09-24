@@ -47,7 +47,11 @@ Inside it:
   build takes a few minutes.
 - `devbox run build`, `test`, `lint` and `duvet` run the make targets, and
   `devbox run coverage-gate CL-001 CL-002` runs the requirements gate for
-  those IDs.
+  those IDs. `devbox run coverage-ratchet` runs the citation ratchet
+  against the merge base with `origin/main` (or the ref it is given):
+  it fails if any requirement cited in code and in a test there has lost
+  either citation
+  ([docs/requirements/README.md](docs/requirements/README.md#the-citation-ratchet)).
 - The Dagger CLI is downloaded into `.devbox/bin` on shell entry. CI is the
   Dagger module in `.dagger/`, and its jobs run the same functions you can
   run locally from the repository root (the engine needs Docker):
@@ -59,6 +63,7 @@ Inside it:
   dagger call check-generated    # fails if make generate manifests changes the tree
   dagger call requirements --owns="CL-001 CL-002"  # duvet report and coverage gate
   dagger call requirements --owns=none             # the report only
+  dagger call requirements --owns=none --base=$(git merge-base origin/main HEAD)  # and the citation ratchet
   dagger call duvet-report export --path=.duvet/reports
   ```
 
