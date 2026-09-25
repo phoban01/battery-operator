@@ -96,6 +96,7 @@ func csrChecks() reconcile.Group[*csrScope] {
 		csrRequest{},
 		csrUsages{},
 		csrSubjectAltNames{},
+		csrAddressPin{},
 	)}
 }
 

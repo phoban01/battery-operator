@@ -320,6 +320,7 @@ module types {
     | CheckKeyUsages       // KeyUsagesMismatch: CT-012
     | CheckNodeNotFound    // NodeNotFound: CT-010, CT-014
     | CheckSubjectAltNames // SubjectAltNamesMismatch: CT-010, CT-011, CT-014
+    | CheckAddressPinned   // AddressPinned: CT-015
 
   // Who put the Approved or Denied condition on a request: the Operator,
   // or anyone else granted approve on the signer name.

@@ -104,6 +104,17 @@ rules:
 - apiGroups:
   - ""
   resourceNames:
+  - host-address-pins
+  resources:
+  - configmaps
+  verbs:
+  - get
+  - list
+  - update
+  - watch
+- apiGroups:
+  - ""
+  resourceNames:
   - battery-flintlockd-client
   resources:
   - secrets

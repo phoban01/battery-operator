@@ -1,7 +1,7 @@
 # Binds the namespaced manager-role, which controller-gen generates from the
 # RBAC markers that name the Operator's namespace: read access to the CA
-# Secrets, write access to the CA bundle ConfigMap and to battery's
-# ConfigMap.
+# Secrets, write access to the CA bundle ConfigMap, the address pins
+# ConfigMap and battery's ConfigMap.
 #
 # This is the Operator's only access to Secrets: a Role in its own
 # namespace, naming the two CA Secrets. Its ClusterRole grants none.
@@ -15,6 +15,17 @@
 #= docs/requirements/09-certificates.md#spiffe-identity
 #/ The Manifests SHALL grant read access to the Secrets of the
 #/ serving CA and the `flintlockd` client CA to the Operator's identity only.
+#
+# The same Role is the only write access the Manifests grant to the address
+# pins ConfigMap: update on that name, and create in the namespace. Neither
+# the Exec Agent's RBAC (config/exec-agent/rbac.yaml) nor any other binding
+# here reaches it, and the kubelet's Node authorizer gives no write access
+# to ConfigMaps. Administrators clear a pin with their own access
+# (09-certificates.md#approval).
+#= docs/requirements/09-certificates.md#approval
+#/ The Manifests SHALL grant write access to the ConfigMap
+#/ `host-address-pins` to the Operator's identity and to no other identity
+#/ they create.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:

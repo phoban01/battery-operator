@@ -94,6 +94,20 @@ warrants.
 1. **A Host's keys never leave the Host**, and an Exec Agent can get a
    certificate only for its own Host. A compromised Host cannot obtain one
    to impersonate another Host's `flintlockd` to battery.
+
+   > **Correction, 2026-09-24 (#75):** this held only while each Node listed
+   > its own Host's addresses. A Node's internal addresses are written by
+   > its kubelet, which a compromised Host controls, so it could list
+   > another Host's address and obtain a serving certificate for it. The
+   > Operator now pins to each Node the first address it signs a serving
+   > certificate for, keeps the pins where no kubelet or Exec Agent can
+   > write, and refuses a request for another address, or for an address
+   > pinned to another Node (CT-015 to CT-018). Pinning is trust on first
+   > use: a Host compromised before its first serving certificate is signed
+   > can still pin an address that no Node has pinned yet. An administrator
+   > clears a pin when a Host really changes address
+   > ([09-certificates.md](../requirements/09-certificates.md#approval)).
+   > The decision stands.
 2. **The cluster's cert-manager is untouched.** Its built-in approver keeps
    working for everyone else, because these requests never go through
    cert-manager.

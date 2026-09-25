@@ -226,7 +226,7 @@ func newSigner(t *testing.T) *signer {
 		t.Fatal(err)
 	}
 	cas := map[string]client.Reader{DefaultServingCASecret: s.c, DefaultClientCASecret: s.c}
-	s.csr = &CertificateSigningRequestReconciler{Client: s.c, Scheme: scheme, APIReader: s.c, Config: config, cas: cas}
+	s.csr = &CertificateSigningRequestReconciler{Client: s.c, Scheme: scheme, APIReader: s.c, Config: config, cas: cas, pins: s.c}
 	s.bundle = &caBundleReconciler{Client: s.c, Config: config, secrets: cas, configMap: s.c}
 	return s
 }

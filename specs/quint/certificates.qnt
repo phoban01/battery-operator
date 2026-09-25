@@ -13,14 +13,15 @@
 //   subject of its choosing; and other identities (another ServiceAccount,
 //   a cluster admin, the Exec Agent's ServiceAccount with a token bound to
 //   no pod) ask for anything too;
-// - the approvers: the Operator (CT-010 to CT-014), and anyone else granted
+// - the approvers: the Operator (CT-010 to CT-017), and anyone else granted
 //   approve on the signer names, who approves or denies whatever they like;
 // - the Operator's signer: it re-checks every approved request, whoever
 //   approved it, signs it with the matching CA only when it passes (CT-002,
 //   CT-003, CT-006), sets the subject itself (CT-007), and marks a request
 //   someone else approved that fails a check Failed (CT-008);
 // - the environment: the CA Secrets can be unreadable for a while, so an
-//   approved request waits to be signed.
+//   approved request waits to be signed; a compromised Host's kubelet lists
+//   any addresses on its Node; an administrator clears a Node's address pin.
 //
 // Each Operator step is one reconcile of internal/controller's
 // CertificateSigningRequestReconciler: one review, then one decision, and
@@ -95,12 +96,20 @@ module certificates {
   type History = {
     // requests the Operator signed while they failed a check (CT-006)
     signedFailing: Set[int],
+    // the check each request the Operator denied or marked Failed failed
+    // when it did, which a later change to a Node's addresses or to the
+    // pins can make another (CT-008, CT-013)
+    refusedFor: int -> Check,
   }
 
   // The internal addresses each existing Node's status lists. A kubelet
-  // reports its own Node's; the invariants assume it reports the truth
-  // (see kubeletReportsAddresses).
+  // reports its own Node's, and a compromised Host's kubelet lists any
+  // addresses it likes (kubeletReportsAddresses).
   var nodeAddrs: HostName -> Set[Address]
+  // The address pinned to each Node, in the ConfigMap host-address-pins,
+  // which neither a kubelet nor an Exec Agent can write (CT-017, CT-018).
+  // A pin outlives its Node.
+  var pins: HostName -> Address
   // Hosts an attacker controls: their Exec Agent's token and their
   // kubelet's credentials.
   var compromised: Set[HostName]
@@ -196,7 +205,15 @@ module certificates {
   //@# request's subject alternative names are exactly one of that Node's
   //@# internal addresses and
   //@# `spiffe://<trust domain>/flintlock/client/exec-agent/<node name>`.
-  pure def reviewAgainst(nodes: HostName -> Set[Address], r: CertificateSigningRequest): Option[Check] = {
+  //
+  //@= docs/requirements/09-certificates.md#approval
+  //@# The Operator SHALL approve a
+  //@# `battery.liquidmetal-x.dev/flintlockd-serving` or
+  //@# `battery.liquidmetal-x.dev/exec-agent-serving` request only when its IP
+  //@# address is the address pinned to the requester's Node or, when no address
+  //@# is pinned to that Node, an address pinned to no other Node.
+  pure def reviewAgainst(nodes: HostName -> Set[Address], pinned: HostName -> Address,
+                         r: CertificateSigningRequest): Option[Check] = {
     val n = getOr(r.requester.nodeName, "")
     val uriOk = r.dnsNames == Set() and r.uris == Set(signerId(r.signer, n))
     if (r.requester.username != EXEC_AGENT_SA) Some(CheckRequester)
@@ -207,11 +224,14 @@ module certificates {
       (if (uriOk and r.ips == Set()) None else Some(CheckSubjectAltNames))
     else if (not(nodes.keys().contains(n))) Some(CheckNodeNotFound)
     else if (nodes.get(n) == Set()) Some(CheckSubjectAltNames)
-    else if (uriOk and r.ips.size() == 1 and r.ips.subseteq(nodes.get(n))) None
-    else Some(CheckSubjectAltNames)
+    else if (not(uriOk and r.ips.size() == 1 and r.ips.subseteq(nodes.get(n)))) Some(CheckSubjectAltNames)
+    else if (pinned.keys().contains(n))
+      (if (r.ips == Set(pinned.get(n))) None else Some(CheckAddressPinned))
+    else if (pinned.keys().exists(m => r.ips.contains(pinned.get(m)))) Some(CheckAddressPinned)
+    else None
   }
 
-  def review(r: CertificateSigningRequest): Option[Check] = reviewAgainst(nodeAddrs, r)
+  def review(r: CertificateSigningRequest): Option[Check] = reviewAgainst(nodeAddrs, pins, r)
   def passes(r: CertificateSigningRequest): bool = isNone(review(r))
 
   pure def newRequest(req: Requester, s: SignerName, cn: str, ips: Set[Address], uris: Set[SpiffeId],
@@ -236,7 +256,8 @@ module certificates {
     compromised' = Set(),
     csrs' = Map(),
     caReadable' = true,
-    hist' = { signedFailing: Set() },
+    hist' = { signedFailing: Set(), refusedFor: Map() },
+    pins' = Map(),
   }
 
   action addRequest(r: CertificateSigningRequest): bool = all {
@@ -276,7 +297,7 @@ module certificates {
     isOurSigner(s),
     HOST_ADDRS.get(n).contains(a),
     addRequest(agentRequestFor(n, s, a)),
-    nodeAddrs' = nodeAddrs, compromised' = compromised, caReadable' = caReadable, hist' = hist,
+    nodeAddrs' = nodeAddrs, compromised' = compromised, caReadable' = caReadable, hist' = hist, pins' = pins,
   }
 
   // An attacker takes over Host n: its Exec Agent's token, which still
@@ -284,7 +305,20 @@ module certificates {
   action compromise(n: HostName): bool = all {
     not(compromised.contains(n)),
     compromised' = compromised.union(Set(n)),
-    nodeAddrs' = nodeAddrs, csrs' = csrs, caReadable' = caReadable, hist' = hist,
+    nodeAddrs' = nodeAddrs, csrs' = csrs, caReadable' = caReadable, hist' = hist, pins' = pins,
+  }
+
+  // A compromised Host's agent asks, in the form its signer name calls
+  // for, for a certificate for an address its Node lists, which its
+  // kubelet may have put there (#75). forgedRequest can make the same
+  // request, among many others; this step makes it often.
+  action listedAddressRequest(n: HostName, s: SignerName, a: Address): bool = all {
+    compromised.contains(n),
+    isOurSigner(s),
+    nodeAddrs.keys().contains(n),
+    nodeAddrs.get(n).contains(a),
+    addRequest(agentRequestFor(n, s, a)),
+    nodeAddrs' = nodeAddrs, compromised' = compromised, caReadable' = caReadable, hist' = hist, pins' = pins,
   }
 
   // A request from anyone who is not an uncompromised Host's Exec Agent: a
@@ -311,7 +345,7 @@ module certificates {
       selfSigned: not(change.sig),
       usages: if (change.usages) usages else b.usages,
     }),
-    nodeAddrs' = nodeAddrs, compromised' = compromised, caReadable' = caReadable, hist' = hist,
+    nodeAddrs' = nodeAddrs, compromised' = compromised, caReadable' = caReadable, hist' = hist, pins' = pins,
   }
 
   // ---------------------------------------------------------------------
@@ -324,7 +358,7 @@ module certificates {
     csr(id).decision == Undecided,
     csrs' = csrs.set(id, { ...csr(id),
       decision: if (approve) ApprovedBy(ForeignApprover) else DeniedBy({ approver: ForeignApprover, reason: reason }) }),
-    nodeAddrs' = nodeAddrs, compromised' = compromised, caReadable' = caReadable, hist' = hist,
+    nodeAddrs' = nodeAddrs, compromised' = compromised, caReadable' = caReadable, hist' = hist, pins' = pins,
   }
 
   // ---------------------------------------------------------------------
@@ -334,20 +368,37 @@ module certificates {
   // and readable again.
   action caFlip: bool = all {
     caReadable' = not(caReadable),
-    nodeAddrs' = nodeAddrs, compromised' = compromised, csrs' = csrs, hist' = hist,
+    nodeAddrs' = nodeAddrs, compromised' = compromised, csrs' = csrs, hist' = hist, pins' = pins,
   }
 
   // A compromised Host's kubelet writes its own Node's status, including
   // its internal addresses. NodeRestriction lets a kubelet change only its
-  // own Node, but any of the addresses on it. Not in step: the invariants
-  // assume a Node's internal addresses are its Host's own. The scenario
-  // test compromisedKubeletTest takes this step and breaks
-  // noCertForAnotherNode (#75).
+  // own Node, but any of the addresses on it (#75).
+  //
+  // Pinning is trust on first use, and this step assumes it: a kubelet
+  // lists addresses that are not its Host's only once its Node has a pin,
+  // that is once the Operator has signed the Node's first serving
+  // certificate. Before that, a compromised Host could pin an address no
+  // Node has pinned yet (09-certificates.md#approval), which
+  // noCertForAnotherNode would report.
   action kubeletReportsAddresses(n: HostName, addrs: Set[Address]): bool = all {
     compromised.contains(n),
     nodeAddrs.keys().contains(n),
+    pins.keys().contains(n),
     nodeAddrs' = nodeAddrs.set(n, addrs),
-    compromised' = compromised, csrs' = csrs, caReadable' = caReadable, hist' = hist,
+    compromised' = compromised, csrs' = csrs, caReadable' = caReadable, hist' = hist, pins' = pins,
+  }
+
+  // An administrator clears Node n's pin, as when its Host changes address
+  // (09-certificates.md#approval). The Operator never does (CT-017). The
+  // administrator clears only the pin of a Host that is not compromised,
+  // which is trust on first use again: a compromised Host whose pin is
+  // cleared can pin an address no Node has pinned.
+  action adminClearsPin(n: HostName): bool = all {
+    pins.keys().contains(n),
+    not(compromised.contains(n)),
+    pins' = pins.keys().exclude(Set(n)).mapBy(m => pins.get(m)),
+    nodeAddrs' = nodeAddrs, compromised' = compromised, csrs' = csrs, caReadable' = caReadable, hist' = hist,
   }
 
   // ---------------------------------------------------------------------
@@ -385,10 +436,37 @@ module certificates {
     (isApproved(csr(id).decision) and passes(csr(id))) implies caReadable,
   }
 
-  // Signs r, recording in the history whether it passed its checks.
+  // Signs r, recording in the history whether it passed its checks. A
+  // serving certificate for a Node with no pin pins its address to the
+  // Node in the same step: the Operator stores the pin before the
+  // certificate, so no state has the certificate without it.
+  //
+  //@= docs/requirements/09-certificates.md#approval
+  //@# When the Operator signs a
+  //@# `battery.liquidmetal-x.dev/flintlockd-serving` or
+  //@# `battery.liquidmetal-x.dev/exec-agent-serving` request for a Node that has
+  //@# no pinned address, the Operator SHALL pin the request's IP address to that
+  //@# Node, and SHALL store the certificate only once the pin is stored.
+  //
+  //@= docs/requirements/09-certificates.md#approval
+  //@# The Operator SHALL keep the pinned addresses in the ConfigMap
+  //@# `host-address-pins` in its namespace, one entry for each Node name, and
+  //@# SHALL NOT change or remove an entry, even when its Node is deleted.
   action signRequest(id: int, r: CertificateSigningRequest): bool = all {
-    csrs' = csrs.set(id, { ...r, certificate: Some(issue(r)) }),
-    hist' = if (passes(r)) hist else { ...hist, signedFailing: hist.signedFailing.union(Set(id)) },
+    val n = getOr(r.requester.nodeName, "")
+    all {
+      csrs' = csrs.set(id, { ...r, certificate: Some(issue(r)) }),
+      hist' = if (passes(r)) hist else { ...hist, signedFailing: hist.signedFailing.union(Set(id)) },
+      pins' = if (r.signer == FlintlockdClient or pins.keys().contains(n)) pins
+              else pins.put(n, r.ips.fold("", (acc, a) => a)),
+    },
+  }
+
+  // Refuses r: denies it, or marks it Failed, for check c, and records c.
+  action refuseRequest(id: int, r: CertificateSigningRequest, c: Check): bool = all {
+    csrs' = csrs.set(id, r),
+    hist' = { ...hist, refusedFor: hist.refusedFor.put(id, c) },
+    pins' = pins,
   }
 
   //@= docs/requirements/09-certificates.md#approval
@@ -417,18 +495,15 @@ module certificates {
     val d = review(r)
     if (r.decision == Undecided)
       match d {
-        | Some(c) => all {
-            csrs' = csrs.set(id, { ...r, decision: DeniedBy({ approver: OperatorApprover, reason: c }) }),
-            hist' = hist,
-          }
+        | Some(c) => refuseRequest(id, { ...r, decision: DeniedBy({ approver: OperatorApprover, reason: c }) }, c)
         | None =>
             val approved = { ...r, decision: ApprovedBy(OperatorApprover) }
             if (caReadable) signRequest(id, approved)
-            else all { csrs' = csrs.set(id, approved), hist' = hist }
+            else all { csrs' = csrs.set(id, approved), hist' = hist, pins' = pins }
       }
     else
       match d {
-        | Some(c) => all { csrs' = csrs.set(id, { ...r, failed: Some(c) }), hist' = hist }
+        | Some(c) => refuseRequest(id, { ...r, failed: Some(c) }, c)
         | None => signRequest(id, r)
       },
     nodeAddrs' = nodeAddrs, compromised' = compromised, caReadable' = caReadable,
@@ -445,6 +520,7 @@ module certificates {
     nondet a = HOST_ADDRS.get(n).oneOf()
     nondet base = HOSTS.oneOf()
     nondet baseAddr = HOST_ADDRS.get(base).oneOf()
+    nondet listed = ADDRESSES.oneOf()
     nondet s = SIGNERS.oneOf()
     nondet req = REQUESTERS.oneOf()
     nondet cn = COMMON_NAMES.oneOf()
@@ -466,11 +542,15 @@ module certificates {
       // requesters
       agentRequest(n, s, a),
       compromise(n),
+      listedAddressRequest(n, s, listed),
       forgedRequest(req, base, s, baseAddr, change, cn, ips, uri1, uri2, nURIs, usages),
       // other approvers
       foreignDecide(id, approve, reason),
       // environment
       caFlip,
+      kubeletReportsAddresses(n, ips),
+      kubeletReportsAddresses(n, HOST_ADDRS.get(n).union(Set(baseAddr))),
+      adminClearsPin(n),
       // the Operator
       opReconcile(id),
     }
@@ -485,10 +565,13 @@ module certificates {
     | None => issue(csr(id))
   }
 
-  // CT-010, CT-011 and CT-014; ADR 0003, consequence 1: no requester
-  // obtains a certificate that names another Host's address or SPIFFE ID.
-  // Every certificate belongs to a requester on a Host, and names only that
-  // Host's own addresses and SPIFFE IDs.
+  // CT-010, CT-011, CT-014 and CT-015 to CT-017; ADR 0003, consequence 1
+  // and its correction: no requester obtains a certificate that names
+  // another Host's address or SPIFFE ID. Every certificate belongs to a
+  // requester on a Host, and names only that Host's own addresses and
+  // SPIFFE IDs. It holds although a compromised Host's kubelet lists any
+  // addresses on its Node (kubeletReportsAddresses), because a Node's pin
+  // holds once it has one (trust on first use).
   val noCertForAnotherNode: bool =
     certified.forall(id => match csr(id).requester.nodeName {
       | Some(n) => and {
@@ -513,11 +596,21 @@ module certificates {
   // approved it.
   val signedOnlyAfterChecks: bool = hist.signedFailing == Set()
 
-  // CT-006: a request someone else approved that fails a check never gets
-  // a certificate.
+  // CT-006: a request someone else approved has a certificate only if it
+  // passed its checks when it was signed. A Node's addresses and the pins
+  // change after a request is signed, so whether it passes now says
+  // nothing of when it was signed.
   val foreignApprovalNeverBypassesChecks: bool =
     csrs.keys().forall(id =>
-      (approvedBy(csr(id).decision, ForeignApprover) and not(passes(csr(id)))) implies isNone(csr(id).certificate))
+      (approvedBy(csr(id).decision, ForeignApprover) and isSome(csr(id).certificate))
+        implies not(hist.signedFailing.contains(id)))
+
+  // CT-015 and CT-016: every pin is an address of its own Host, and no
+  // address is pinned to two Nodes.
+  val pinsAreTheHostsOwn: bool = and {
+    pins.keys().forall(n => HOST_ADDRS.get(n).contains(pins.get(n))),
+    pins.keys().forall(n => pins.keys().forall(m => pins.get(n) == pins.get(m) implies n == m)),
+  }
 
   // CT-007: every certificate's subject is the requester's Node, whatever
   // the request asked for.
@@ -549,11 +642,15 @@ module certificates {
     })
 
   // CT-013 and CT-008: the Operator denies a request, or marks it Failed,
-  // only for a check it fails, and names that check.
+  // only for a check it failed at the time, and names that check. The
+  // history records the check, since a Node's addresses and the pins can
+  // change since.
   val refusalNamesTheCheck: bool =
     csrs.keys().forall(id => and {
-      deniedBy(csr(id).decision, OperatorApprover) implies deniedReason(csr(id).decision) == review(csr(id)),
-      isSome(csr(id).failed) implies csr(id).failed == review(csr(id)),
+      deniedBy(csr(id).decision, OperatorApprover) implies
+        (hist.refusedFor.keys().contains(id) and deniedReason(csr(id).decision) == Some(hist.refusedFor.get(id))),
+      isSome(csr(id).failed) implies
+        (hist.refusedFor.keys().contains(id) and csr(id).failed == Some(hist.refusedFor.get(id))),
     })
 
   //@= docs/requirements/09-certificates.md#approval
@@ -577,18 +674,17 @@ module certificates {
   //@# the Operator SHALL mark it `Failed`, with a reason that names the check,
   //@# and never sign it.
   //
-  // CT-008: a request for the Operator's signer names that is Approved and
-  // fails a check is never signed, and is Failed once the Operator is
-  // idle.
+  // CT-008: a request for the Operator's signer names that is Approved,
+  // unsigned and fails a check is Failed once the Operator is idle; that it
+  // is never signed is signedOnlyAfterChecks. A request signed while it
+  // passed can fail later, once its Node's addresses or the pins change.
   val approvedFailingFailed: bool =
     csrs.keys().forall(id => and {
       isOurSigner(csr(id).signer),
       isApproved(csr(id).decision),
-      not(passes(csr(id))),
-    } implies and {
       isNone(csr(id).certificate),
-      operatorIdle implies isSome(csr(id).failed),
-    })
+      not(passes(csr(id))),
+    } implies (operatorIdle implies isSome(csr(id).failed)))
 
   // CT-001, CT-006, CT-008 and CT-013: once the Operator has nothing left
   // to do and can read its CAs, every request for its signer names is
@@ -608,6 +704,7 @@ module certificates {
     signedOnlyWhenApproved,
     signedOnlyAfterChecks,
     foreignApprovalNeverBypassesChecks,
+    pinsAreTheHostsOwn,
     subjectIsRequesterNode,
     identitiesInTrustDomain,
     caAndUsagesMatchSigner,
@@ -648,6 +745,26 @@ module certificates {
       namesAnotherHost(csr(id)),
       deniedReason(csr(id).decision) == Some(CheckSubjectAltNames),
       deniedBy(csr(id).decision, OperatorApprover),
+    })
+  // a compromised Host's kubelet listed an address that is not its Host's,
+  // its agent asked for a certificate for it, and the pin refused it
+  val witnessKubeletLieRefused: bool =
+    csrs.keys().exists(id => and {
+      AGENTS.contains(csr(id).requester),
+      compromised.contains(getOr(csr(id).requester.nodeName, "")),
+      namesAnotherHost(csr(id)),
+      or {
+        deniedReason(csr(id).decision) == Some(CheckAddressPinned),
+        csr(id).failed == Some(CheckAddressPinned),
+      },
+    })
+  // an administrator cleared a pin and the Node pinned an address again
+  val witnessRepinned: bool =
+    csrs.keys().exists(id => and {
+      isSome(csr(id).certificate),
+      csr(id).signer != FlintlockdClient,
+      val n = getOr(csr(id).requester.nodeName, "")
+      pins.keys().contains(n) and not(csr(id).ips.contains(pins.get(n))),
     })
   // a certificate whose request asked for another subject
   val witnessSubjectIgnored: bool =

@@ -12,7 +12,7 @@ code. They do not replace Go tests. How they cite requirements is in
 | `claims.qnt` | The claim lifecycle against battery (CL-001 to CL-042; ADR 0001, consequences 2 to 4), with battery as `docs/requirements/10-battery.md` describes it (BA-*) |
 | `claims_test.qnt` | Scenario tests for `claims.qnt`, one interleaving each |
 | `claims_replay.qnt` | The traces of `claims.qnt` that the Claim Controller's replay test replays: `claims.qnt`'s steps, weighted towards the controller's (#62) |
-| `certificates.qnt` | Certificate approval and signing (CT-001 to CT-020; EA-061, EA-062, EA-068; ADR 0003 and ADR 0004) |
+| `certificates.qnt` | Certificate approval and signing, and the address pins (CT-001 to CT-020; EA-061, EA-062, EA-068; ADR 0003 and ADR 0004) |
 | `certificates_test.qnt` | Scenario tests for `certificates.qnt` |
 | `pools.qnt` | Pools, placement and inventory: the Pool Controller and the Inventory Controller against battery (PO-001 to PO-004, PO-010 to PO-012, PO-030 to PO-032, IN-001 to IN-013, DP-007, DP-008, BA-061, BA-070, BA-072; ADR 0001, consequence 1) |
 | `pools_test.qnt` | Scenario tests for `pools.qnt` |
@@ -37,7 +37,8 @@ quint run specs/quint/claims.qnt --invariant safety --max-steps 60 --max-samples
   witnessExpiryRecordedForHeldLease witnessExpiredWithPendingRenewal
 quint run specs/quint/certificates.qnt --invariant safety --max-steps 60 --max-samples 20000 \
   --witnesses witnessAgentFullyCertified witnessForeignApprovalFailed witnessForeignApprovalSigned \
-  witnessAnotherHostDenied witnessSubjectIgnored witnessApprovedAwaitingCA
+  witnessAnotherHostDenied witnessSubjectIgnored witnessApprovedAwaitingCA \
+  witnessKubeletLieRefused witnessRepinned
 quint test specs/quint/pools_test.qnt
 quint run specs/quint/pools.qnt --invariant safety --max-steps 60 --max-samples 20000 \
   --witnesses witnessFlapAbsorbed witnessRestart witnessBatchedRestart witnessTwoRestarts \
@@ -198,38 +199,53 @@ object has been deleted, and the Operator as approver and signer of
   approves or denies any undecided request, for any signer name.
 - **the Operator:** one step is one reconcile of
   `CertificateSigningRequestReconciler`: review the request against the
-  checks of CT-010 to CT-014, then deny it or approve and sign it; or, for
+  checks of CT-010 to CT-015, then deny it or approve and sign it; or, for
   a request already approved by anyone, mark it Failed or sign it (CT-006,
   CT-008).
   It sets the subject itself (CT-007) and signs with its signer name's CA
-  (CT-002).
+  (CT-002). Signing a serving certificate for a Node with no pin pins its
+  address to the Node in the same step (CT-016), and nothing else changes
+  a pin (CT-017).
 - **the environment:** the CA Secrets can be unreadable, so an approved
-  request waits for its signature.
+  request waits for its signature. A compromised Host's kubelet lists any
+  addresses on its own Node (`kubeletReportsAddresses`), and an
+  administrator clears a pin (`adminClearsPin`).
 
 Invariants, all in `safety`:
 
 | Invariant | Checks |
 |-----------|--------|
-| `noCertForAnotherNode` | every certificate names only its requester's own Host's addresses and SPIFFE IDs (CT-010, CT-011, CT-014; ADR 0003, consequence 1) |
+| `noCertForAnotherNode` | every certificate names only its requester's own Host's addresses and SPIFFE IDs, whatever a compromised kubelet lists (CT-010, CT-011, CT-014, CT-015 to CT-017; ADR 0003, consequence 1) |
 | `onlyExecAgentsCertified` | only the Exec Agent's ServiceAccount, bound to a Node, obtains a certificate (CT-010, CT-011, CT-014) |
 | `signedOnlyWhenApproved` | nothing is signed without `Approved` (CT-003) |
 | `signedOnlyAfterChecks` | nothing is signed without passing every check, whoever approved it (CT-006) |
-| `foreignApprovalNeverBypassesChecks` | a request someone else approved that fails a check never gets a certificate (CT-006) |
+| `foreignApprovalNeverBypassesChecks` | a request someone else approved has a certificate only if it passed every check when signed (CT-006) |
+| `pinsAreTheHostsOwn` | every pin is an address of its own Host, and no address is pinned to two Nodes (CT-015, CT-016) |
 | `subjectIsRequesterNode` | every certificate's subject is the requester's Node (CT-007) |
 | `identitiesInTrustDomain` | every certificate's SPIFFE ID is in the configured trust domain, and never battery's (CT-020) |
 | `caAndUsagesMatchSigner` | the signer name's CA and key usages, and no DNS name (CT-002, CT-012) |
 | `onlyOurSignerNames` | the Operator does nothing with another signer name (CT-001) |
-| `refusalNamesTheCheck` | a `Denied` or `Failed` condition names a check the request fails (CT-013, CT-008) |
+| `refusalNamesTheCheck` | a `Denied` or `Failed` condition names the check the request failed when the Operator refused it (CT-013, CT-008) |
 | `unapprovedFailingDenied` | once the Operator is idle, every request for its signer names that fails a check and is not approved is Denied (CT-013) |
-| `approvedFailingFailed` | an approved request for its signer names that fails a check is never signed, and is Failed once the Operator is idle (CT-008) |
+| `approvedFailingFailed` | an approved, unsigned request for its signer names that fails a check is Failed once the Operator is idle (CT-008) |
 | `idleSettled` | once the Operator is idle and can read its CAs, every request for its signer names is signed, Denied or Failed |
 
 `noCertForAnotherNode` checks the addresses a Host really holds, not the
-ones its Node lists. It holds only if a Node's internal addresses belong to
-its Host, and the main simulation assumes they do. A compromised Host's
-kubelet can list another Host's address on its own Node; the step
-`kubeletReportsAddresses` does that, is not in `step`, and the scenario
-test `compromisedKubeletTest` reaches the violation (#75).
+ones its Node lists. A compromised Host's kubelet can list another Host's
+address on its own Node (#75); `kubeletReportsAddresses` does that in
+`step`, and the pins keep the invariant: `compromisedKubeletTest` shows
+the requests it leads to refused for `CheckAddressPinned`. Pinning is
+trust on first use, and the model assumes it in two places: a kubelet
+lists addresses that are not its Host's only once its Node has a pin, and
+an administrator clears only an uncompromised Host's pin
+(`kubeletLiesOnlyAfterFirstUseTest`, `noClearingACompromisedPinTest`).
+Without them, a compromised Host could pin an address no Node has pinned
+yet, as 09-certificates.md#approval says.
+
+A Node's addresses and the pins change after the Operator decides on a
+request, so the invariants about refusals and signatures use what the
+review said when the Operator decided (the history's `signedFailing` and
+`refusedFor`), not what it says now.
 
 A request someone else approved can't be Denied, since the API server
 lets nobody withdraw `Approved` or add `Denied` beside it. CT-013 denies
@@ -247,8 +263,10 @@ CA keys.
 
 The witnesses show an Exec Agent with all three certificates, a request
 someone else approved both Failed and signed, a compromised agent denied
-for another Host's address or SPIFFE ID, a requested subject ignored, and an
-approved request waiting for the CA.
+for another Host's address or SPIFFE ID, a requested subject ignored, an
+approved request waiting for the CA, an address a kubelet listed refused
+by its Node's pin, and a Node pinned again after an administrator cleared
+its pin.
 
 ## The pools and inventory model
 

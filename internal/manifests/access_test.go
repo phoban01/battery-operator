@@ -167,3 +167,38 @@ func TestCASecretReaders(t *testing.T) {
 		t.Error("battery holds the Operator's ServiceAccount token")
 	}
 }
+
+//= docs/requirements/09-certificates.md#approval
+//= type=test
+//# The Manifests SHALL grant write access to the ConfigMap
+//# `host-address-pins` to the Operator's identity and to no other identity
+//# they create.
+
+// TestAddressPinWriters checks, over every binding config/default and
+// config/exec-agent render, that the Operator may create and update the
+// address pins ConfigMap and nobody else may write it. The kubelet's access,
+// which the Node authorizer grants and no binding, is checked in the e2e
+// suite.
+func TestAddressPinWriters(t *testing.T) {
+	t.Parallel()
+	objs := build(t, "config/default", "config/exec-agent")
+	op := operatorIdentity(t, objs)
+	gs := grants(t, objs)
+	for _, verb := range []string{"create", verbUpdate, verbGet} {
+		if !slices.ContainsFunc(gs, func(g grant) bool {
+			return g.subject == op && g.allows(operatorNamespace, "", "configmaps", verb, controller.AddressPinsConfigMap)
+		}) {
+			t.Errorf("the Operator may not %s ConfigMap %s", verb, controller.AddressPinsConfigMap)
+		}
+	}
+	for _, g := range gs {
+		if g.subject == op {
+			continue
+		}
+		for _, verb := range writeVerbs {
+			if g.allows(operatorNamespace, "", "configmaps", verb, controller.AddressPinsConfigMap) {
+				t.Errorf("%s may %s ConfigMap %s", g.subject, verb, controller.AddressPinsConfigMap)
+			}
+		}
+	}
+}

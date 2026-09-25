@@ -29,6 +29,7 @@ import (
 	"fmt"
 	"net"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -103,6 +104,7 @@ func TestHostCertificates(t *testing.T) {
 			}
 			return ctx
 		}).
+		Assess("the Operator pinned every Host's address, where no kubelet or Exec Agent may change it", assessAddressPins).
 		Assess("the fake flintlockd serves with them, and the Exec Agent reports its Host ready", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
 			c := mustClient(t, cfg)
 			hosts, err := hostNodes(ctx, c)
@@ -400,4 +402,75 @@ func adminCSR(ctx context.Context, t *testing.T, c client.Client, signer string)
 	}
 	t.Cleanup(func() { _ = c.Delete(context.Background(), csr) })
 	return csr.Name
+}
+
+// assessAddressPins checks that the Operator pinned each Host's internal
+// address to its Node, and that neither the Exec Agent nor any Host's
+// kubelet may write the pins.
+func assessAddressPins(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+	const authenticated = "system:authenticated"
+	//= docs/requirements/09-certificates.md#approval
+	//= type=test
+	//# When the Operator signs a
+	//# `battery.liquidmetal-x.dev/flintlockd-serving` or
+	//# `battery.liquidmetal-x.dev/exec-agent-serving` request for a Node that has
+	//# no pinned address, the Operator SHALL pin the request's IP address to that
+	//# Node, and SHALL store the certificate only once the pin is stored.
+	c := mustClient(t, cfg)
+	hosts, err := hostNodes(ctx, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var pins corev1.ConfigMap
+	if err := c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: controller.AddressPinsConfigMap}, &pins); err != nil {
+		t.Fatalf("reading the address pins: %v", err)
+	}
+	for _, h := range hosts {
+		ip, err := internalIP(h)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := net.ParseIP(pins.Data[h.Name]); got == nil || !got.Equal(net.ParseIP(ip)) {
+			t.Errorf("%s is pinned to %q, want %s", h.Name, pins.Data[h.Name], ip)
+		}
+	}
+
+	//= docs/requirements/09-certificates.md#approval
+	//= type=test
+	//# The Manifests SHALL grant write access to the ConfigMap
+	//# `host-address-pins` to the Operator's identity and to no other identity
+	//# they create.
+	allowed := func(user string, groups []string, verb string) bool {
+		t.Helper()
+		sar := &authorizationv1.SubjectAccessReview{Spec: authorizationv1.SubjectAccessReviewSpec{
+			User:   user,
+			Groups: groups,
+			ResourceAttributes: &authorizationv1.ResourceAttributes{
+				Namespace: namespace, Resource: "configmaps", Name: controller.AddressPinsConfigMap, Verb: verb,
+			},
+		}}
+		if err := c.Create(ctx, sar); err != nil {
+			t.Fatal(err)
+		}
+		return sar.Status.Allowed
+	}
+	if !allowed(operatorUser, nil, "update") {
+		t.Error("the Operator may not update the address pins")
+	}
+	agent := fmt.Sprintf("system:serviceaccount:%s:%s", namespace, execAgentServiceAccount)
+	others := map[string][]string{
+		agent: {"system:serviceaccounts", "system:serviceaccounts:" + namespace, authenticated},
+	}
+	// Each Host's kubelet, as the Node authorizer sees it.
+	for _, h := range hosts {
+		others["system:node:"+h.Name] = []string{"system:nodes", authenticated}
+	}
+	for user, groups := range others {
+		for verb := range strings.FieldsSeq("create update patch delete deletecollection") {
+			if allowed(user, groups, verb) {
+				t.Errorf("%s may %s the address pins", user, verb)
+			}
+		}
+	}
+	return ctx
 }
