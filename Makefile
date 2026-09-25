@@ -227,11 +227,15 @@ duvet-models-write:
 
 QUINT ?= quint
 
-.PHONY: quint
+.PHONY: quint claims-traces
 
 ## quint: typecheck, test and simulate the Quint models in specs/quint, checking their invariants
 quint:
 	QUINT=$(QUINT) hack/quint.sh
+
+## claims-traces: write the claim model's traces that the Claim Controller's replay test replays
+claims-traces:
+	QUINT=$(QUINT) hack/claims-traces.sh
 
 ##@ Dependencies
 

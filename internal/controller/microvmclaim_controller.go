@@ -96,16 +96,7 @@ func (r *MicroVMClaimReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	s := claimscope.New(c)
-	s.Client = r.Client
-	s.APIReader = r.APIReader
-	s.Battery = r.Battery
-	s.Log = logf.FromContext(ctx)
-	s.Clock = r.Clock
-	if s.Clock == nil {
-		s.Clock = clock.Real{}
-	}
-
+	s := r.scope(ctx, c)
 	err := r.chain().Run(ctx, s)
 	// The patch runs even when the chain failed, so that what the chain
 	// did before the failure is not lost.
@@ -116,6 +107,20 @@ func (r *MicroVMClaimReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, err
 	}
 	return ctrl.Result{RequeueAfter: s.Result.RequeueAfter}, nil
+}
+
+// scope builds the scope of one reconcile of c.
+func (r *MicroVMClaimReconciler) scope(ctx context.Context, c *batteryv1alpha1.MicroVMClaim) *claimscope.Scope {
+	s := claimscope.New(c)
+	s.Client = r.Client
+	s.APIReader = r.APIReader
+	s.Battery = r.Battery
+	s.Log = logf.FromContext(ctx)
+	s.Clock = r.Clock
+	if s.Clock == nil {
+		s.Clock = clock.Real{}
+	}
+	return s
 }
 
 // chain is the Claim Controller's subreconcilers, in the order they run.

@@ -77,3 +77,7 @@ check specs/quint/pools.qnt safety \
   witnessRenewalRestart witnessRenewalWithHostChange \
   witnessVMOnFormerHost witnessPlacementUpdated witnessNoEligibleHost \
   witnessPoolDeleted witnessDrainedForPool witnessRejectedWithoutHost
+
+# The traces the Claim Controller's replay test replays are the ones the
+# claim model writes now (#62, hack/claims-traces.sh).
+QUINT="$QUINT" hack/claims-traces.sh --check
