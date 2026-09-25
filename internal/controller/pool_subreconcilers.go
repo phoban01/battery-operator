@@ -38,9 +38,6 @@ const PoolFinalizer = "battery.liquidmetal-x.dev/pool"
 const (
 	// PoolReasonRejected: battery refused the Pool's spec (PO-004).
 	PoolReasonRejected = "Rejected"
-	// PoolReasonDeletionBlocked: battery refused to delete the Pool, which
-	// still has MicroVMs; the message is battery's.
-	PoolReasonDeletionBlocked = "DeletionBlocked"
 )
 
 // poolChain is the Pool Controller's chain, in order.
@@ -58,46 +55,6 @@ func poolChain() []poolSubreconciler {
 	}
 }
 
-// poolDeletion deletes a deleted Pool from battery and then lets it go.
-// For a Pool that is not being deleted it does nothing.
-//
-// battery refuses DeletePool with FAILED_PRECONDITION while the Pool still
-// has MicroVMs (battery.ErrFailedPrecondition). The finalizer then stays,
-// Ready turns false with the reason DeletionBlocked and battery's message,
-// and the reconcile returns the error, so that the workqueue retries it
-// with its exponential backoff (up to about 16 minutes between tries) until
-// battery accepts. battery v0.3.3 has no call to drain a Pool, so the
-// Operator does not try to empty it first.
-type poolDeletion struct{}
-
-func (poolDeletion) Reconcile(ctx context.Context, s *poolScope) (poolNext, error) {
-	if s.Pool.DeletionTimestamp.IsZero() {
-		return poolContinue, nil
-	}
-	if !controllerutil.ContainsFinalizer(s.Pool, PoolFinalizer) {
-		return poolStop, nil
-	}
-
-	//= docs/requirements/03-pools.md#declaration
-	//# The Pool Controller SHALL add a finalizer to each Pool, and when
-	//# the Pool is deleted SHALL call `DeletePool` and remove the finalizer only
-	//# once battery has deleted the Pool or reported it unknown.
-	ref := poolRef(s.Pool)
-	err := s.Battery.DeletePool(ctx, ref)
-	switch {
-	case err == nil, errors.Is(err, battery.ErrNotFound):
-		controllerutil.RemoveFinalizer(s.Pool, PoolFinalizer)
-		s.Log.Info("Deleted Pool from battery", "pool", ref.String())
-		return poolStop, nil
-	case errors.Is(err, battery.ErrFailedPrecondition):
-		s.setCondition(batteryv1alpha1.PoolConditionReady, metav1.ConditionFalse,
-			PoolReasonDeletionBlocked, batteryMessage(err, battery.ErrFailedPrecondition))
-		return poolStop, fmt.Errorf("battery refused to delete Pool %s: %w", ref, err)
-	default:
-		return poolStop, fmt.Errorf("deleting Pool %s from battery: %w", ref, err)
-	}
-}
-
 // poolFinalizer adds the finalizer to a Pool that lacks it, and ends the
 // chain so that the Pool reaches battery only once the finalizer is stored:
 // the patch that adds it brings the Pool back for the next reconcile.
@@ -106,8 +63,9 @@ type poolFinalizer struct{}
 func (poolFinalizer) Reconcile(_ context.Context, s *poolScope) (poolNext, error) {
 	//= docs/requirements/03-pools.md#declaration
 	//# The Pool Controller SHALL add a finalizer to each Pool, and when
-	//# the Pool is deleted SHALL call `DeletePool` and remove the finalizer only
-	//# once battery has deleted the Pool or reported it unknown.
+	//# the Pool is deleted SHALL call `DeletePool`, drain the Pool while battery
+	//# refuses it (PO-030, PO-031), and remove the finalizer only once battery
+	//# has deleted the Pool or reported it unknown.
 	//
 	//= docs/requirements/03-pools.md#declaration
 	//# When a Pool exists that battery does not hold, the Pool

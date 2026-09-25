@@ -35,7 +35,9 @@ limitations under the License.
 // placement per Pool, RESOURCE_EXHAUSTED from ClaimVM on a Pool with
 // nothing AVAILABLE, the host field on ClaimVMResponse, ListLeases, the
 // MicroVM ids, the three replenishment strategies, the hook failure
-// policies and the event types.
+// policies, the event types, DeletePool's refusal while a Pool owns any
+// MicroVM, and UpdatePool cancelling the Pool's provisioning under the old
+// spec's hook failure policy.
 //
 // What the Operator assumes battery does is listed in
 // docs/requirements/10-battery.md (BA-*), from battery v0.3.3's source; the
@@ -59,9 +61,6 @@ limitations under the License.
 //   - The fake does not check a Host's flintlock version; battery refuses
 //     to create a MicroVM on a Host whose ServerInfo reports a version
 //     older than v0.15.2.
-//   - DeletePool deletes the Pool's idle MicroVMs and refuses only while a
-//     Lease is outstanding; battery refuses while the Pool owns any
-//     MicroVM.
 //   - VM_EXPIRING_SOON fires one Pool heartbeat_interval before a Lease's
 //     expiry, or half its heartbeat_expiry_threshold when the Pool sets no
 //     interval; battery uses one process-wide warning_window, 30 seconds by

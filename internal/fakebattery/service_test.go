@@ -148,6 +148,16 @@ func TestServesTheThreeServicesOverGRPC(t *testing.T) {
 	}
 	waitProtoEvent(t, stream, poolmgrv1.EventType_VM_DELETED_ON_RELEASE)
 
+	// battery refuses to delete a Pool that owns MicroVMs; one that never
+	// had any goes at once.
+	if _, err := admin.DeletePool(ctx, &poolmgrv1.DeletePoolRequest{Ref: ref}); statusCode(t, err) != codes.FailedPrecondition {
+		t.Fatalf("PoolAdmin.DeletePool of a filled pool: code %v, want FAILED_PRECONDITION", statusCode(t, err))
+	}
+	spec.Name, spec.Size = "empty", 0
+	ref = &poolmgrv1.PoolRef{Name: spec.GetName(), Namespace: spec.GetNamespace()}
+	if _, err := admin.CreatePool(ctx, &poolmgrv1.CreatePoolRequest{Spec: spec}); err != nil {
+		t.Fatalf("PoolAdmin.CreatePool: %v", err)
+	}
 	if _, err := admin.DeletePool(ctx, &poolmgrv1.DeletePoolRequest{Ref: ref}); err != nil {
 		t.Fatalf("PoolAdmin.DeletePool: %v", err)
 	}

@@ -184,6 +184,8 @@ of date. `make duvet-models-write` rewrites it. `type=test` and
 | BA-051 | `specs/quint/claims.qnt` |
 | BA-060 | `specs/quint/claims.qnt` |
 | BA-061 | `specs/quint/pools.qnt` |
+| BA-070 | `specs/quint/pools.qnt` |
+| BA-072 | `specs/quint/pools.qnt` |
 | CL-001 | `specs/quint/claims.qnt` |
 | CL-002 | `specs/quint/claims.qnt` |
 | CL-003 | `specs/quint/claims.qnt` |
@@ -236,6 +238,9 @@ of date. `make duvet-models-write` rewrites it. `type=test` and
 | PO-010 | `specs/quint/pools.qnt` |
 | PO-011 | `specs/quint/pools.qnt` |
 | PO-012 | `specs/quint/pools.qnt` |
+| PO-030 | `specs/quint/pools.qnt` |
+| PO-031 | `specs/quint/pools.qnt` |
+| PO-032 | `specs/quint/pools.qnt` |
 <!-- END modelled -->
 
 ## The coverage gate

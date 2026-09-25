@@ -31,6 +31,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
@@ -608,7 +609,10 @@ func mustClient(t *testing.T, cfg *envconf.Config) client.Client {
 }
 
 // createNamespace and deleteNamespace are a feature's setup and teardown
-// of a namespace of its own.
+// of a namespace of its own. deleteNamespace waits for the namespace to go,
+// which it does only once the Operator has deleted its Pools from battery
+// (PO-003) and released its claims, so a Pool or claim the Operator cannot
+// delete fails the feature.
 func createNamespace(name string) features.Func {
 	return func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
 		ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name}}
@@ -621,9 +625,28 @@ func createNamespace(name string) features.Func {
 
 func deleteNamespace(name string) features.Func {
 	return func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+		c := mustClient(t, cfg)
 		ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name}}
-		if err := mustClient(t, cfg).Delete(ctx, ns); err != nil && !apierrors.IsNotFound(err) {
+		if err := c.Delete(ctx, ns); err != nil && !apierrors.IsNotFound(err) {
 			t.Errorf("deleting the namespace %s: %v", name, err)
+			return ctx
+		}
+		err := wait.PollUntilContextTimeout(ctx, 2*time.Second, placementTimeout, true, func(ctx context.Context) (bool, error) {
+			return apierrors.IsNotFound(c.Get(ctx, client.ObjectKeyFromObject(ns), ns)), nil
+		})
+		if err != nil {
+			var pools batteryv1alpha1.PoolList
+			_ = c.List(ctx, &pools, client.InNamespace(name))
+			var claims batteryv1alpha1.MicroVMClaimList
+			_ = c.List(ctx, &claims, client.InNamespace(name))
+			left := make([]string, 0, len(pools.Items)+len(claims.Items))
+			for _, p := range pools.Items {
+				left = append(left, "Pool "+p.Name+" "+describe(p.Status))
+			}
+			for _, cl := range claims.Items {
+				left = append(left, "MicroVMClaim "+cl.Name+" "+describe(cl.Status))
+			}
+			t.Errorf("waiting for the namespace %s to go: %v; left in it: %v", name, err, left)
 		}
 		return ctx
 	}

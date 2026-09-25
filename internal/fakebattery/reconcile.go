@@ -75,6 +75,13 @@ func (s strategy) onDeleted() int {
 
 // tickDeficit is how many MicroVMs the tick starts to reach the target.
 func (s strategy) tickDeficit(c counts) int {
+	//= docs/requirements/10-battery.md#delete-pool
+	//# While a Pool's replenishment strategy is `MIN_SIZE_THRESHOLD`
+	//# and its size is 0, battery SHALL provision no MicroVM for it.
+	//
+	// The target of MIN_SIZE_THRESHOLD is the size less every MicroVM
+	// already there, which is never positive at a size of 0, and onClaimed
+	// and onDeleted start nothing for it.
 	var deficit int32
 	switch s.typ {
 	case poolmgrv1.ReplenishmentStrategyType_IMMEDIATE_ON_LEASE:
@@ -213,7 +220,8 @@ func (b *Battery) provisionNLocked(ps *poolState, n int, reason string) {
 		}
 		b.nextVM++
 		now := b.cfg.Clock.Now()
-		vm := &vmState{id: b.nextVM, pool: ps.key, host: host, phase: poolmgrv1.VMPhase_PROVISIONING, createdAt: now, updated: now}
+		vm := &vmState{id: b.nextVM, pool: ps.key, host: host, phase: poolmgrv1.VMPhase_PROVISIONING,
+			createPolicy: ps.spec.HookFailurePolicy, createdAt: now, updated: now}
 		b.vms[vm.id] = vm
 		reserved = append(reserved, vm)
 	}
@@ -221,7 +229,7 @@ func (b *Battery) provisionNLocked(ps *poolState, n int, reason string) {
 		return
 	}
 	b.emitLocked(ps.key, "", poolmgrv1.EventType_POOL_REPLENISHING, map[string]any{"count": len(reserved), "reason": reason})
-	ctx := b.runCtx
+	ctx := b.reconcilerLocked(ps)
 	for _, vm := range reserved {
 		b.spawn(func() { b.provision(ctx, vm) })
 	}
@@ -293,6 +301,10 @@ func (b *Battery) provision(ctx context.Context, vm *vmState) {
 	b.mu.Unlock()
 
 	if ctx.Err() != nil {
+		if reconcilerStopped(ctx) {
+			b.applyHookFailurePolicy(ctx, vm, HookCreate, context.Cause(ctx))
+			return
+		}
 		// The fake is stopping. The MicroVM has its uid now, so cleanupAll
 		// deletes it; running the rest of the pipeline would only fail it.
 		return
@@ -307,6 +319,12 @@ func (b *Battery) provision(ctx context.Context, vm *vmState) {
 	}
 	if err := b.runHooks(ctx, vm, HookCreate, hooks); err != nil {
 		b.applyHookFailurePolicy(ctx, vm, HookCreate, err)
+		return
+	}
+	if reconcilerStopped(ctx) {
+		// battery's last write of the pipeline fails on the stopped
+		// reconciler's context too.
+		b.applyHookFailurePolicy(ctx, vm, HookCreate, context.Cause(ctx))
 		return
 	}
 	b.mu.Lock()
@@ -407,10 +425,19 @@ func (b *Battery) applyHookFailurePolicy(ctx context.Context, vm *vmState, hook 
 		return
 	}
 	policy := b.pools[vm.pool].spec.HookFailurePolicy
+	if hook == HookCreate {
+		// battery's reconciler provisions under the spec it started with.
+		policy = vm.createPolicy
+	}
 	vm.leaseID = ""
 	b.emitLocked(vm.pool, vm.uid, poolmgrv1.EventType_VM_HOOK_FAILED,
 		map[string]any{"hook": string(hook), "error": cause.Error(), "policy": policy.String()})
 	if policy == poolmgrv1.HookFailurePolicy_QUARANTINE {
+		//= docs/requirements/10-battery.md#delete-pool
+		//# battery SHALL NOT delete a MicroVM in the phase `QUARANTINED`.
+		//
+		// The MicroVM keeps no lease id, so ReleaseVM cannot reach it, and
+		// the tick deletes only expired leased MicroVMs and DELETING ones.
 		b.setPhaseLocked(vm, poolmgrv1.VMPhase_QUARANTINED)
 		b.mu.Unlock()
 		b.log.Info("Quarantined MicroVM after its hook failed", "hook", string(hook), "uid", vm.uid, "pool", vm.pool.String(), "err", cause.Error())
@@ -518,4 +545,33 @@ func (b *Battery) finishDeletionLocked(vm *vmState) {
 		b.emitLocked(vm.pool, vm.uid, vm.deleteEvent, payload)
 	}
 	b.provisionNLocked(ps, strategyOf(ps.spec).onDeleted(), "vm deleted")
+}
+
+// errReconcilerStopped is the cause with which UpdatePool cancels the
+// provisioning of a Pool, as battery stops the Pool's reconciler.
+var errReconcilerStopped = errors.New("fake battery: pool reconciler stopped by UpdatePool")
+
+// reconcilerLocked is the context the Pool's provisioning runs under: one
+// per Pool, from the control loop's, until UpdatePool stops it
+// (stopReconcilerLocked) and the next provisioning starts another.
+func (b *Battery) reconcilerLocked(ps *poolState) context.Context {
+	if ps.reconciler == nil {
+		ps.reconciler, ps.stopReconciler = context.WithCancelCause(b.runCtx)
+	}
+	return ps.reconciler
+}
+
+// stopReconcilerLocked cancels the Pool's provisioning, as battery's
+// UpdatePool stops the Pool's reconciler.
+func (b *Battery) stopReconcilerLocked(ps *poolState) {
+	if ps.stopReconciler != nil {
+		ps.stopReconciler(errReconcilerStopped)
+	}
+	ps.reconciler, ps.stopReconciler = nil, nil
+}
+
+// reconcilerStopped reports whether ctx is a Pool's provisioning that
+// UpdatePool stopped, rather than the fake stopping.
+func reconcilerStopped(ctx context.Context) bool {
+	return errors.Is(context.Cause(ctx), errReconcilerStopped)
 }

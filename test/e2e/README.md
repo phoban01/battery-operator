@@ -75,7 +75,10 @@ One `Test*` function per area, each running `testenv.Test` with
 `features.New(...)`: a namespace of its own when it creates namespaced
 objects, `Assess` steps that cite the requirements they check
 (`//= type=test`), and dry runs (`client.DryRunAll`) wherever the API
-server's answer is the point.
+server's answer is the point. `createNamespace` and `deleteNamespace` set
+up and tear down that namespace; `deleteNamespace` waits until it is gone,
+which is once the Operator has deleted its Pools from battery and released
+its claims, and fails the feature if that does not happen in time.
 
 ## A smaller cluster
 
