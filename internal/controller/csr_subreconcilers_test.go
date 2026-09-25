@@ -38,6 +38,8 @@ func (s *signer) scopeOf(t *testing.T, c client.Client, name string) *csrScope {
 		APIReader: s.c,
 		Config:    s.csr.Config,
 		cas:       s.csr.cas,
+		pins:      s.c,
+		pinIndex:  &s.csr.pinIndex,
 	}
 }
 
@@ -103,6 +105,12 @@ func TestCSRDecisionsRecordWhatToWrite(t *testing.T) {
 		}
 		if len(sc.Object.Status.Certificate) != 0 {
 			t.Error("a subreconciler set the certificate before the write")
+		}
+		if sc.pin == nil || sc.pin.Data[nodeA] != nodeAIP {
+			t.Errorf("pin = %+v, want %s pinned to %s", sc.pin, nodeA, nodeAIP)
+		}
+		if s.pins(t) != nil {
+			t.Error("a subreconciler stored the pin before the write")
 		}
 	})
 }

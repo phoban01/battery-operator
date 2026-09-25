@@ -42,6 +42,10 @@ type csrScope struct {
 	Config SignerConfig
 	// cas reads the CA Secrets by name.
 	cas map[string]client.Reader
+	// pins reads the address pins ConfigMap, through a cache of that one
+	// object, and pinIndex indexes it.
+	pins     client.Reader
+	pinIndex *pinIndex
 
 	// node is the requester's Node name, once csrRequester has found it.
 	node string
@@ -50,6 +54,10 @@ type csrScope struct {
 	// denial is the first check the request failed, nil while it has
 	// failed none.
 	denial *denial
+	// pin is the pins ConfigMap with the new pin, which write stores before
+	// the certificate; nil when the request's Node has its pin already, or
+	// its certificate names no address.
+	pin *corev1.ConfigMap
 
 	// approval is the condition, Approved or Denied, that write adds
 	// through the approval subresource; nil for none.
@@ -109,6 +117,17 @@ func (s *csrScope) write(ctx context.Context) error {
 		}
 		s.Log.Info("Refused to sign an approved CertificateSigningRequest", "reason", s.denial.reason, "message", s.denial.message)
 	case s.certificate != nil:
+		//= docs/requirements/09-certificates.md#approval
+		//# When the Operator signs a
+		//# `battery.liquidmetal-x.dev/flintlockd-serving` or
+		//# `battery.liquidmetal-x.dev/exec-agent-serving` request for a Node that has
+		//# no pinned address, the Operator SHALL pin the request's IP address to that
+		//# Node, and SHALL store the certificate only once the pin is stored.
+		if s.pin != nil {
+			if err := s.writePin(ctx); err != nil {
+				return err
+			}
+		}
 		csr.Status.Certificate = s.certificate
 		if err := s.Client.Status().Update(ctx, csr); err != nil {
 			return fmt.Errorf("writing the certificate of CertificateSigningRequest %s: %w", csr.Name, err)

@@ -219,6 +219,9 @@ of date. `make duvet-models-write` rewrites it. `type=test` and
 | CT-012 | `specs/quint/certificates.qnt` |
 | CT-013 | `specs/quint/certificates.qnt` |
 | CT-014 | `specs/quint/certificates.qnt` |
+| CT-015 | `specs/quint/certificates.qnt` |
+| CT-016 | `specs/quint/certificates.qnt` |
+| CT-017 | `specs/quint/certificates.qnt` |
 | CT-020 | `specs/quint/certificates.qnt` |
 | DP-007 | `specs/quint/pools.qnt` |
 | DP-008 | `specs/quint/pools.qnt` |

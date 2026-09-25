@@ -218,19 +218,113 @@ module certificates_test {
       .then(opReconcile(0))
       .expect(and { csr(0).certificate == Some(servingCN1), safety })
 
-  // A compromised Host's kubelet lists another Host's address as its own
-  // Node's internal address. Every check passes, and the Host's agent
-  // obtains a flintlockd serving certificate for the other Host's address,
-  // which battery v0.3.3 verifies flintlockd by (#75).
+  // CT-015, CT-016, #75: a compromised Host's kubelet lists another Host's
+  // address as its own Node's internal address, which passes CT-010 and
+  // CT-014. Its Node's pin, set by its first serving certificate, refuses
+  // a request for the other Host's address for both serving signer names,
+  // whoever approved it.
   run compromisedKubeletTest =
     init
+      .then(agentRequest("n1", FlintlockdServing, "10.0.0.1"))
+      .then(opReconcile(0))
+      .expect(pins == Map("n1" -> "10.0.0.1"))
       .then(compromise("n1"))
       .then(kubeletReportsAddresses("n1", Set("10.0.0.1", "10.0.0.2")))
       .then(withIPs(agentOn("n1"), "n1", FlintlockdServing, "10.0.0.1", Set("10.0.0.2")))
-      .then(opReconcile(0))
+      .then(withIPs(agentOn("n1"), "n1", ExecAgentServing, "10.0.0.1", Set("10.0.0.2")))
+      .then(withIPs(agentOn("n1"), "n1", FlintlockdServing, "10.0.0.1", Set("10.0.0.2")))
+      .then(foreignDecide(3, true, CheckRequester))
+      .then(opReconcile(1))
+      .then(opReconcile(2))
+      .then(opReconcile(3))
       .expect(and {
-        certOf(0).ips == Set("10.0.0.2"),
-        signedOnlyAfterChecks,
-        not(noCertForAnotherNode),
+        csr(1).decision == DeniedBy({ approver: OperatorApprover, reason: CheckAddressPinned }),
+        csr(2).decision == DeniedBy({ approver: OperatorApprover, reason: CheckAddressPinned }),
+        csr(3).failed == Some(CheckAddressPinned),
+        certified == Set(0),
+        pins == Map("n1" -> "10.0.0.1"),
+        witnessKubeletLieRefused,
+        noCertForAnotherNode,
+        safety,
       })
+
+  // CT-015: once a dual-stack Node's first serving certificate has pinned
+  // one of its addresses, a request for the other is refused.
+  run otherOwnAddressRefusedTest =
+    init
+      .then(agentRequest("n2", FlintlockdServing, "10.0.0.2"))
+      .then(opReconcile(0))
+      .then(agentRequest("n2", ExecAgentServing, "fd00::2"))
+      .then(opReconcile(1))
+      .expect(and {
+        pins == Map("n2" -> "10.0.0.2"),
+        csr(1).decision == DeniedBy({ approver: OperatorApprover, reason: CheckAddressPinned }),
+        safety,
+      })
+
+  // CT-016: the first serving certificate pins its address, for both
+  // serving signer names; a client certificate pins nothing.
+  run firstServingCertificatePinsTest =
+    init
+      .then(agentRequest("n1", FlintlockdClient, "10.0.0.1"))
+      .then(opReconcile(0))
+      .expect(pins == Map())
+      .then(agentRequest("n2", ExecAgentServing, "fd00::2"))
+      .then(opReconcile(1))
+      .then(agentRequest("n2", FlintlockdServing, "fd00::2"))
+      .then(opReconcile(2))
+      .expect(and {
+        pins == Map("n2" -> "fd00::2"),
+        certified == Set(0, 1, 2),
+        pinsAreTheHostsOwn,
+        safety,
+      })
+
+  // CT-016: while the CA cannot be read, an approved request is neither
+  // signed nor pinned; its Node's pin comes with its certificate.
+  run pinComesWithTheCertificateTest =
+    init
+      .then(caFlip)
+      .then(agentRequest("n1", FlintlockdServing, "10.0.0.1"))
+      .then(opReconcile(0))
+      .expect(and { isNone(csr(0).certificate), pins == Map(), safety })
+      .then(caFlip)
+      .then(opReconcile(0))
+      .expect(and { isSome(csr(0).certificate), pins == Map("n1" -> "10.0.0.1"), safety })
+
+  // 09-certificates.md#approval: an administrator clears a Host's pin, and
+  // its next serving certificate pins another of its addresses.
+  run adminClearsPinTest =
+    init
+      .then(agentRequest("n2", FlintlockdServing, "10.0.0.2"))
+      .then(opReconcile(0))
+      .then(adminClearsPin("n2"))
+      .then(agentRequest("n2", FlintlockdServing, "fd00::2"))
+      .then(opReconcile(1))
+      .expect(and {
+        pins == Map("n2" -> "fd00::2"),
+        isSome(csr(1).certificate),
+        witnessRepinned,
+        safety,
+      })
+
+  // Trust on first use: the model's kubelet lists addresses that are not
+  // its Host's only once its Node has a pin, and an administrator clears
+  // only an uncompromised Host's pin. Before its first pin, a compromised
+  // Host could pin an address nobody has pinned, as
+  // 09-certificates.md#approval says.
+  run kubeletLiesOnlyAfterFirstUseTest =
+    init
+      .then(compromise("n1"))
+      .then(kubeletReportsAddresses("n1", Set("10.0.0.2")))
+      .fail()
+
+  // The same: an administrator does not clear a compromised Host's pin.
+  run noClearingACompromisedPinTest =
+    init
+      .then(agentRequest("n1", FlintlockdServing, "10.0.0.1"))
+      .then(opReconcile(0))
+      .then(compromise("n1"))
+      .then(adminClearsPin("n1"))
+      .fail()
 }

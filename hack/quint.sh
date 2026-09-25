@@ -70,7 +70,8 @@ check specs/quint/claims.qnt safety \
 
 check specs/quint/certificates.qnt safety \
   witnessAgentFullyCertified witnessForeignApprovalFailed witnessForeignApprovalSigned \
-  witnessAnotherHostDenied witnessSubjectIgnored witnessApprovedAwaitingCA
+  witnessAnotherHostDenied witnessSubjectIgnored witnessApprovedAwaitingCA \
+  witnessKubeletLieRefused witnessRepinned
 
 check specs/quint/pools.qnt safety \
   witnessFlapAbsorbed witnessRestart witnessBatchedRestart witnessTwoRestarts \

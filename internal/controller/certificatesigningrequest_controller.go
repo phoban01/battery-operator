@@ -48,6 +48,10 @@ type CertificateSigningRequestReconciler struct {
 	// cas reads the CA Secrets by name, each through a cache of that one
 	// Secret.
 	cas map[string]client.Reader
+	// pins reads the address pins ConfigMap through a cache of that one
+	// ConfigMap, and pinIndex keeps its index.
+	pins     client.Reader
+	pinIndex pinIndex
 }
 
 // +kubebuilder:rbac:groups=certificates.k8s.io,resources=certificatesigningrequests,verbs=get;list;watch
@@ -56,6 +60,8 @@ type CertificateSigningRequestReconciler struct {
 // +kubebuilder:rbac:groups=certificates.k8s.io,resources=signers,verbs=approve;sign,resourceNames=battery.liquidmetal-x.dev/flintlockd-serving;battery.liquidmetal-x.dev/flintlockd-client;battery.liquidmetal-x.dev/exec-agent-serving
 // +kubebuilder:rbac:groups="",resources=nodes,verbs=get
 // +kubebuilder:rbac:groups="",namespace=system,resources=secrets,verbs=get;list;watch,resourceNames=flintlockd-serving-ca;flintlockd-client-ca
+// +kubebuilder:rbac:groups="",namespace=system,resources=configmaps,verbs=get;list;watch;update,resourceNames=host-address-pins
+// +kubebuilder:rbac:groups="",namespace=system,resources=configmaps,verbs=create
 
 // Reconcile reviews a request for one of the Operator's signer names,
 // approves or denies it, and signs it once approved and reviewed. It builds
@@ -76,6 +82,8 @@ func (r *CertificateSigningRequestReconciler) Reconcile(ctx context.Context, req
 		APIReader: r.APIReader,
 		Config:    r.Config,
 		cas:       r.cas,
+		pins:      r.pins,
+		pinIndex:  &r.pinIndex,
 	}
 	res, err := csrChain().Run(ctx, s)
 	// The write runs even when the chain failed, so that a request the
@@ -108,6 +116,11 @@ func (r *CertificateSigningRequestReconciler) SetupWithManager(mgr ctrl.Manager)
 		r.cas[name] = c
 		caches[name] = c
 	}
+	pins, err := singleObjectCache(mgr, r.Config.Namespace, AddressPinsConfigMap)
+	if err != nil {
+		return err
+	}
+	r.pins = pins
 
 	//= docs/requirements/09-certificates.md#signing
 	//# The Operator SHALL approve and sign `CertificateSigningRequest`s
