@@ -11,6 +11,7 @@ code. They do not replace Go tests. How they cite requirements is in
 | `types.qnt` | The shared types: `Pool` and `MicroVMClaim` (spec, status, phase, conditions) and their places in the API server, battery's Leases, MicroVMs and Pools, Nodes, Node reports and Hosts |
 | `claims.qnt` | The claim lifecycle against battery (CL-001 to CL-042; ADR 0001, consequences 2 to 4), with battery as `docs/requirements/10-battery.md` describes it (BA-*) |
 | `claims_test.qnt` | Scenario tests for `claims.qnt`, one interleaving each |
+| `claims_replay.qnt` | The traces of `claims.qnt` that the Claim Controller's replay test replays: `claims.qnt`'s steps, weighted towards the controller's (#62) |
 | `certificates.qnt` | Certificate approval and signing (CT-001 to CT-020; EA-061, EA-062, EA-068; ADR 0003 and ADR 0004) |
 | `certificates_test.qnt` | Scenario tests for `certificates.qnt` |
 | `pools.qnt` | Pools, placement and inventory: the Pool Controller and the Inventory Controller against battery (PO-001 to PO-004, PO-010 to PO-012, IN-001 to IN-013, DP-007, DP-008, BA-061; ADR 0001, consequence 1) |
@@ -154,6 +155,27 @@ The rest have theirs among the witnesses above. `make quint` fails if a
 witness is never reached. A renewal kept past its expiry needs a renewal late in the
 Lease and time passing before it is relayed, which random simulation
 reaches too rarely for a witness; the scenario tests above cover it.
+
+### Replaying its traces against the Claim Controller
+
+`internal/controller/claim_replay_test.go` replays traces of `claims.qnt`
+against the Claim Controller's subreconciler chain, with controller-runtime's
+fake client, a scripted battery and a fake clock, and compares the claims,
+battery's Leases and what the controller holds in memory with the trace
+after every step (#62). `make claims-traces`
+([hack/claims-traces.sh](../../hack/claims-traces.sh)) writes the traces to
+`internal/controller/testdata/claims-traces`: it simulates
+`claims_replay.qnt`, whose `replayStep` takes `claims.qnt`'s steps weighted
+towards the controller's, with a fixed seed and quint's `--mbt` metadata,
+which names each step and its picks, and keeps a few traces that between
+them take every step. `make quint` fails if the committed traces are not
+what the model writes now, so a change to `claims.qnt`'s steps or state
+runs `make claims-traces` and commits the new traces, and `make test`
+replays them.
+
+Where the model and the controller are known to differ, the test's
+`knownDivergences` names the difference and its issue, and the replay of a
+trace stops at the step that reaches it.
 
 ## The certificates model
 

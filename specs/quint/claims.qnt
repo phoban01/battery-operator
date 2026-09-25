@@ -512,7 +512,9 @@ module claims {
   // battery's answer to ClaimVM carries no expiry time, so the claim is
   // Bound with none, and CL-016 reads it with ListLeases (ctlListRenewed).
   // The renewTime the claim has now is recorded as relayed: the new Lease
-  // runs from later than any renewal before it.
+  // runs from later than any renewal before it. The time of binding is
+  // when battery answered ClaimVM, which can be ticks before the status
+  // write, as the Claim Controller records it (#62).
   action ctlWriteBound(c: ClaimName): bool = all {
     canWriteBound(c),
     val l = claimAnswer(ctrl.mem.get(c))
@@ -525,7 +527,7 @@ module claims {
           leaseId: Some(l.id),
           microVM: Some(l.vm),
           nodeName: Some(l.host),
-          boundTime: Some(now),
+          boundTime: Some(l.claimedAt),
           leaseExpiresAt: None,
           bound: { status: CondTrue, reason: ClaimBound },
           synced: synced,
