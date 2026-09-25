@@ -3,9 +3,13 @@ name: quint-verify
 # The bounded exhaustive checks of the Quint models, with Apalache
 # (specs/quint/README.md, "Bounded checks"). They are slow, so they are not
 # in ci.yml and not a required check: ci.yml's quint job simulates the same
-# models on every PR. They run on a PR that changes the models or the
-# checks, weekly on main, and by hand; one check per job, so that they run
-# side by side and a slow one does not hold up the others.
+# models on every PR.
+#
+# - quick: on a PR that changes the models or the checks, every model's
+#   safety at a bound small enough to finish in a few minutes.
+# - full: weekly on main and by hand, every check at hack/quint-verify.sh's
+#   bounds, the liveness properties and their witnesses included; these
+#   take hours. One check per job, so that they run side by side.
 
 on:
   pull_request:
@@ -31,10 +35,31 @@ env:
   DAGGER_NO_NAG: 1
 
 jobs:
-  verify:
-    name: ${{ matrix.check }}
+  quick:
+    name: quick ${{ matrix.check }}
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        check:
+          - claims:safety
+          - certificates:safety
+          - pools:safety
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: ./.github/actions/setup-dagger
+        with:
+          version: ${{ env.DAGGER_VERSION }}
+          call: quint-verify --checks=${{ matrix.check }} --steps=3
+
+  full:
+    name: full ${{ matrix.check }}
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    # GitHub's limit for a job
+    timeout-minutes: 360
     strategy:
       fail-fast: false
       matrix:

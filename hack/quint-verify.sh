@@ -43,7 +43,7 @@ cd "$root"
 : "${QUINT:=quint}"
 : "${QUINT_HOME:=$HOME/.quint}"
 : "${QUINT_VERIFY_STEPS:=5}"
-: "${QUINT_VERIFY_LIVENESS_STEPS:=10}"
+: "${QUINT_VERIFY_LIVENESS_STEPS:=5}"
 
 # The Apalache that quint 0.32.0's `quint verify` runs, and the sha256 of
 # its apalache.tgz from the release's sha256sum.txt. .dagger/main.go pins
@@ -99,22 +99,35 @@ json() {
 
 # run CHECK: one check, as the usage above describes it.
 run() {
-  local model=${1%%:*} name=${1#*:} args expect=hold steps
+  local model=${1%%:*} name=${1#*:} args expect=hold steps init=init
   case "$name" in
     safety)
       steps=$QUINT_VERIFY_STEPS
       args=(--next=step --inv=safety) ;;
-    witness*)
-      steps=$QUINT_VERIFY_LIVENESS_STEPS expect=violate
-      args=(--next=stepOrStutter "--temporal=$name") ;;
     *)
       steps=$QUINT_VERIFY_LIVENESS_STEPS
-      args=(--next=stepOrStutter "--temporal=$name") ;;
+      args=(--next=stepOrStutter "--temporal=$name")
+      case "$name" in witness*) expect=violate ;; esac
+      # The two about a Lease that has run out start where one has
+      # (claims.qnt, "Liveness").
+      case "$name" in
+        *[uU]nrenewedClaimExpires) init=initClaimRunOut ;;
+        *[oO]rphanEventuallyGone) init=initOrphanRunOut ;;
+      esac ;;
   esac
-  echo "==> $1, up to $steps steps"
-  local start=$SECONDS rc=0 log="$work/$model-$name.log"
-  "$apalache" check --init=init "${args[@]}" --length="$steps" \
-    --out-dir="$out/$model-$name" "$(json "$model")" >"$log" 2>&1 || rc=$?
+  echo "==> $1, from $init, up to $steps steps"
+  local start=$SECONDS rc log="$work/$model-$name.log" input
+  input=$(json "$model")
+  # The full output goes to the log; each step as Apalache reaches it, to
+  # the terminal.
+  set +e
+  "$apalache" check --init="$init" "${args[@]}" --length="$steps" \
+    --out-dir="$out/$model-$name" "$input" 2>&1 | tee "$log" |
+    while IFS= read -r line; do
+      case "$line" in "Step "*": picking"*) echo "    ${line%%: picking*} ($((SECONDS - start))s)" ;; esac
+    done
+  rc=${PIPESTATUS[0]}
+  set -e
   local took="($((SECONDS - start))s)"
   # Apalache exits 12 when it finds a counterexample.
   case "$expect:$rc" in

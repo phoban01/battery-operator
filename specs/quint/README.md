@@ -80,11 +80,14 @@ runs them, one per job, on a PR that changes the models or the checks,
 weekly on `main`, and by hand. `dagger call quint-verify
 --checks="claims:safety"` runs them locally the same way.
 
-The bounds are small, and so is what they cover: a claim takes five steps
-to be created, get its finalizer and bind, and ten to bind and expire.
-They find a mistake in a model's first steps that simulation might miss,
-and show that the liveness properties hold at all; the simulations' 60
-steps do the rest.
+The bounds are small, `QUINT_VERIFY_STEPS=5` and
+`QUINT_VERIFY_LIVENESS_STEPS=6`, and so is what they cover: a claim takes
+five steps to be created, get its finalizer and bind. They find a mistake
+in a model's first steps that simulation might miss, and show that the
+liveness properties hold at all; the simulations' 60 steps do the rest.
+On GitHub's runners, at these bounds, `claims:safety` takes about ten
+minutes and `pools:safety` about twenty; each step more of bound costs
+several times the step before.
 
 Apalache needs Java 17 or later, which devbox does not install; `dagger
 call quint-verify` has one. The script installs Apalache 0.56.1, the
@@ -207,12 +210,12 @@ properties say that the controller, and battery, get somewhere. Each is
 `assumptions implies property`, and takes only the assumptions it needs.
 `make quint-verify` checks them ([Bounded checks](#bounded-checks)).
 
-| Property | Checks | Assumes |
-|----------|--------|---------|
-| `deletedClaimGone` | a deleted claim is eventually gone, its finalizer removed, with a Lease or without (CL-020, CL-021) | battery eventually up; the controller eventually stable; the controller fair |
-| `pendingClaimBinds` | a Pending claim eventually binds, is deleted, or battery has no MicroVM left to give it (CL-001 to CL-003) | those, and battery replenishing its Pool |
-| `unrenewedClaimExpires` | a Bound claim with no renewal pending eventually goes Expired, unless its Holder renews or deletes it first (#45; CL-032, CL-014) | those of `deletedClaimGone`, and time passing |
-| `orphanEventuallyGone` | an orphaned Lease is eventually gone, whatever the controller does (ADR 0001, consequence 2; CL-019, BA-020) | battery eventually up; its sweep; time passing |
+| Property | Checks | Assumes | From |
+|----------|--------|---------|------|
+| `deletedClaimGone` | a deleted claim is eventually gone, its finalizer removed, with a Lease or without (CL-020, CL-021) | battery eventually up; the controller eventually stable; the controller fair | `init` |
+| `pendingClaimBinds` | a Pending claim eventually binds, is deleted, or battery has no MicroVM left to give it (CL-001 to CL-003) | those, and battery replenishing its Pool | `init` |
+| `unrenewedClaimExpires` | a Bound claim with no renewal pending whose Lease has run out eventually goes Expired, unless its Holder renews or deletes it first (#45; CL-032, CL-014) | those of `deletedClaimGone` | `CLAIM_RUN_OUT` |
+| `orphanEventuallyGone` | an orphaned Lease that has run out is eventually gone, whatever the controller does (ADR 0001, consequence 2; CL-019, BA-020) | battery eventually up; its sweep | `ORPHAN_RUN_OUT` |
 
 The assumptions, each a `temporal` in `claims.qnt`:
 
@@ -226,18 +229,17 @@ The assumptions, each a `temporal` in `claims.qnt`:
   The failures in transit never disable those steps, so this says that a
   call battery would answer is eventually made and answered, however often
   it fails first. The environment gets no fairness: Holders, crashes,
-  battery stopping, dropped events and failed calls may happen, or not.
+  battery stopping, dropped events, failed calls and time may come, or
+  not.
 - `replenishFair`, `sweepFair`: weak fairness on battery replenishing its
   Pool, and on its sweep.
-- `timePasses`: time passes, up to `HORIZON`. The properties that wait for
-  time ask only about a Lease that runs out by then.
 
 How Apalache checks them shapes how they are written. Each point is in
 the model's comments too:
 
 - It looks for a counterexample that ends in a loop back to a state it has
   been in, within the bound, and only at behaviours that go on for ever.
-  The checks take `stepOrStutter`, `step` or no change, so that a
+  The checks take `stepOrStutter`, a step or no change, so that a
   behaviour that gets stuck, with no step enabled, stutters for ever and
   counts, as in TLA+.
 - It takes no `weakFair`. Each step given fairness is disabled once taken,
@@ -247,12 +249,22 @@ the model's comments too:
   keep them in step with the actions.
 - It takes no quantifier over a temporal formula, nor a temporal operator
   with parameters. The properties are stated for one claim, `LIVE_CLAIM`,
-  by symmetry; the other two get no fairness. `orphanEventuallyGone` says
-  that again and again no orphan due by the horizon is left, which is the
-  same as each one going, since an orphan stays one until battery deletes
-  it and new ones stop coming.
-- Time is unbounded, so a loop is a stretch in which time stands still;
-  hence `HORIZON`.
+  by symmetry. `orphanEventuallyGone` says that again and again no orphan
+  that has run out is left, which is the same as each one going, since an
+  orphan stays one until battery deletes it and new ones stop coming.
+- Its cost grows steeply with the bound. `stepOrStutter` is
+  `stepOf(Set(LIVE_CLAIM))` or no change: the claim's own steps and every
+  step that is no claim's, so crashes, battery stopping and starting,
+  failed calls and time all still come, but the other two claims stay
+  unborn.
+- Time is unbounded, so a loop is a stretch in which time stands still,
+  and time passing cannot be assumed. The properties about a Lease running
+  out ask about one that has run out already. Getting there takes a claim
+  five steps to bind and three ticks, too many for an affordable bound, so
+  those two start from a state where it has: `CLAIM_RUN_OUT`, the claim
+  Bound at time 0 with time at its expiry, and `ORPHAN_RUN_OUT`, an orphan
+  claimed at time 0 and time at its expiry. `claimRunOutReachableTest` and
+  `orphanRunOutReachableTest` show each is reachable from `init`.
 - Apalache 0.56.1 fails with a `ClassCastException` on a chain of three or
   more `and`s inside an `if` in a lambda, such as `ctlRecover`'s, once it
   checks a temporal property. `ctlRecover` and `ctlEventDeleted` write
