@@ -23,8 +23,8 @@ set -euo pipefail
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$root"
 : "${QUINT:=quint}"
-: "${CLAIMS_TRACES_POOL:=400}"
-: "${CLAIMS_TRACES_STEPS:=35}"
+: "${CLAIMS_TRACES_POOL:=600}"
+: "${CLAIMS_TRACES_STEPS:=60}"
 : "${CLAIMS_TRACES_SEED:=62}"
 : "${CLAIMS_TRACES_BASE:=12}"
 : "${CLAIMS_TRACES_PER:=3}"

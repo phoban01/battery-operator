@@ -125,7 +125,7 @@ func (r Recover) Reconcile(_ context.Context, s *claimscope.Scope) (claimscope.R
 	}
 	//= docs/requirements/02-claims.md#recovery
 	//# When the Claim Controller starts, and when its connection to
-	//# battery is restored, the Claim Controller SHALL reconcile every Bound claim against
+	//# battery is restored, the Claim Controller SHALL reconcile every Bound claim that is not being deleted against
 	//# battery's Leases.
 	s.Called(methodListLeases, nil)
 

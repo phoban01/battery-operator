@@ -113,10 +113,10 @@ func (e ExpireDeleted) Reconcile(_ context.Context, s *claimscope.Scope) (claims
 	}
 	uid := c.Status.MicroVM.UID
 	//= docs/requirements/02-claims.md#renewal
-	//# When battery's `Events` stream reports that the MicroVM of a
-	//# Bound claim was deleted, the Claim Controller SHALL set the claim's phase
-	//# to `Expired` and its condition `Bound` false with the reason
-	//# `LeaseExpired`.
+	//# When battery's `Events` stream reports the deletion of the
+	//# MicroVM of a Bound claim that is not being deleted, the Claim Controller
+	//# SHALL set the claim's phase to `Expired` and its condition `Bound` false
+	//# with the reason `LeaseExpired`.
 	if !e.Deleted.Has(uid) {
 		return claimscope.Result{}, nil
 	}

@@ -79,23 +79,24 @@ takes the agent's address from the Node report instead.
   `NOT_FOUND`, or leaves the claim's Lease out of its answer to
   `ListLeases`, then the Claim Controller SHALL set the claim's phase to
   `Expired` and its condition `Bound` false with the reason `LeaseExpired`.
-- **CL-013** When battery's `Events` stream reports that the MicroVM of a
-  Bound claim was deleted, the Claim Controller SHALL set the claim's phase
-  to `Expired` and its condition `Bound` false with the reason
-  `LeaseExpired`.
-- **CL-014** When battery lists a Bound claim's Lease in its answer to
-  `ListLeases` with an expiry time that has passed, and the claim has no
-  pending renewal, the Claim Controller SHALL set the claim's phase to
-  `Expired` and its condition `Bound` false with the reason `LeaseExpired`.
+- **CL-013** When battery's `Events` stream reports the deletion of the
+  MicroVM of a Bound claim that is not being deleted, the Claim Controller
+  SHALL set the claim's phase to `Expired` and its condition `Bound` false
+  with the reason `LeaseExpired`.
+- **CL-014** When battery lists the Lease of a Bound claim that is not being
+  deleted in its answer to `ListLeases` with an expiry time that has
+  passed, and the claim has no pending renewal, the Claim Controller SHALL
+  set the claim's phase to `Expired` and its condition `Bound` false with
+  the reason `LeaseExpired`.
 - **CL-015** If battery's `Heartbeat` for a Bound claim fails in transit,
   then the Claim Controller SHALL keep the claim `Bound` with the Lease
   expiry time already in its status, and SHALL retry the `Heartbeat` with
   backoff while the claim is Bound.
-- **CL-016** When a Bound claim has no pending renewal, and its status has
-  no Lease expiry time or one that has passed, the Claim Controller SHALL
-  read the claim's Lease with battery's `ListLeases`, and SHALL keep the
-  claim `Bound` and write the expiry time battery lists if that time has
-  not passed.
+- **CL-016** When a Bound claim that is not being deleted has no pending
+  renewal, and its status has no Lease expiry time or one that has passed,
+  the Claim Controller SHALL read the claim's Lease with battery's
+  `ListLeases`, and SHALL keep the claim `Bound` and write the expiry time
+  battery lists if that time has not passed.
 - **CL-017** If the `ListLeases` call of CL-016 fails in transit, then the
   Claim Controller SHALL keep the claim `Bound` and retry the call with
   backoff.
@@ -190,6 +191,10 @@ binding still re-reads the claim before its `ClaimVM` as before.
 
 A released MicroVM is deleted by battery and never reused (BA-030, BA-006).
 
+A claim that is being deleted is released, not expired. CL-013, CL-014,
+CL-016 and CL-030 ask only about a Bound claim that is not being deleted,
+since CL-020 ends its Lease anyway, and the claim is about to go (#132).
+
 battery v0.3.3 answers `ReleaseVM` with `UNAVAILABLE`, and keeps the Lease,
 while `flintlockd` has not confirmed the MicroVM's deletion
 (`internal/api/lease.go`); its sweeper retries the deletion meanwhile. The
@@ -201,8 +206,8 @@ which CL-020 takes as released, and so does a retry after a crash between
 ## Recovery {#recovery}
 
 - **CL-030** When the Claim Controller starts, and when its connection to
-  battery is restored, the Claim Controller SHALL reconcile every Bound claim against
-  battery's Leases.
+  battery is restored, the Claim Controller SHALL reconcile every Bound
+  claim that is not being deleted against battery's Leases.
 - **CL-031** The Claim Controller SHALL NOT release a Lease that battery
   holds and no claim records.
 - **CL-032** While a claim is `Bound` and the Lease expiry time in its

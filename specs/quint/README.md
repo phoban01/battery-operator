@@ -111,7 +111,23 @@ The steps are:
   reading its Lease with `ListLeases`, when battery's expiry has passed or
   battery no longer lists the Lease (CL-012, CL-014, CL-016), release with `ReleaseVM` and then remove the
   finalizer, and recover on start and on reconnecting. Each step is one
-  call to battery or one write to the API server.
+  call to battery or one write to the API server, except the recovery and
+  the receipt of an event, which also take the reconciles they send.
+  These steps follow the Claim Controller's chain:
+  - a claim being deleted is released, and nothing expires it or reads
+    its expiry (#132);
+  - the event and the recovery reconcile a claim at once only if its own
+    step is not half done, as controller-runtime never reconciles a claim
+    twice at once (#133). The controller remembers the deletions it
+    received (`claim.DeletedVMs`) and the Leases the last recovery found
+    gone (`claim.RecoveredLeases`), and a claim's next reconcile expires
+    it from them without a call (`ctlExpireDeleted`,
+    `ctlExpireUnlisted`; #135). A crash forgets both;
+  - an expiry from an event keeps `Synced` as it was, since no call was
+    made (CL-042, #134);
+  - the recovery's reconcile runs the whole chain: it writes battery's
+    later expiry and sets `Synced` true, relays a pending renewal with
+    `Heartbeat`, and expires a Lease that ran out (#136).
 - **battery:** replenish the Pool, answer the `Lease` calls, sweep the
   Leases nobody renewed, and report each deleted MicroVM on its `Events`
   stream. These steps cite `docs/requirements/10-battery.md`. A `Heartbeat`
@@ -200,7 +216,14 @@ a claim Expired with a renewal pending
 The rest have theirs among the witnesses above. `make quint` fails if a
 witness is never reached. A renewal kept past its expiry needs a renewal late in the
 Lease and time passing before it is relayed, which random simulation
-reaches too rarely for a witness; the scenario tests above cover it.
+reaches too rarely for a witness; the scenario tests above cover it. So
+do a claim expired from a deletion the controller remembered
+(`witnessExpiredByRememberedDeletion`) and from a Lease the recovery
+found gone (`witnessExpiredByUnlistedLease`). Each needs battery to end a
+Lease while the controller holds an answer for its claim. The scenario
+tests `rememberedDeletionTest`, `eventWaitsForHalfDoneStepTest` and
+`recoveryWaitsForHalfDoneStepTest` reach them, and so do the replay's
+traces (below), but `make quint` does not list them.
 
 ### Liveness
 
@@ -266,9 +289,9 @@ the model's comments too:
   claimed at time 0 and time at its expiry. `claimRunOutReachableTest` and
   `orphanRunOutReachableTest` show each is reachable from `init`.
 - Apalache 0.56.1 fails with a `ClassCastException` on a chain of three or
-  more `and`s inside an `if` in a lambda, such as `ctlRecover`'s, once it
-  checks a temporal property. `ctlRecover` and `ctlEventDeleted` write
-  theirs as `and { }`, which it takes, and which means the same.
+  more `and`s inside an `if` in a lambda once it checks a temporal
+  property. The conditions of `ctlEventDeleted` and `ctlRecover` are
+  written as `and { }`, which it takes, and which means the same.
 
 Each property has a witness, `witness<Property>`, that `make
 quint-verify` requires to be violated: a behaviour within the bound that
@@ -295,7 +318,16 @@ replays them.
 
 Where the model and the controller are known to differ, the test's
 `knownDivergences` names the difference and its issue, and the replay of a
-trace stops at the step that reaches it.
+trace stops at the step that reaches it. It is empty now: #132 to #136
+were the differences the replay found first, and the model now does what
+the controller does in each. The replay also compares the deletions the
+controller remembers with the model's.
+
+`claims_replay.qnt` lets time pass, and battery sweep, stop and start,
+more often while the controller holds a `Heartbeat` answer, so that the
+traces reach a Lease that ends while its claim's step is half done.
+`ctlExpireUnlisted` is still rare: the traces are 60 steps long, from a
+pool of 600, so that the few kept take it.
 
 ## The certificates model
 

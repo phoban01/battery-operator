@@ -30,10 +30,10 @@ import (
 
 //= docs/requirements/02-claims.md#renewal
 //= type=test
-//# When battery's `Events` stream reports that the MicroVM of a
-//# Bound claim was deleted, the Claim Controller SHALL set the claim's phase
-//# to `Expired` and its condition `Bound` false with the reason
-//# `LeaseExpired`.
+//# When battery's `Events` stream reports the deletion of the
+//# MicroVM of a Bound claim that is not being deleted, the Claim Controller
+//# SHALL set the claim's phase to `Expired` and its condition `Bound` false
+//# with the reason `LeaseExpired`.
 
 // TestExpireDeletedExpiresTheClaimOfADeletedMicroVM covers CL-013: once
 // the event watcher has recorded the claim's MicroVM as deleted, the claim

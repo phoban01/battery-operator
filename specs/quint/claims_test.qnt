@@ -287,8 +287,9 @@ module claims_test {
 
   // #85 across a restart of battery: the Holder renews while battery is
   // down and the Lease runs out. Recovery finds the Lease held past its
-  // expiry, but the renewal is pending, so the claim stays Bound and the
-  // Heartbeat renews it before the first sweep (BA-022).
+  // expiry, but the renewal is pending, so the claim stays Bound, and the
+  // recovery's reconcile relays the renewal before the first sweep
+  // (BA-022, #136).
   run renewalKeptAcrossRestartTest =
     init
       .then(bind("a", "v1"))
@@ -296,11 +297,16 @@ module claims_test {
       .then(renewClaim("a"))
       .then(ticks(EXPIRY + 1))
       .then(batteryStart)
+      .expect(and { holds(1), not(holdsUnexpired(1)), pendingRenewal("a") })
       .then(ctlRecover)
-      .expect(and { obj("a").status.phase == Bound, holds(1), canHeartbeat("a"), safety })
-      .then(ctlHeartbeat("a"))
-      .then(ctlWriteRenewed("a"))
-      .expect(and { obj("a").status.phase == Bound, holdsUnexpired(1), safety })
+      .expect(and {
+        obj("a").status.phase == Bound,
+        obj("a").status.leaseExpiresAt == Some(EXPIRY + 1 + EXPIRY),
+        battery.leases.get(1).expiresAt == EXPIRY + 1 + EXPIRY,
+        not(pendingRenewal("a")),
+        controllerIdle,
+        safety,
+      })
 
   // The finding of #86: a crash-window orphan outlives the Pool's
   // heartbeat_expiry_threshold by up to a sweep interval, which ADR 0001,
@@ -355,7 +361,8 @@ module claims_test {
   // expire a claim whose Lease battery has just renewed. The relayed
   // renewTime is written with the expiry (CL-010), so the renewal is still
   // pending after the crash, nothing expires the claim, and the Heartbeat
-  // is sent again.
+  // is sent again: by the recovery's reconcile (recoveryRenewsAgainAfterCrashTest),
+  // or by the next reconcile of the claim, as here.
   run renewedClaimKeptAfterCrashTest =
     init
       .then(bind("a", "v1"))
@@ -363,7 +370,6 @@ module claims_test {
       .then(renewClaim("a"))
       .then(ctlHeartbeat("a"))
       .then(crashController)
-      .then(ctlRecover)
       .then(tick)
       .expect(and { not(canExpiryPassed("a")), canHeartbeat("a"), holdsUnexpired(1) })
       .then(ctlExpiryPassed("a"))
@@ -376,7 +382,6 @@ module claims_test {
       .then(renewClaim("a"))
       .then(ctlHeartbeat("a"))
       .then(crashController)
-      .then(ctlRecover)
       .then(tick)
       .then(ctlHeartbeat("a"))
       .then(ctlWriteRenewed("a"))
@@ -511,6 +516,188 @@ module claims_test {
       .then(ctlReleaseVM("a"))
       .then(ctlRemoveFinalizer("a"))
       .expect(and { isGone(slot("a")), safety })
+
+  // #132: a claim being deleted is released (CL-020). Nothing reads its
+  // expiry or expires it: not CL-014 and CL-016, not an event (CL-013) and
+  // not the recovery (CL-030).
+  run deletedClaimExpiryNotCheckedTest =
+    init
+      .then(bind("a", "v1"))
+      .then(ticks(EXPIRY))
+      .then(deleteClaim("a"))
+      .expect(and { not(canExpiryPassed("a")), canRelease("a") })
+      .then(ctlExpiryPassed("a"))
+      .fail()
+
+  run deletedClaimNotExpiredByEventTest =
+    init
+      .then(bind("a", "v1"))
+      .then(ticks(EXPIRY))
+      .then(batteryExpire)
+      .then(deleteClaim("a"))
+      .then(ctlEventDeleted("v1"))
+      .expect(and { obj("a").status.phase == Bound, ctrl.deleted == Set("v1"), not(canExpireDeleted("a")), safety })
+      .then(ctlReleaseVM("a"))
+      .then(ctlRemoveFinalizer("a"))
+      .expect(and { isGone(slot("a")), safety })
+
+  run deletedClaimNotExpiredByRecoveryTest =
+    init
+      .then(bind("a", "v1"))
+      .then(batteryStop)
+      .then(ticks(EXPIRY + 1))
+      .then(batteryStart)
+      .then(deleteClaim("a"))
+      .then(ctlRecover)
+      .expect(and { obj("a").status.phase == Bound, obj("a").deleting, canRelease("a"), safety })
+
+  // #133 and #135: battery sweeps a Lease while the controller holds a
+  // Heartbeat answer for it. The event does not touch the claim, whose own
+  // step is half done; the controller remembers the deletion, and the
+  // claim's next reconcile after the write expires it without a call.
+  run eventWaitsForHalfDoneStepTest =
+    init
+      .then(bind("a", "v1"))
+      .then(ticks(2))
+      .then(renewClaim("a"))
+      .then(ctlHeartbeat("a"))
+      .then(ticks(EXPIRY))
+      .then(batteryExpire)
+      .then(ctlEventDeleted("v1"))
+      .expect(and { obj("a").status.phase == Bound, not(idle("a")), ctrl.deleted == Set("v1"), safety })
+      .then(ctlWriteRenewed("a"))
+      .expect(and {
+        obj("a").status.phase == Bound,
+        canExpireDeleted("a"),
+        not(canExpiryPassed("a")),
+        not(canCallHeartbeat("a")),
+        not(controllerIdle),
+      })
+      .then(ctlExpireDeleted("a"))
+      .expect(and { obj("a").status.phase == Expired, witnessExpiredByRememberedDeletion, controllerIdle, safety })
+
+  // #133: the same for the recovery. It does not touch the claim whose
+  // step is half done, and remembers that battery no longer holds its
+  // Lease; the claim's next reconcile after the write expires it without a
+  // call, and the recovery's ListLeases counts as battery's answer.
+  run recoveryWaitsForHalfDoneStepTest =
+    init
+      .then(bind("a", "v1"))
+      .then(ticks(2))
+      .then(renewClaim("a"))
+      .then(ctlHeartbeat("a"))
+      .then(ticks(EXPIRY))
+      .then(batteryExpire)
+      .then(batteryStop)
+      .then(batteryStart)
+      .then(ctlRecover)
+      .expect(and { obj("a").status.phase == Bound, not(idle("a")), ctrl.unlisted == Set(1), safety })
+      .then(ctlWriteRenewed("a"))
+      .expect(and { canExpireUnlisted("a"), not(canExpiryPassed("a")), not(controllerIdle) })
+      .then(ctlExpireUnlisted("a"))
+      .expect(and {
+        obj("a").status.phase == Expired,
+        obj("a").status.synced == synced,
+        controllerIdle,
+        safety,
+      })
+
+  // #134: an event expires the claim without a call to battery, so Synced
+  // keeps what the last call said.
+  run eventExpiryKeepsSyncedTest =
+    init
+      .then(bind("a", "v1"))
+      .then(ticks(EXPIRY))
+      .then(ctlListUnanswered("a"))
+      .then(batteryExpire)
+      .then(ctlEventDeleted("v1"))
+      .expect(and {
+        obj("a").status.phase == Expired,
+        obj("a").status.synced == unavailable,
+        safety,
+      })
+
+  // #135: the Lease runs out, and battery sweeps it and reports the
+  // deletion, while the controller holds the ClaimVM answer. The claim is
+  // Bound only after the event; the controller remembers the deletion, and
+  // expires the claim without calling battery.
+  run rememberedDeletionTest =
+    init
+      .then(createClaim("a"))
+      .then(ctlAddFinalizer("a"))
+      .then(replenish("v1"))
+      .then(ctlClaimVM("a", "v1"))
+      .then(ticks(EXPIRY))
+      .then(batteryExpire)
+      .then(ctlEventDeleted("v1"))
+      .expect(and { obj("a").status.phase == Pending, ctrl.deleted == Set("v1"), safety })
+      .then(ctlWriteBound("a"))
+      .expect(and { canExpireDeleted("a"), not(canExpiryPassed("a")), not(controllerIdle) })
+      .then(ctlExpireDeleted("a"))
+      .expect(and {
+        obj("a").status.phase == Expired,
+        obj("a").status.synced == synced,
+        witnessExpiredByRememberedDeletion,
+        controllerIdle,
+        safety,
+      })
+
+  // #135: a crash loses what the controller remembered.
+  run crashForgetsDeletionsTest =
+    init
+      .then(bind("a", "v1"))
+      .then(ticks(EXPIRY))
+      .then(batteryExpire)
+      .then(dropEvent("v1"))
+      .then(bind("b", "v2"))
+      .then(ticks(EXPIRY))
+      .then(batteryExpire)
+      .then(ctlEventDeleted("v2"))
+      .expect(ctrl.deleted == Set("v2"))
+      .then(crashController)
+      .expect(and { ctrl.deleted == Set(), ctrl.unlisted == Set() })
+
+  // #136: the recovery's reconcile writes battery's expiry for a claim just
+  // bound, which has none, and sets Synced true.
+  run recoveryWritesBatteryExpiryTest =
+    init
+      .then(createClaim("a"))
+      .then(ctlAddFinalizer("a"))
+      .then(replenish("v1"))
+      .then(ctlClaimVM("a", "v1"))
+      .then(ctlWriteBound("a"))
+      .then(crashController)
+      .then(tick)
+      .then(ctlRecover)
+      .expect(and {
+        obj("a").status.phase == Bound,
+        obj("a").status.leaseExpiresAt == Some(EXPIRY),
+        obj("a").status.synced == synced,
+        controllerIdle,
+        safety,
+      })
+
+  // #136 with #57: a Heartbeat answer lost in transit leaves battery's
+  // expiry later than the status's, and the renewal pending. The
+  // recovery's reconcile relays the renewal again, and sets Synced true.
+  run recoveryRenewsAgainAfterCrashTest =
+    init
+      .then(bind("a", "v1"))
+      .then(tick)
+      .then(renewClaim("a"))
+      .then(ctlHeartbeatLost("a"))
+      .expect(obj("a").status.synced == unavailable)
+      .then(crashController)
+      .then(tick)
+      .then(ctlRecover)
+      .expect(and {
+        obj("a").status.phase == Bound,
+        obj("a").status.leaseExpiresAt == Some(2 + EXPIRY),
+        battery.leases.get(1).expiresAt == 2 + EXPIRY,
+        not(pendingRenewal("a")),
+        obj("a").status.synced == synced,
+        safety,
+      })
 
   // unrenewedClaimExpires and orphanEventuallyGone are checked from
   // CLAIM_RUN_OUT and ORPHAN_RUN_OUT (claims.qnt, "Liveness"). Each is a
