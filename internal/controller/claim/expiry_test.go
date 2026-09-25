@@ -79,7 +79,7 @@ func TestCheckExpiryWaitsForTheExpiry(t *testing.T) {
 
 //= docs/requirements/02-claims.md#renewal
 //= type=test
-//# When a Bound claim has no pending renewal, and its status has
+//# When a Bound claim that is not being deleted has no pending renewal, and its status has
 //# no Lease expiry time or one that has passed, the Claim Controller SHALL
 //# read the claim's Lease with battery's `ListLeases`, and SHALL keep the
 //# claim `Bound` and write the expiry time battery lists if that time has
@@ -128,7 +128,8 @@ func TestCheckExpiryKeepsALeaseBatteryStillHolds(t *testing.T) {
 
 //= docs/requirements/02-claims.md#renewal
 //= type=test
-//# When battery lists a Bound claim's Lease in its answer to
+//# When battery lists the Lease of a Bound claim that is not being
+//# deleted in its answer to
 //# `ListLeases` with an expiry time that has passed, and the claim has no
 //# pending renewal, the Claim Controller SHALL set the claim's phase to
 //# `Expired` and its condition `Bound` false with the reason `LeaseExpired`.
@@ -180,7 +181,8 @@ func TestCheckExpiryExpiresALeaseBatteryDoesNotList(t *testing.T) {
 
 //= docs/requirements/02-claims.md#renewal
 //= type=test
-//# When battery lists a Bound claim's Lease in its answer to
+//# When battery lists the Lease of a Bound claim that is not being
+//# deleted in its answer to
 //# `ListLeases` with an expiry time that has passed, and the claim has no
 //# pending renewal, the Claim Controller SHALL set the claim's phase to
 //# `Expired` and its condition `Bound` false with the reason `LeaseExpired`.

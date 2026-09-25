@@ -85,7 +85,7 @@ func recoveredClaim(name string, l *battery.Claim, expires time.Time) *batteryv1
 //= docs/requirements/02-claims.md#recovery
 //= type=test
 //# When the Claim Controller starts, and when its connection to
-//# battery is restored, the Claim Controller SHALL reconcile every Bound claim against
+//# battery is restored, the Claim Controller SHALL reconcile every Bound claim that is not being deleted against
 //# battery's Leases.
 
 //= docs/requirements/02-claims.md#recovery

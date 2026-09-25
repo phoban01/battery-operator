@@ -169,7 +169,7 @@ func (w *watchedBattery) ListLeases(ctx context.Context, p *battery.PoolRef) ([]
 //= docs/requirements/02-claims.md#recovery
 //= type=test
 //# When the Claim Controller starts, and when its connection to
-//# battery is restored, the Claim Controller SHALL reconcile every Bound claim against
+//# battery is restored, the Claim Controller SHALL reconcile every Bound claim that is not being deleted against
 //# battery's Leases.
 
 // TestBatteryEventsServesBothControllersAgainstTheFakeBattery covers #102:

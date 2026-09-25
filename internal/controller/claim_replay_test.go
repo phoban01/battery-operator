@@ -100,9 +100,7 @@ const (
 	stepListRenewed    = "ctlListRenewed"
 	stepListUnanswered = "ctlListUnanswered"
 
-	slotLive     = "Live"
-	phaseBound   = "Bound"
-	phaseExpired = "Expired"
+	slotLive = "Live"
 )
 
 // The in-flight answers of claims.qnt's InFlight, which the replay keeps
@@ -132,6 +130,10 @@ type ctlStep struct {
 var ctlSteps = map[string]ctlStep{
 	"ctlAddFinalizer":   {},
 	"ctlReleasePending": {},
+	// claim.ExpireDeleted and claim.Recover expire the claim from what the
+	// controller remembers, and call nothing.
+	"ctlExpireDeleted":  {},
+	"ctlExpireUnlisted": {},
 
 	"ctlClaimVM":           {mode: answer, calls: []string{methodClaimVM}, hold: claimAnswered, vm: "wv"},
 	"ctlClaimVMLost":       {mode: lose, calls: []string{methodClaimVM}, vm: "wv"},
@@ -168,7 +170,7 @@ var modelSteps = []string{
 	"ctlAddFinalizer", "ctlClaimVM", "ctlPoolExhausted", "ctlWriteBound",
 	"ctlHeartbeat", "ctlHeartbeatUnknown", "ctlWriteRenewed", "ctlReleaseVM",
 	"ctlRemoveFinalizer", "ctlReleasePending", stepRecover, stepEventDeleted,
-	stepExpiryPassed, stepListRenewed, "ctlClaimVMLost", "ctlClaimVMUnanswered",
+	"ctlExpireDeleted", "ctlExpireUnlisted", stepExpiryPassed, stepListRenewed, "ctlClaimVMLost", "ctlClaimVMUnanswered",
 	"ctlHeartbeatLost", "ctlHeartbeatUnanswered", stepListUnanswered,
 	"ctlReleaseLost", "ctlReleaseUnanswered",
 }
@@ -184,146 +186,10 @@ type divergence struct {
 }
 
 // knownDivergences are the differences between claims.qnt and the Claim
-// Controller that the replay has found, each with its issue.
-var knownDivergences = []divergence{
-	{
-		// claims.qnt's canExpiryPassed, ctlEventDeleted and ctlRecover do
-		// not ask whether the claim is being deleted; claim.Release stops
-		// the chain for every claim being deleted, and claim.ExpireDeleted
-		// and the recovery (claim.HoldsLease) pass over one.
-		name:  "the model expires, or checks the expiry of, a claim being deleted",
-		issue: "#132",
-		reaches: func(r *claimReplay, prev, next *modelState) (string, bool) {
-			switch next.Action {
-			case stepExpiryPassed, stepListRenewed, stepListUnanswered:
-				name, _ := next.pick("c")
-				if _, c, err := prev.claim(name); err == nil && c.Deleting {
-					return fmt.Sprintf("claim %s is being deleted: the chain releases it, and checks no expiry", name), true
-				}
-			case stepEventDeleted, stepRecover:
-				for _, name := range modelClaims {
-					slot, c, _ := prev.claim(name)
-					_, after, _ := next.claim(name)
-					if slot == slotLive && c.Deleting && c.Status.Phase.Tag == phaseBound && after.Status.Phase.Tag == phaseExpired {
-						return fmt.Sprintf("claim %s is being deleted, and the model expires it", name), true
-					}
-				}
-			}
-			return "", false
-		},
-	},
-	{
-		// claims.qnt's ctlEventDeleted and ctlRecover act on every claim at
-		// once, including one whose own step is half done: the controller
-		// holds battery's answer for it and has not written it.
-		// controller-runtime never reconciles a claim twice at once, so the
-		// claim is reconciled for the event or the recovery only after that
-		// write.
-		name:  "the model's event or recovery acts on a claim mid-step",
-		issue: "#133",
-		reaches: func(r *claimReplay, prev, next *modelState) (string, bool) {
-			if next.Action != stepEventDeleted && next.Action != stepRecover {
-				return "", false
-			}
-			ev, _ := next.pick("ev")
-			for _, name := range modelClaims {
-				slot, c, _ := prev.claim(name)
-				if slot != slotLive || c.Status.Phase.Tag != phaseBound || prev.Ctrl.Mem[name].Tag == idle {
-					continue
-				}
-				if next.Action == stepRecover || c.Status.MicroVM.V == ev {
-					return fmt.Sprintf("the controller holds %s for claim %s", prev.Ctrl.Mem[name].Tag, name), true
-				}
-			}
-			return "", false
-		},
-	},
-	{
-		// claims.qnt's ctlEventDeleted expires a claim with expired(),
-		// which sets Synced true, as if battery had answered a call for the
-		// claim. claim.ExpireDeleted calls nothing, and Synced says only
-		// how the last call to battery went (CL-040, CL-042), so it keeps
-		// the condition as it was.
-		name:  "the model's event expiry sets Synced true",
-		issue: "#134",
-		reaches: func(r *claimReplay, prev, next *modelState) (string, bool) {
-			if next.Action != stepEventDeleted {
-				return "", false
-			}
-			ev, _ := next.pick("ev")
-			for _, name := range modelClaims {
-				slot, c, _ := prev.claim(name)
-				if slot == slotLive && c.Status.Phase.Tag == phaseBound && c.Status.MicroVM.V == ev &&
-					modelCond(c.Status.Synced) != "True/"+batteryv1alpha1.ReasonSynced {
-					return fmt.Sprintf("claim %s is %s, and the model's event expiry sets Synced true", name, modelCond(c.Status.Synced)), true
-				}
-			}
-			return "", false
-		},
-	},
-	{
-		// claims.qnt's ctlEventDeleted consumes a deletion and expires the
-		// Bound claims on that MicroVM; a claim that is not Bound yet, such
-		// as one whose ClaimVM answer the controller holds and has not
-		// written, never hears of it. The controller keeps every deletion
-		// it receives (claim.DeletedVMs), and claim.ExpireDeleted expires
-		// such a claim, without a call to battery, on its first reconcile
-		// once it is Bound.
-		name:  "the controller remembers a deletion the model forgets",
-		issue: "#135",
-		reaches: func(r *claimReplay, prev, next *modelState) (string, bool) {
-			var names []string
-			switch _, ctl := ctlSteps[next.Action]; {
-			case ctl:
-				name, _ := next.pick("c")
-				names = []string{name}
-			case next.Action == stepRecover:
-				names = modelClaims
-			}
-			for _, name := range names {
-				c, err := r.get(name)
-				if err != nil || c == nil || !claim.HoldsLease(c) || c.Status.MicroVM == nil {
-					continue
-				}
-				if r.r.deleted.Has(c.Status.MicroVM.UID) {
-					return fmt.Sprintf("the controller has received the deletion of %s, claim %s's MicroVM, and the model has not", c.Status.MicroVM.UID, name), true
-				}
-			}
-			return "", false
-		},
-	},
-	{
-		// claims.qnt's ctlRecover only expires claims. The reconcile the
-		// recovery sends a claim to also writes the expiry battery listed
-		// when it is later than the status's (claim.Recover, CL-011), sets
-		// Synced true for the ListLeases (CL-042), and relays a pending
-		// renewal with Heartbeat (claim.Renew, CL-010).
-		name:  "the recovery's reconcile writes more than the model's ctlRecover",
-		issue: "#136",
-		reaches: func(r *claimReplay, prev, next *modelState) (string, bool) {
-			if next.Action != stepRecover {
-				return "", false
-			}
-			for _, name := range modelClaims {
-				slot, c, _ := prev.claim(name)
-				if slot != slotLive || c.Deleting || c.Status.Phase.Tag != phaseBound || !c.Status.LeaseID.Some {
-					continue
-				}
-				l, held := prev.Battery.Leases[c.Status.LeaseID.V]
-				switch {
-				case !held:
-				case c.Spec.RenewTime != c.ObservedRenewTime:
-					return fmt.Sprintf("claim %s has a pending renewal, which its reconcile relays", name), true
-				case !c.Status.LeaseExpiresAt.Some || c.Status.LeaseExpiresAt.V != l.ExpiresAt:
-					return fmt.Sprintf("claim %s records expiry %s, and its reconcile writes battery's %d", name, optTick(c.Status.LeaseExpiresAt), l.ExpiresAt), true
-				case modelCond(c.Status.Synced) != "True/"+batteryv1alpha1.ReasonSynced:
-					return fmt.Sprintf("claim %s is %s, and its reconcile sets Synced true", name, modelCond(c.Status.Synced)), true
-				}
-			}
-			return "", false
-		},
-	},
-}
+// Controller that the replay has found, each with its issue. There are
+// none now: #132 to #136 brought the model in line with the controller. A
+// difference found later goes here, with its issue.
+var knownDivergences []divergence
 
 // held is a scope the replay keeps unpatched: what the controller holds in
 // memory between a call to battery and the status write.
@@ -602,11 +468,14 @@ func (r *claimReplay) eventDeleted(next *modelState) error {
 }
 
 // recover is ctlRecover: one recovery (claimRecovery.run), which reads the
-// Leases with one ListLeases, and a reconcile of each claim it sends.
-// claim.Recover expires a claim whose Lease battery did not list, and
-// claim.CheckExpiry, later in the same reconcile, reads a Lease listed with
-// a passed expiry again, and expires the claim (CL-014): claims.qnt's
-// ctlRecover is both.
+// Leases with one ListLeases, and a reconcile of each claim it sends that
+// is not in the middle of a step (#133). Each reconcile runs the whole
+// chain (#136): claim.ExpireDeleted expires a claim whose MicroVM's
+// deletion the controller has received; claim.Recover expires a claim
+// whose Lease battery did not list, and otherwise takes battery's later
+// expiry; claim.Renew relays a pending renewal with Heartbeat; and
+// claim.CheckExpiry reads a Lease listed with a passed expiry again, and
+// expires the claim (CL-014).
 func (r *claimReplay) recover() error {
 	if !r.recovering || !r.bat.up {
 		return errors.New("the controller recovers, and no recovery is due")
@@ -627,7 +496,12 @@ func (r *claimReplay) recover() error {
 			continue
 		}
 		var calls []string
-		if l, ok := r.bat.leases[c.Status.LeaseID]; ok && !l.ExpiresAt.After(r.clock.Now()) {
+		l, held := r.bat.leases[c.Status.LeaseID]
+		switch {
+		case c.Status.MicroVM != nil && r.r.deleted.Has(c.Status.MicroVM.UID), !held:
+		case !c.Spec.RenewTime.Equal(c.Status.ObservedRenewTime):
+			calls = []string{methodHeartbeat}
+		case !l.ExpiresAt.After(r.clock.Now()):
 			calls = []string{methodListLeases}
 		}
 		if err := r.reconcile(c.Name, r.r.chain(), answer, "", calls, ""); err != nil {
@@ -902,6 +776,14 @@ func (r *claimReplay) compare(s *modelState, created map[string]bool) ([]string,
 	}
 	if r.recovering != s.Ctrl.Recovering {
 		diffs = append(diffs, fmt.Sprintf("recovery due: %t, the model's %t", r.recovering, s.Ctrl.Recovering))
+	}
+	// The deletions the controller remembers (#135).
+	deleted := map[string]bool{}
+	for vm := range modelVMHost {
+		deleted[vm] = r.r.deleted.Has(vm)
+	}
+	if got, want := sortedKeys(deleted), sortedKeys(s.Ctrl.Deleted); !slices.Equal(got, want) {
+		diffs = append(diffs, fmt.Sprintf("the controller remembers the deletion of %v, the model %v", got, want))
 	}
 	return diffs, nil
 }

@@ -195,6 +195,7 @@ type modelState struct {
 	Ctrl    struct {
 		Mem        itfMap[string, itfVariant] `json:"mem"`
 		Recovering bool                       `json:"recovering"`
+		Deleted    itfSet[string]             `json:"deleted"`
 	} `json:"ctrl"`
 }
 

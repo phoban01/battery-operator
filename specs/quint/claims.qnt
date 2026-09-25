@@ -96,7 +96,24 @@ module claims {
     mem: ClaimName -> InFlight,
     // set on start and on reconnecting to battery, cleared by recovery
     recovering: bool,
+    // every MicroVM the Events stream has reported deleted to the
+    // controller (claim.DeletedVMs). A claim that is not Bound yet when
+    // the event comes, or whose own step is half done, is expired from it
+    // on its next reconcile once it is Bound (#135). The controller
+    // forgets an entry after an hour; the model never does, which is the
+    // same for traces far shorter than that. battery never reuses a
+    // MicroVM's uid, so an entry never expires the wrong claim.
+    deleted: Set[VMId],
+    // the Leases the last recovery found battery no longer held, of the
+    // Bound claims it recorded (claim.RecoveredLeases). A claim that the
+    // recovery could not reconcile at once, because its own step was half
+    // done, is expired from it on its next reconcile (#133).
+    unlisted: Set[LeaseId],
   }
+
+  // The controller's state on start: nothing in memory, recovery due.
+  pure val CTRL_ON_START: ControllerState =
+    { mem: CLAIMS.mapBy(_ => Idle), recovering: true, deleted: Set(), unlisted: Set() }
 
   // History, for the invariants only; nothing reads it to decide a step.
   type History = {
@@ -182,7 +199,7 @@ module claims {
       nextLease: 1,
       events: Set(),
     },
-    ctrl' = { mem: CLAIMS.mapBy(_ => Idle), recovering: false },
+    ctrl' = { ...CTRL_ON_START, recovering: false },
     hist' = { recorded: Set(), released: Set(), expiredVia: Set(), answered: Set(), failures: Set(), releaseLostBy: Set() },
   }
 
@@ -283,9 +300,10 @@ module claims {
 
   // The Operator crashes and restarts. The controller loses whatever it
   // held between a call to battery and the status write, including a
-  // ClaimVM answer (ADR 0001, consequence 2), and recovers on start.
+  // ClaimVM answer (ADR 0001, consequence 2), and what it remembered of
+  // battery's events and of the last recovery. It recovers on start.
   action crashController: bool = all {
-    ctrl' = { mem: CLAIMS.mapBy(_ => Idle), recovering: true },
+    ctrl' = CTRL_ON_START,
     now' = now, claims' = claims, battery' = battery, hist' = hist,
   }
 
@@ -367,6 +385,32 @@ module claims {
   // controller has nothing left to do (controllerIdle).
 
   def idle(c: ClaimName): bool = ctrl.mem.get(c) == Idle
+
+  // A claim the controller can reconcile as Bound: live, Bound and not
+  // being deleted (claim.HoldsLease). A claim being deleted is released
+  // instead (CL-020): claim.Release runs first and stops the chain, so no
+  // step expires it, or reads its expiry (#132).
+  def boundNotDeleting(c: ClaimName): bool =
+    and { live(c), not(obj(c).deleting), obj(c).status.phase == Bound }
+
+  def leaseOf(c: ClaimName): LeaseId = getOr(obj(c).status.leaseId, 0)
+
+  // The controller has received the deletion of c's MicroVM.
+  def knownDeleted(c: ClaimName): bool = match obj(c).status.microVM {
+    | Some(vm) => ctrl.deleted.contains(vm)
+    | None => false
+  }
+
+  // The last recovery found that battery no longer held c's Lease.
+  def knownUnlisted(c: ClaimName): bool = ctrl.unlisted.contains(leaseOf(c))
+
+  // The Claim Controller's chain for a Bound claim runs, in order,
+  // claim.ExpireDeleted, claim.Recover, claim.Renew and claim.CheckExpiry,
+  // and each of the first two stops the chain once it has expired the
+  // claim. So a step of a later one is taken only when no earlier one
+  // expires the claim: nothing the controller remembers says its Lease has
+  // ended.
+  def nothingRemembered(c: ClaimName): bool = not(knownDeleted(c)) and not(knownUnlisted(c))
 
   //@= docs/requirements/02-claims.md#binding
   //@# When a claim that has no lease id in its status is
@@ -551,10 +595,9 @@ module claims {
   //@# the expiry time battery returns and the `renewTime` it relayed to the
   //@# claim's status in one write.
   def canCallHeartbeat(c: ClaimName): bool = and {
-    live(c), idle(c),
-    not(obj(c).deleting),
-    obj(c).status.phase == Bound,
+    boundNotDeleting(c), idle(c),
     isSome(obj(c).status.leaseId),
+    nothingRemembered(c),
     pendingRenewal(c),
   }
 
@@ -635,9 +678,16 @@ module claims {
   // The claim once it has gone Expired. Its observedRenewTime is left as it
   // was, so that pendingRenewalKeptWhileHeld can see a renewal the
   // controller had not relayed when the claim expired.
-  pure def expired(o: MicroVMClaim): MicroVMClaim = {
+  // This is the claim after a call battery answered, so Synced is true
+  // (CL-042).
+  pure def expired(o: MicroVMClaim): MicroVMClaim = expiredByEvent({ ...o, status: { ...o.status, synced: synced } })
+
+  // The claim once an event from battery has expired it. No call to
+  // battery was made, so Synced stays as it was: CL-042 sets it true only
+  // for an answer to a call (#134).
+  pure def expiredByEvent(o: MicroVMClaim): MicroVMClaim = {
     ...o,
-    status:{ ...o.status, phase: Expired, bound: { status: CondFalse, reason: LeaseExpired }, synced: synced },
+    status: { ...o.status, phase: Expired, bound: { status: CondFalse, reason: LeaseExpired } },
   }
 
   //@= docs/requirements/10-battery.md#heartbeat
@@ -660,56 +710,109 @@ module claims {
   }
 
   //@= docs/requirements/02-claims.md#renewal
-  //@# When battery's `Events` stream reports that the MicroVM of a
-  //@# Bound claim was deleted, the Claim Controller SHALL set the claim's phase
-  //@# to `Expired` and its condition `Bound` false with the reason
-  //@# `LeaseExpired`.
+  //@# When battery's `Events` stream reports the deletion of the
+  //@# MicroVM of a Bound claim that is not being deleted, the Claim Controller
+  //@# SHALL set the claim's phase to `Expired` and its condition `Bound` false
+  //@# with the reason `LeaseExpired`.
   def canReceiveEvent: bool = battery.up and battery.events != Set()
 
-  // Claim c is Bound to MicroVM vm. Written as and { }, not as a chain of
-  // `and`: Apalache 0.56.1 fails on a chain of three or more inside an
-  // `if` in a lambda once it checks a temporal property
-  // (specs/quint/README.md, "Liveness"). Here and in ctlRecover.
-  def boundOn(c: ClaimName, vm: VMId): bool =
-    and { live(c), obj(c).status.phase == Bound, obj(c).status.microVM == Some(vm) }
+  // The controller's event expires claim c, Bound to MicroVM vm, at once:
+  // the claim is not being deleted, and its own step is not half done.
+  // controller-runtime never reconciles a claim twice at once, so a claim
+  // whose step is half done is reconciled for the event only after that
+  // step's write, as ctlExpireDeleted (#133). Written as and { }, not as a
+  // chain of `and`: Apalache 0.56.1 fails on a chain of three or more
+  // inside an `if` in a lambda once it checks a temporal property
+  // (specs/quint/README.md, "Liveness"). Here and in ctlRecover's
+  // recoversNow.
+  def expiresOnEvent(c: ClaimName, vm: VMId): bool =
+    and { boundNotDeleting(c), idle(c), obj(c).status.microVM == Some(vm) }
 
-  // The controller receives one MicroVM-deleted event, and expires every
-  // Bound claim on that MicroVM.
+  // The controller receives one MicroVM-deleted event: it remembers the
+  // deletion (claim.DeletedVMs), and expires every claim expiresOnEvent
+  // names, as claim.ExpireDeleted does in the reconcile the event sends.
+  // It calls nothing, so Synced stays as it was (#134).
   action ctlEventDeleted(vm: VMId): bool = all {
     battery.up,
     battery.events.contains(vm),
     battery' = { ...battery, events: battery.events.exclude(Set(vm)) },
+    ctrl' = { ...ctrl, deleted: ctrl.deleted.union(Set(vm)) },
     claims' = CLAIMS.mapBy(c =>
-      if (boundOn(c, vm))
-        Live(expired(obj(c)))
+      if (expiresOnEvent(c, vm))
+        Live(expiredByEvent(obj(c)))
       else slot(c)),
-    hist' = if (CLAIMS.exists(c => boundOn(c, vm)))
+    hist' = if (CLAIMS.exists(c => expiresOnEvent(c, vm)))
       { ...hist, expiredVia: hist.expiredVia.union(Set("event")) } else hist,
-    now' = now, ctrl' = ctrl,
+    now' = now,
   }
 
   //@= docs/requirements/02-claims.md#renewal
-  //@# When a Bound claim has no pending renewal, and its status has
-  //@# no Lease expiry time or one that has passed, the Claim Controller SHALL
-  //@# read the claim's Lease with battery's `ListLeases`
+  //@# When battery's `Events` stream reports the deletion of the
+  //@# MicroVM of a Bound claim that is not being deleted, the Claim Controller
+  //@# SHALL set the claim's phase to `Expired` and its condition `Bound` false
+  //@# with the reason `LeaseExpired`.
+  //
+  // A claim whose MicroVM the controller has heard is deleted, and which
+  // the event did not expire: it was not Bound yet, as when the controller
+  // held its ClaimVM answer, or its own step was half done (#135). Its
+  // next reconcile expires it, first in the chain (claim.ExpireDeleted),
+  // without a call to battery, so Synced stays as it was (#134).
+  def canExpireDeleted(c: ClaimName): bool =
+    and { boundNotDeleting(c), idle(c), knownDeleted(c) }
+
+  action ctlExpireDeleted(c: ClaimName): bool = all {
+    canExpireDeleted(c),
+    setClaim(c, expiredByEvent(obj(c))),
+    hist' = { ...hist, expiredVia: hist.expiredVia.union(Set("event", "remembered")) },
+    now' = now, battery' = battery, ctrl' = ctrl,
+  }
+
+  //@= docs/requirements/02-claims.md#renewal
+  //@# If battery answers a `Heartbeat` for a claim's Lease with
+  //@# `NOT_FOUND`, or leaves the claim's Lease out of its answer to
+  //@# `ListLeases`, then the Claim Controller SHALL set the claim's phase to
+  //@# `Expired` and its condition `Bound` false with the reason `LeaseExpired`.
+  //
+  // A claim whose Lease the last recovery's ListLeases left out, and which
+  // the recovery did not expire because its own step was half done (#133).
+  // Its next reconcile expires it from what the recovery read
+  // (claim.Recover), without a call of its own. The recovery's ListLeases
+  // is battery's answer, so Synced is true.
+  def canExpireUnlisted(c: ClaimName): bool =
+    and { boundNotDeleting(c), idle(c), not(knownDeleted(c)), knownUnlisted(c) }
+
+  action ctlExpireUnlisted(c: ClaimName): bool = all {
+    canExpireUnlisted(c),
+    setClaim(c, expired(obj(c))),
+    hist' = { ...hist, expiredVia: hist.expiredVia.union(Set("unlisted")) },
+    now' = now, battery' = battery, ctrl' = ctrl,
+  }
+
+  //@= docs/requirements/02-claims.md#renewal
+  //@# When a Bound claim that is not being deleted has no pending
+  //@# renewal, and its status has no Lease expiry time or one that has passed,
+  //@# the Claim Controller SHALL read the claim's Lease with battery's
+  //@# `ListLeases`
   //
   // A claim just bound has no expiry in its status, since battery's answer
   // to ClaimVM carries none; getOr counts it as passed. A claim with a
   // pending renewal waits for its Heartbeat (CL-010) instead: battery
   // still renews a Lease past its expiry until the sweep (BA-010), so
-  // expiring it first would drop a renewal the Holder asked for (#85).
+  // expiring it first would drop a renewal the Holder asked for (#85). A
+  // claim being deleted is released instead (CL-020, #132).
   def canExpiryPassed(c: ClaimName): bool = and {
-    live(c), idle(c),
-    obj(c).status.phase == Bound,
+    boundNotDeleting(c), idle(c),
+    nothingRemembered(c),
     not(pendingRenewal(c)),
     getOr(obj(c).status.leaseExpiresAt, 0) <= now,
   }
 
   //@= docs/requirements/02-claims.md#renewal
-  //@# When battery lists a Bound claim's Lease in its answer to
-  //@# `ListLeases` with an expiry time that has passed, and the claim has no
-  //@# pending renewal, the Claim Controller SHALL set the claim's phase to
-  //@# `Expired` and its condition `Bound` false with the reason `LeaseExpired`.
+  //@# When battery lists the Lease of a Bound claim that is not being
+  //@# deleted in its answer to `ListLeases` with an expiry time that has
+  //@# passed, and the claim has no pending renewal, the Claim Controller SHALL
+  //@# set the claim's phase to `Expired` and its condition `Bound` false with
+  //@# the reason `LeaseExpired`.
   //
   //@= docs/requirements/02-claims.md#renewal
   //@# If battery answers a `Heartbeat` for a claim's Lease with
@@ -729,11 +832,11 @@ module claims {
   }
 
   //@= docs/requirements/02-claims.md#renewal
-  //@# When a Bound claim has no pending renewal, and its status has
-  //@# no Lease expiry time or one that has passed, the Claim Controller SHALL
-  //@# read the claim's Lease with battery's `ListLeases`, and SHALL keep the
-  //@# claim `Bound` and write the expiry time battery lists if that time has
-  //@# not passed.
+  //@# When a Bound claim that is not being deleted has no pending
+  //@# renewal, and its status has no Lease expiry time or one that has passed,
+  //@# the Claim Controller SHALL read the claim's Lease with battery's
+  //@# `ListLeases`, and SHALL keep the claim `Bound` and write the expiry time
+  //@# battery lists if that time has not passed.
   //
   // battery lists the Lease with a later expiry: the claim was just bound,
   // or its status is behind battery's for another reason. The claim stays
@@ -875,39 +978,103 @@ module claims {
 
   //@= docs/requirements/02-claims.md#recovery
   //@# When the Claim Controller starts, and when its connection to
-  //@# battery is restored, the Claim Controller SHALL reconcile every Bound claim against
-  //@# battery's Leases.
+  //@# battery is restored, the Claim Controller SHALL reconcile every Bound
+  //@# claim that is not being deleted against battery's Leases.
   def canRecover: bool = ctrl.recovering and battery.up
+
+  // The recovery reconciles claim c at once: it is Bound, not being
+  // deleted, and its own step is not half done. A claim whose step is half
+  // done is reconciled only after that step's write, since
+  // controller-runtime never reconciles a claim twice at once (#133); what
+  // the recovery read waits for it in ctrl.unlisted (ctlExpireUnlisted).
+  def recoversNow(c: ClaimName): bool = boundNotDeleting(c) and idle(c)
+
+  // The recovery's reconcile relays c's pending renewal with Heartbeat.
+  def recoveryRenews(c: ClaimName): bool =
+    and { recoversNow(c), not(knownDeleted(c)), holds(leaseOf(c)), pendingRenewal(c) }
+
+  // The later of a status's expiry and battery's: claim.Recover writes
+  // battery's when it is later, or the status has none (CL-011).
+  pure def laterExpiry(s: Option[Time], t: Time): Time = match s {
+    | Some(e) => maxOf(e, t)
+    | None => t
+  }
 
   //@= docs/requirements/10-battery.md#list-leases
   //@# battery SHALL include in the answer to `ListLeases` a Lease
   //@# whose expiry has passed but that no sweep has deleted yet.
   //
-  // Every Bound claim whose Lease battery no longer holds becomes Expired
-  // (CL-012), and so does one whose Lease battery holds past its expiry,
-  // unless the claim has a pending renewal (CL-014): that one waits for its
-  // Heartbeat, which battery still answers until the sweep (#85). Leases no
-  // claim records are left alone (CL-031). The controller reads the Leases
-  // with ListLeases (BA-040), which lists each with its expiry and renews
-  // none; that is the only way it can tell "expired" from "unknown".
+  //@= docs/requirements/02-claims.md#renewal
+  //@# While the `spec.renewTime` of a Bound claim differs from the
+  //@# last `renewTime` the Claim Controller relayed for it, the Claim Controller
+  //@# SHALL call battery's `Heartbeat` for the claim's Lease, and SHALL write
+  //@# the expiry time battery returns and the `renewTime` it relayed to the
+  //@# claim's status in one write.
   //
-  // The Operator lists the Leases once for every claim, and takes this
-  // step one claim at a time: claim.Recover expires a claim whose Lease
-  // battery did not list, and CheckExpiry, in the same reconcile, reads a
-  // Lease listed with a passed expiry again and applies CL-014.
+  // Claim c after the reconcile the recovery sends it, which runs the whole
+  // chain (#136):
+  //
+  // - claim.ExpireDeleted expires a claim whose MicroVM's deletion the
+  //   controller has received, and keeps Synced (#134);
+  // - claim.Recover expires one whose Lease battery no longer holds
+  //   (CL-012), and otherwise writes battery's expiry if it is later
+  //   (CL-011); the recovery's ListLeases (BA-040) is battery's answer, so
+  //   Synced is true (CL-042);
+  // - claim.Renew relays a pending renewal with Heartbeat, which battery
+  //   answers for any Lease it holds, even one past its expiry (BA-010,
+  //   #85), and writes battery's new expiry with the relayed renewTime
+  //   (CL-010);
+  // - claim.CheckExpiry, with no renewal pending, reads a Lease past its
+  //   expiry again and expires the claim (CL-014), which keeps the expiry
+  //   claim.Recover wrote.
+  //
+  // ListLeases lists each Lease with its expiry and renews none; that is
+  // the only way the controller can tell "expired" from "unknown".
+  def recovered(c: ClaimName): MicroVMClaim = {
+    val o = obj(c)
+    val l = leaseOf(c)
+    if (knownDeleted(c)) expiredByEvent(o)
+    else if (not(holds(l))) expired(o)
+    else if (pendingRenewal(c)) {
+      ...o,
+      observedRenewTime: o.spec.renewTime,
+      status: { ...o.status, leaseExpiresAt: Some(now + EXPIRY), synced: synced },
+    }
+    else if (battery.leases.get(l).expiresAt <= now) expired(readBack(o, l))
+    else readBack(o, l)
+  }
+
+  // Claim o once claim.Recover has taken the expiry of Lease l, which
+  // battery holds, from the recovery's ListLeases.
+  def readBack(o: MicroVMClaim, l: LeaseId): MicroVMClaim = {
+    ...o,
+    status: { ...o.status,
+      leaseExpiresAt: Some(laterExpiry(o.status.leaseExpiresAt, battery.leases.get(l).expiresAt)),
+      synced: synced,
+    },
+  }
+
+  // The Operator reads the Bound claims, then every Lease with one
+  // ListLeases, remembers what battery said of each claim's Lease
+  // (claim.RecoveredLeases), and sends each claim a reconcile. The step
+  // takes those reconciles too, for every claim recoversNow names. Leases
+  // no claim records are left alone (CL-031).
   action ctlRecover: bool = all {
     canRecover,
-    claims' = CLAIMS.mapBy(c =>
-      if (and {
-            live(c),
-            obj(c).status.phase == Bound,
-            not(holdsUnexpired(getOr(obj(c).status.leaseId, 0))),
-            not(holds(getOr(obj(c).status.leaseId, 0))) or not(pendingRenewal(c)),
-          })
-        Live(expired(obj(c)))
-      else slot(c)),
-    ctrl' = { ...ctrl, recovering: false },
-    now' = now, battery' = battery, hist' = hist,
+    val renewed = CLAIMS.filter(c => recoveryRenews(c)).map(c => leaseOf(c))
+    all {
+      battery' = { ...battery, leases: battery.leases.keys().mapBy(l =>
+        if (renewed.contains(l)) { ...battery.leases.get(l), expiresAt: now + EXPIRY }
+        else battery.leases.get(l)) },
+      claims' = CLAIMS.mapBy(c => if (recoversNow(c)) Live(recovered(c)) else slot(c)),
+      ctrl' = { ...ctrl,
+        recovering: false,
+        unlisted: CLAIMS.filter(c => boundNotDeleting(c) and not(holds(leaseOf(c)))).map(c => leaseOf(c)),
+      },
+      hist' = if (CLAIMS.exists(c => recoversNow(c) and knownDeleted(c)))
+        { ...hist, expiredVia: hist.expiredVia.union(Set("event", "remembered")) } else hist,
+    },
+    now' = now,
   }
 
   // Whether the controller has any step it can take for any claim. Writing
@@ -921,6 +1088,8 @@ module claims {
       not(canAddFinalizer(c)),
       not(canCallClaimVM(c)),
       not(canWriteBound(c)),
+      not(canExpireDeleted(c)),
+      not(canExpireUnlisted(c)),
       not(canCallHeartbeat(c)),
       not(canExpiryPassed(c)),
       not(live(c) and not(idle(c))),
@@ -966,6 +1135,8 @@ module claims {
       ctlReleasePending(c),
       ctlRecover,
       ctlEventDeleted(vm),
+      ctlExpireDeleted(c),
+      ctlExpireUnlisted(c),
       ctlExpiryPassed(c),
       ctlListRenewed(c),
       // calls that fail in transit
@@ -1132,10 +1303,10 @@ module claims {
   }
 
   //@= docs/requirements/02-claims.md#renewal
-  //@# When battery lists a Bound claim's Lease in its answer to
-  //@# `ListLeases` with an expiry time that has passed, and the claim has no
-  //@# pending renewal, the Claim Controller SHALL set the claim's phase to
-  //@# `Expired`
+  //@# When battery lists the Lease of a Bound claim that is not being
+  //@# deleted in its answer to `ListLeases` with an expiry time that has
+  //@# passed, and the claim has no pending renewal, the Claim Controller SHALL
+  //@# set the claim's phase to `Expired`
   //
   //@= docs/requirements/02-claims.md#recovery
   //@# While a claim is `Bound` and the Lease expiry time in its
@@ -1306,7 +1477,7 @@ module claims {
       },
     }) else Unborn),
     battery: BATTERY_AFTER_CLAIM,
-    ctrl: { mem: CLAIMS.mapBy(_ => Idle), recovering: false },
+    ctrl: { ...CTRL_ON_START, recovering: false },
     hist: { ...NO_HISTORY, recorded: Set(1), answered: Set((LIVE_CLAIM, 1)) },
   }
 
@@ -1320,7 +1491,7 @@ module claims {
       Live(claimUnavailable({ ...newClaim(POOL, "holder"), hasFinalizer: true }))
       else Unborn),
     battery: BATTERY_AFTER_CLAIM,
-    ctrl: { mem: CLAIMS.mapBy(_ => Idle), recovering: false },
+    ctrl: { ...CTRL_ON_START, recovering: false },
     hist: { ...NO_HISTORY, failures: Set("claimLost") },
   }
 
@@ -1375,6 +1546,8 @@ module claims {
     always(eventually(not(canAddFinalizer(LIVE_CLAIM)))),
     always(eventually(not(enabledClaimVM(LIVE_CLAIM)))),
     always(eventually(not(canWriteBound(LIVE_CLAIM)))),
+    always(eventually(not(canExpireDeleted(LIVE_CLAIM)))),
+    always(eventually(not(canExpireUnlisted(LIVE_CLAIM)))),
     always(eventually(not(enabledHeartbeat(LIVE_CLAIM)))),
     always(eventually(not(enabledWriteRenewed(LIVE_CLAIM)))),
     always(eventually(not(enabledListLeases(LIVE_CLAIM)))),
@@ -1456,10 +1629,10 @@ module claims {
   //@# again once that time has passed.
   //
   //@= docs/requirements/02-claims.md#renewal
-  //@# When battery lists a Bound claim's Lease in its answer to
-  //@# `ListLeases` with an expiry time that has passed, and the claim has no
-  //@# pending renewal, the Claim Controller SHALL set the claim's phase to
-  //@# `Expired`
+  //@# When battery lists the Lease of a Bound claim that is not being
+  //@# deleted in its answer to `ListLeases` with an expiry time that has
+  //@# passed, and the claim has no pending renewal, the Claim Controller SHALL
+  //@# set the claim's phase to `Expired`
   //
   // An unrenewed Bound claim eventually goes Expired (#45; CL-032,
   // CL-014), unless its Holder renews it or deletes it first, once its
@@ -1510,6 +1683,12 @@ module claims {
     orphans != Set() and CLAIMS.exists(c => live(c) and obj(c).status.phase == Bound)
   // a claim went Expired from battery's Events stream (CL-013)
   val witnessExpiredByEvent: bool = hist.expiredVia.contains("event")
+  // a claim went Expired from a deletion the controller remembered from
+  // before the claim could take it (#135)
+  val witnessExpiredByRememberedDeletion: bool = hist.expiredVia.contains("remembered")
+  // a claim went Expired from a recovery that could not reconcile it at
+  // once, because its own step was half done (#133)
+  val witnessExpiredByUnlistedLease: bool = hist.expiredVia.contains("unlisted")
   // a claim went Expired from its passed expiry time (CL-014)
   val witnessExpiredByTime: bool = hist.expiredVia.contains("time")
   // an orphan left by a ClaimVM answer lost in transit, with no crash
