@@ -1,0 +1,86 @@
+# What smoke.sh creates for the trial: a namespace, the Holder with what the
+# Client Library needs (pkg/claimclient's documentation), and a Pool of two
+# warm MicroVMs placed on the Host.
+#
+# The Pool's kernel and root volume are the images up.sh pushed to every
+# Host's own registry on 127.0.0.1:5000: flintlockd resolves them on the
+# Host that creates the MicroVM.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: bo-trial
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: trial-holder
+  namespace: bo-trial
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: trial-holder
+  namespace: bo-trial
+rules:
+  - apiGroups: ["battery.liquidmetal-x.dev"]
+    resources: ["microvmclaims"]
+    verbs: ["create", "get", "patch", "delete"]
+  - apiGroups: ["battery.liquidmetal-x.dev"]
+    resources: ["pools"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["serviceaccounts/token"]
+    verbs: ["create"]
+    resourceNames: ["trial-holder"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: trial-holder
+  namespace: bo-trial
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: trial-holder
+subjects:
+  - kind: ServiceAccount
+    name: trial-holder
+    namespace: bo-trial
+---
+apiVersion: battery.liquidmetal-x.dev/v1alpha1
+kind: Pool
+metadata:
+  name: trial
+  namespace: bo-trial
+spec:
+  size: 2
+  template:
+    vcpu: 1
+    # flintlock v0.15.2 refuses less than 1024 (MicroVMSpec.MemoryInMb).
+    memoryInMb: 1024
+    kernel:
+      image: 127.0.0.1:5000/bo-trial/kernel:6.1
+      filename: boot/vmlinux
+    rootVolume:
+      containerSource: 127.0.0.1:5000/bo-trial/rootfs:24.04
+    # flintlock v0.15.2 refuses a MicroVM with no network interface
+    # (MicroVMSpec.NetworkInterfaces). A tap on flbr0, with no address: exec
+    # reaches the guest over vsock, and the image waits for no network.
+    interfaces:
+      - deviceId: eth1
+        type: Tap
+  placement:
+    nodeSelector:
+      battery.liquidmetal-x.dev/host: "true"
+  replenishment:
+    type: ImmediateOnLease
+  hooks:
+    # Run in the MicroVM through the guest-agent before it is available.
+    create: ["uname -r"]
+    failurePolicy: DeleteAndReplace
+  lease:
+    heartbeatInterval: 10s
+    expiryThreshold: 30s

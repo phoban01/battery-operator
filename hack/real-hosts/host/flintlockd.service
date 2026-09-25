@@ -1,0 +1,24 @@
+# flintlockd (flintlockd-run.sh), on the Host's internal address with mutual
+# TLS. It is not enabled: flintlockd.path starts it once the Exec Agent has
+# written its certificate, and flintlockd-certs.path restarts it when the
+# certificate or the client CA bundle changes (ADR 0003, consequences 5 and
+# 6).
+#
+# As in flintlock-runner's Host Image: Firecracker processes are children of
+# flintlockd, started detached, and KillMode=process keeps a restart of
+# flintlockd from killing the MicroVMs it started.
+[Unit]
+Description=flintlock microvm service
+Documentation=https://www.liquidmetal.dev
+Requires=bo-thin-pool.service bo-bridge.service containerd.service
+After=bo-thin-pool.service bo-bridge.service containerd.service network-online.target
+
+[Service]
+# FLINTLOCKD_IFACE, the interface of the Host's address; up.sh writes it.
+EnvironmentFile=-/etc/default/bo-trial-flintlockd
+ExecStart=/usr/local/libexec/bo-trial/flintlockd-run
+Restart=always
+RestartSec=5
+User=root
+KillMode=process
+LimitNOFILE=1048576

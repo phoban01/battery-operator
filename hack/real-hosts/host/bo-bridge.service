@@ -1,0 +1,17 @@
+# The bridge flbr0: flintlockd refuses to start without --bridge-name or
+# --parent-iface. The trial's MicroVMs need no network (exec reaches them
+# over vsock), so the bridge has an address for the Host and no uplink.
+[Unit]
+Description=Bridge flbr0 for flintlockd's tap devices
+After=network.target
+Before=flintlockd.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c 'ip link show flbr0 >/dev/null 2>&1 || ip link add flbr0 type bridge'
+ExecStart=/bin/sh -c 'ip addr show dev flbr0 | grep -q 10.220.0.1/24 || ip addr add 10.220.0.1/24 dev flbr0'
+ExecStart=/sbin/ip link set flbr0 up
+
+[Install]
+WantedBy=multi-user.target

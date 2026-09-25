@@ -1,0 +1,9 @@
+# Run by flintlockd-certs.path: restarts flintlockd if it is running, so
+# that it serves the new certificate. A flintlockd that has not started yet
+# is left to flintlockd.path.
+[Unit]
+Description=Restart flintlockd for new certificates
+
+[Service]
+Type=oneshot
+ExecStart=/bin/systemctl try-restart flintlockd.service

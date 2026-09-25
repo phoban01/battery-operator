@@ -1,0 +1,12 @@
+# Starts flintlockd once the Exec Agent has written its serving certificate.
+# The agent writes tls.crt last, after tls.key and client-ca.crt, so its
+# existence means all three are there.
+[Unit]
+Description=Start flintlockd once its certificates exist
+
+[Path]
+PathExists=/etc/battery/flintlockd/tls.crt
+Unit=flintlockd.service
+
+[Install]
+WantedBy=multi-user.target

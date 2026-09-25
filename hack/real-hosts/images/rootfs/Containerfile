@@ -1,0 +1,32 @@
+# The MicroVM root filesystem: Ubuntu 24.04 with systemd and flintlock's
+# guest-agent, enabled at boot. battery creates every Pool MicroVM with the
+# guest agent allowed and waits for it before the MicroVM is available;
+# create hooks and exec reach the guest only through it, over vsock.
+#
+# flintlockd unpacks this image onto containerd's devmapper snapshotter,
+# which gives the MicroVM an ext4 root block device, and Firecracker boots
+# the kernel with root=/dev/vda.
+FROM ubuntu:24.04
+ARG GUEST_AGENT_VERSION=0.4.0
+# From the release's checksums.txt.
+ARG GUEST_AGENT_SHA256_ARM64=c3c8bd3650d4725806f543fb8fe117ce75c42aa523441f426d71c42104e2f025
+ARG GUEST_AGENT_SHA256_AMD64=07bd0a393dc3416518154e8069705de247df642583f13a1f2983bf89b19ee933
+ARG TARGETARCH
+RUN apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        systemd systemd-sysv udev iproute2 ca-certificates curl kmod procps && \
+    curl -fsSL -o /tmp/guest-agent.deb \
+        "https://github.com/liquidmetal-dev/guest-agent/releases/download/v${GUEST_AGENT_VERSION}/guest-agent_${GUEST_AGENT_VERSION}_linux_${TARGETARCH}.deb" && \
+    case "${TARGETARCH}" in arm64) sum="${GUEST_AGENT_SHA256_ARM64}" ;; amd64) sum="${GUEST_AGENT_SHA256_AMD64}" ;; *) exit 1 ;; esac && \
+    echo "${sum}  /tmp/guest-agent.deb" | sha256sum -c - && \
+    dpkg -i /tmp/guest-agent.deb && rm /tmp/guest-agent.deb && \
+    systemctl enable guest-agent.service && \
+    # Nothing waits for a network the MicroVM does not have.
+    systemctl mask systemd-networkd-wait-online.service systemd-timesyncd.service && \
+    # A console on the serial port, logged in as root, for debugging.
+    mkdir -p /etc/systemd/system/serial-getty@ttyS0.service.d && \
+    printf '[Service]\nExecStart=\nExecStart=-/sbin/agetty --autologin root --noclear %%I 115200 linux\n' \
+        >/etc/systemd/system/serial-getty@ttyS0.service.d/autologin.conf && \
+    echo 'bo-trial' >/etc/hostname && \
+    : >/etc/fstab && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
