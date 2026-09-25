@@ -54,7 +54,47 @@ safety` names the invariant that broke. `QUINT_MAX_STEPS`,
 `QUINT_MAX_SAMPLES` and `QUINT_SEED` size and fix the simulations that
 `make quint` runs.
 
-`quint verify` (Apalache, exhaustive up to a bound) is not run in CI.
+### Bounded checks
+
+```sh
+make quint-verify                                   # every check below; slow
+make quint-verify CHECKS="claims:deletedClaimGone"  # one of them
+```
+
+`make quint` simulates: it samples behaviours at random, deep but not all
+of them. `make quint-verify`
+([hack/quint-verify.sh](../../hack/quint-verify.sh)) checks, with
+[Apalache](https://apalache-mc.org), every behaviour up to a bound:
+
+| Check | What |
+|-------|------|
+| `claims:safety`, `certificates:safety`, `pools:safety` | every behaviour of up to `QUINT_VERIFY_STEPS` steps keeps the model's `safety` |
+| `claims:<property>` | a liveness property of `claims.qnt` ([below](#liveness)): no behaviour of up to `QUINT_VERIFY_LIVENESS_STEPS` steps that ends in a loop meets its assumptions and never gets there |
+| `claims:witness<Property>` | the property's witness, which must be violated: some such behaviour meets the assumptions and reaches the property's left-hand side, so the property is not checked only where it holds vacuously |
+
+The checks are slow, minutes each at small bounds, and each step more of
+bound costs more than the one before. So they are not in `ci.yml` and not
+a required check.
+[.github/workflows/quint-verify.yml](../../.github/workflows/quint-verify.yml)
+runs them, one per job, on a PR that changes the models or the checks,
+weekly on `main`, and by hand. `dagger call quint-verify
+--checks="claims:safety"` runs them locally the same way.
+
+The bounds are small, and so is what they cover: a claim takes five steps
+to be created, get its finalizer and bind, and ten to bind and expire.
+They find a mistake in a model's first steps that simulation might miss,
+and show that the liveness properties hold at all; the simulations' 60
+steps do the rest.
+
+Apalache needs Java 17 or later, which devbox does not install; `dagger
+call quint-verify` has one. The script installs Apalache 0.56.1, the
+release quint 0.32.0's `quint verify` runs, into `$QUINT_HOME`, checked
+against its release checksum. It compiles each model with `quint compile
+--target json` and hands that to Apalache's own command line, as `quint
+verify` does through a gRPC server; with quint 0.32.0 that server can
+leave `quint verify` waiting after Apalache has answered. A counterexample
+is left in `_apalache-out/`, as TLA+ (`violation1.tla` lists its states)
+and as an ITF trace.
 
 ## The claim lifecycle model
 
@@ -105,7 +145,8 @@ Invariants, all in `safety`:
 | `pendingRenewalKeptWhileHeld` | a claim with a renewal the controller has not relayed goes Expired only once battery no longer holds its Lease, and so would refuse the `Heartbeat` (CL-010, CL-014, CL-016, #85) |
 
 `idleMirrorsBattery` is the safety form of "an unrenewed Bound claim
-eventually goes Expired", since `quint run` checks state invariants only.
+eventually goes Expired", since `quint run` checks state invariants only;
+`unrenewedClaimExpires` ([Liveness](#liveness)) is the property itself.
 It depends on CL-014: without it, a dropped event leaves the claim Bound
 (#45).
 
@@ -157,6 +198,71 @@ The rest have theirs among the witnesses above. `make quint` fails if a
 witness is never reached. A renewal kept past its expiry needs a renewal late in the
 Lease and time passing before it is relayed, which random simulation
 reaches too rarely for a witness; the scenario tests above cover it.
+
+### Liveness
+
+The invariants hold for a controller that does nothing: a finalizer that
+is never removed satisfies `finalizerRemovedOnlyAfterRelease`. These
+properties say that the controller, and battery, get somewhere. Each is
+`assumptions implies property`, and takes only the assumptions it needs.
+`make quint-verify` checks them ([Bounded checks](#bounded-checks)).
+
+| Property | Checks | Assumes |
+|----------|--------|---------|
+| `deletedClaimGone` | a deleted claim is eventually gone, its finalizer removed, with a Lease or without (CL-020, CL-021) | battery eventually up; the controller eventually stable; the controller fair |
+| `pendingClaimBinds` | a Pending claim eventually binds, is deleted, or battery has no MicroVM left to give it (CL-001 to CL-003) | those, and battery replenishing its Pool |
+| `unrenewedClaimExpires` | a Bound claim with no renewal pending eventually goes Expired, unless its Holder renews or deletes it first (#45; CL-032, CL-014) | those of `deletedClaimGone`, and time passing |
+| `orphanEventuallyGone` | an orphaned Lease is eventually gone, whatever the controller does (ADR 0001, consequence 2; CL-019, BA-020) | battery eventually up; its sweep; time passing |
+
+The assumptions, each a `temporal` in `claims.qnt`:
+
+- `batteryEventuallyUp`: battery eventually stays up. A battery that stops
+  for ever, or again and again, fails every call.
+- `controllerEventuallyStable`: the Operator eventually stops crashing, and
+  battery restarting. A controller that crashes again and again between
+  `ReleaseVM` and the finalizer write never removes the finalizer.
+- `controllerFair`: weak fairness on each of the Claim Controller's steps
+  that succeeds, for the claim, and on its recovery and receiving events.
+  The failures in transit never disable those steps, so this says that a
+  call battery would answer is eventually made and answered, however often
+  it fails first. The environment gets no fairness: Holders, crashes,
+  battery stopping, dropped events and failed calls may happen, or not.
+- `replenishFair`, `sweepFair`: weak fairness on battery replenishing its
+  Pool, and on its sweep.
+- `timePasses`: time passes, up to `HORIZON`. The properties that wait for
+  time ask only about a Lease that runs out by then.
+
+How Apalache checks them shapes how they are written. Each point is in
+the model's comments too:
+
+- It looks for a counterexample that ends in a loop back to a state it has
+  been in, within the bound, and only at behaviours that go on for ever.
+  The checks take `stepOrStutter`, `step` or no change, so that a
+  behaviour that gets stuck, with no step enabled, stutters for ever and
+  counts, as in TLA+.
+- It takes no `weakFair`. Each step given fairness is disabled once taken,
+  or can be taken only finitely often, so weak fairness on it is the same
+  as its guard being false again and again, `always(eventually(not(guard)))`,
+  which it does take. The guards are written out beside the assumptions;
+  keep them in step with the actions.
+- It takes no quantifier over a temporal formula, nor a temporal operator
+  with parameters. The properties are stated for one claim, `LIVE_CLAIM`,
+  by symmetry; the other two get no fairness. `orphanEventuallyGone` says
+  that again and again no orphan due by the horizon is left, which is the
+  same as each one going, since an orphan stays one until battery deletes
+  it and new ones stop coming.
+- Time is unbounded, so a loop is a stretch in which time stands still;
+  hence `HORIZON`.
+- Apalache 0.56.1 fails with a `ClassCastException` on a chain of three or
+  more `and`s inside an `if` in a lambda, such as `ctlRecover`'s, once it
+  checks a temporal property. `ctlRecover` and `ctlEventDeleted` write
+  theirs as `and { }`, which it takes, and which means the same.
+
+Each property has a witness, `witness<Property>`, that `make
+quint-verify` requires to be violated: a behaviour within the bound that
+meets the assumptions and reaches the property's left-hand side. Without
+one, the property would hold at that bound only because no behaviour gets
+there.
 
 ### Replaying its traces against the Claim Controller
 
@@ -383,6 +489,11 @@ an available MicroVM, and a drained Pool waiting for a claim's.
   crash or a battery restart where that changes how it holds. Otherwise
   the simulation can check it only where it holds trivially and still
   pass.
+- A liveness property is a `temporal` of the form `assumptions implies
+  property`, states each assumption as a `temporal` of its own, and has a
+  witness `witness<Property>` that `hack/quint-verify.sh` requires to be
+  violated. Both are listed in `hack/quint-verify.sh` and
+  `.github/workflows/quint-verify.yml`.
 - A property the requirements do not yet guarantee is a finding. File it
   as an issue and keep it out of `safety`, with a scenario test that
   reaches the violation. Don't change the model to hide it.

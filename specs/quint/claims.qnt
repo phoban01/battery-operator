@@ -666,6 +666,13 @@ module claims {
   //@# `LeaseExpired`.
   def canReceiveEvent: bool = battery.up and battery.events != Set()
 
+  // Claim c is Bound to MicroVM vm. Written as and { }, not as a chain of
+  // `and`: Apalache 0.56.1 fails on a chain of three or more inside an
+  // `if` in a lambda once it checks a temporal property
+  // (specs/quint/README.md, "Liveness"). Here and in ctlRecover.
+  def boundOn(c: ClaimName, vm: VMId): bool =
+    and { live(c), obj(c).status.phase == Bound, obj(c).status.microVM == Some(vm) }
+
   // The controller receives one MicroVM-deleted event, and expires every
   // Bound claim on that MicroVM.
   action ctlEventDeleted(vm: VMId): bool = all {
@@ -673,10 +680,10 @@ module claims {
     battery.events.contains(vm),
     battery' = { ...battery, events: battery.events.exclude(Set(vm)) },
     claims' = CLAIMS.mapBy(c =>
-      if (live(c) and obj(c).status.phase == Bound and obj(c).status.microVM == Some(vm))
+      if (boundOn(c, vm))
         Live(expired(obj(c)))
       else slot(c)),
-    hist' = if (CLAIMS.exists(c => live(c) and obj(c).status.phase == Bound and obj(c).status.microVM == Some(vm)))
+    hist' = if (CLAIMS.exists(c => boundOn(c, vm)))
       { ...hist, expiredVia: hist.expiredVia.union(Set("event")) } else hist,
     now' = now, ctrl' = ctrl,
   }
@@ -891,9 +898,12 @@ module claims {
   action ctlRecover: bool = all {
     canRecover,
     claims' = CLAIMS.mapBy(c =>
-      if (live(c) and obj(c).status.phase == Bound
-          and not(holdsUnexpired(getOr(obj(c).status.leaseId, 0)))
-          and (not(holds(getOr(obj(c).status.leaseId, 0))) or not(pendingRenewal(c))))
+      if (and {
+            live(c),
+            obj(c).status.phase == Bound,
+            not(holdsUnexpired(getOr(obj(c).status.leaseId, 0))),
+            not(holds(getOr(obj(c).status.leaseId, 0))) or not(pendingRenewal(c)),
+          })
         Live(expired(obj(c)))
       else slot(c)),
     ctrl' = { ...ctrl, recovering: false },
@@ -1180,6 +1190,230 @@ module claims {
   // orphanOutlivesExpiryTest, reaches it.
   val orphanGoneByExpiry: bool =
     orphans.forall(l => battery.up implies now <= battery.leases.get(l).claimedAt + EXPIRY)
+
+  // ---------------------------------------------------------------------
+  // Liveness: what the Claim Controller and battery eventually do, under
+  // stated assumptions. The invariants above hold for a controller that
+  // never acts; these do not. Each is `assumptions implies property`, so a
+  // counterexample is a behaviour that meets every assumption and still
+  // never gets there. Each property takes only the assumptions it needs.
+  // hack/quint-verify.sh checks them with Apalache, up to a bound
+  // (specs/quint/README.md, "Liveness").
+  //
+  // Apalache shapes how they are written:
+  //
+  // - It looks for a counterexample of up to the bound's steps that ends
+  //   in a loop back to a state it has been in. It looks only at behaviours
+  //   that go on for ever, so it checks them with stepOrStutter, in which
+  //   the state may also stay as it is: a behaviour that gets stuck, with
+  //   no step of the model enabled, stutters for ever in TLA+, and counts.
+  // - It takes no weakFair or strongFair, so each fairness assumption is
+  //   written out as a state formula. Weak fairness on a step says that if
+  //   the step stays enabled, it is taken. Every step given fairness here
+  //   is disabled once taken, or can be taken only finitely often, so weak
+  //   fairness on it is the same as its guard being false again and
+  //   again: always(eventually(not(guard))). Each guard is written out
+  //   below as its action has it; keep the two in step.
+  // - It takes no quantifier over a temporal formula, nor a temporal
+  //   operator with parameters, so the properties are stated for one
+  //   claim, LIVE_CLAIM, and each formula is spelt out. The claims are
+  //   symmetric, and the others get no fairness, so they do as much or as
+  //   little as the model allows.
+  // - Time is unbounded, so a loop is a stretch in which time stands
+  //   still. The properties that wait for time assume it passes up to
+  //   HORIZON, and ask only for what is due by then.
+  //
+  // Each property has a witness, which hack/quint-verify.sh checks is
+  // violated: a behaviour within the bound that meets the property's
+  // assumptions and reaches its left-hand side. Without one, the property
+  // would hold only vacuously at that bound.
+
+  // The claim the liveness properties are about.
+  pure val LIVE_CLAIM: ClaimName = "a"
+
+  // The time up to which time is assumed to keep passing: a Lease claimed
+  // at time 0 runs out then.
+  pure val HORIZON: Time = EXPIRY
+
+  // step, or nothing changes: the step the liveness checks take.
+  action stepOrStutter: bool = any {
+    step,
+    all { now' = now, claims' = claims, battery' = battery, ctrl' = ctrl, hist' = hist },
+  }
+
+  // The guards of the steps that get fairness, as their actions have them.
+  // Each is one outcome of a call battery answers, or a write the
+  // controller makes; none is a failure in transit.
+  //
+  // ClaimVM succeeds (ctlClaimVM): battery is up and has a warm MicroVM.
+  def enabledClaimVM(c: ClaimName): bool = canClaimVM(c) and battery.warm != Set()
+  // battery answers the Heartbeat: it renews (ctlHeartbeat) or does not
+  // know the Lease (ctlHeartbeatUnknown).
+  def enabledHeartbeat(c: ClaimName): bool = canHeartbeat(c)
+  // The controller writes the Heartbeat's answer (ctlWriteRenewed).
+  def enabledWriteRenewed(c: ClaimName): bool = live(c) and isHeartbeatAnswer(ctrl.mem.get(c))
+  // battery answers ListLeases: the claim goes Expired (ctlExpiryPassed)
+  // or takes battery's later expiry (ctlListRenewed).
+  def enabledListLeases(c: ClaimName): bool = canExpiryPassed(c) and battery.up
+  // The controller removes the finalizer after a release
+  // (ctlRemoveFinalizer).
+  def enabledRemoveFinalizer(c: ClaimName): bool = live(c) and match ctrl.mem.get(c) {
+    | ReleaseAnswered(_) => true
+    | _ => false
+  }
+  // battery replenishes its Pool (replenish).
+  def enabledReplenish: bool =
+    and { battery.up, battery.unborn != Set(), battery.warm.size() < POOL_SIZE }
+  // battery sweeps (batteryExpire).
+  def enabledSweep: bool = battery.up and overdue(battery, now) != Set()
+  // Time passes (tick), before the horizon.
+  def enabledTickBeforeHorizon: bool =
+    now < HORIZON and (battery.up implies battery.leases.keys().forall(l => now < sweepDue(l)))
+
+  // Assumption: battery eventually stays up. A battery that stops for
+  // ever, or again and again, fails every call the controller retries.
+  temporal batteryEventuallyUp = eventually(always(battery.up))
+
+  // Assumption: the Operator eventually stops crashing, and battery
+  // eventually stops restarting. A controller that crashes again and
+  // again between ReleaseVM and the finalizer write never removes the
+  // finalizer. Both set recovering, and ctlRecover clears it, so once it
+  // stays false neither comes again.
+  temporal controllerEventuallyStable = eventually(always(not(ctrl.recovering)))
+
+  // Assumption: weak fairness on the Claim Controller's steps for
+  // LIVE_CLAIM, on its recovery, and on receiving events. A call battery
+  // would answer is eventually made and answered, however often it fails
+  // in transit first: the failures (ctl*Lost, ctl*Unanswered) never
+  // disable it. Nothing in the environment gets fairness: Holders, crashes,
+  // battery stopping, dropped events and calls that fail in transit may
+  // happen, or not.
+  temporal controllerFair = and {
+    always(eventually(not(canAddFinalizer(LIVE_CLAIM)))),
+    always(eventually(not(enabledClaimVM(LIVE_CLAIM)))),
+    always(eventually(not(canWriteBound(LIVE_CLAIM)))),
+    always(eventually(not(enabledHeartbeat(LIVE_CLAIM)))),
+    always(eventually(not(enabledWriteRenewed(LIVE_CLAIM)))),
+    always(eventually(not(enabledListLeases(LIVE_CLAIM)))),
+    always(eventually(not(canRelease(LIVE_CLAIM)))),
+    always(eventually(not(enabledRemoveFinalizer(LIVE_CLAIM)))),
+    always(eventually(not(canReleasePending(LIVE_CLAIM)))),
+    always(eventually(not(canRecover))),
+    always(eventually(not(canReceiveEvent))),
+  }
+
+  // Assumption: weak fairness on battery replenishing its Pool.
+  temporal replenishFair = always(eventually(not(enabledReplenish)))
+
+  // Assumption: weak fairness on battery's sweep.
+  temporal sweepFair = always(eventually(not(enabledSweep)))
+
+  // Assumption: time passes, up to the horizon.
+  temporal timePasses = always(eventually(not(enabledTickBeforeHorizon)))
+
+  // The assumptions of each property.
+  temporal releaseAssumptions = and { batteryEventuallyUp, controllerEventuallyStable, controllerFair }
+  temporal bindAssumptions = releaseAssumptions and replenishFair
+  temporal expiryAssumptions = releaseAssumptions and timePasses
+  temporal orphanAssumptions = and { batteryEventuallyUp, sweepFair, timePasses }
+
+  // LIVE_CLAIM has been deleted under its finalizer, and is not gone yet.
+  def deletingLiveClaim: bool = live(LIVE_CLAIM) and obj(LIVE_CLAIM).deleting
+
+  //@= docs/requirements/02-claims.md#release
+  //@# When a claim that has a lease id is deleted, the Claim
+  //@# Controller SHALL call battery's `ReleaseVM` for the Lease, and SHALL remove
+  //@# the finalizer only once battery has released the Lease or reported it
+  //@# unknown.
+  //
+  //@= docs/requirements/02-claims.md#release
+  //@# When a claim that has no lease id is deleted, the Claim
+  //@# Controller SHALL remove its finalizer without calling battery.
+  //
+  // A deleted claim is eventually gone, its finalizer removed, whether it
+  // had a Lease or not. It needs no time to pass.
+  temporal deletedClaimGone =
+    releaseAssumptions implies deletingLiveClaim.leadsTo(isGone(slot(LIVE_CLAIM)))
+  temporal witnessDeletedClaimGone = not(releaseAssumptions and eventually(deletingLiveClaim))
+
+  // LIVE_CLAIM is Pending, and not deleted.
+  def pendingLiveClaim: bool =
+    and { live(LIVE_CLAIM), not(obj(LIVE_CLAIM).deleting), obj(LIVE_CLAIM).status.phase == Pending }
+
+  //@= docs/requirements/02-claims.md#binding
+  //@# If battery's `ClaimVM` fails because the Pool has no warm
+  //@# MicroVM, then the Claim Controller SHALL keep the claim in the phase
+  //@# `Pending` with the condition `Bound` false and the reason `PoolExhausted`,
+  //@# and SHALL retry with backoff.
+  //
+  // A Pending claim eventually binds (CL-001 to CL-003), unless it is
+  // deleted, or battery has no MicroVM left to give it: the model's
+  // battery can create only VMS, and a Pool that runs dry stays dry. It
+  // needs no time to pass, and needs battery to replenish its Pool.
+  temporal pendingClaimBinds =
+    bindAssumptions implies pendingLiveClaim.leadsTo(or {
+      not(live(LIVE_CLAIM)),
+      obj(LIVE_CLAIM).deleting,
+      obj(LIVE_CLAIM).status.phase == Bound,
+      battery.warm == Set() and battery.unborn == Set(),
+    })
+  temporal witnessPendingClaimBinds = not(bindAssumptions and eventually(pendingLiveClaim))
+
+  // A Bound claim that is not deleted and has no renewal pending.
+  def unrenewedBound(c: ClaimName): bool =
+    and { live(c), not(obj(c).deleting), obj(c).status.phase == Bound, not(pendingRenewal(c)) }
+
+  // Lease l has run out by time t, or battery no longer holds it.
+  def leaseEndsBy(l: LeaseId, t: Time): bool =
+    not(holds(l)) or battery.leases.get(l).expiresAt <= t
+
+  // LIVE_CLAIM is Bound with no renewal pending, and its Lease runs out by
+  // the horizon.
+  def unrenewedLiveClaimDue: bool =
+    unrenewedBound(LIVE_CLAIM) and leaseEndsBy(getOr(obj(LIVE_CLAIM).status.leaseId, 0), HORIZON)
+
+  //@= docs/requirements/02-claims.md#recovery
+  //@# While a claim is `Bound` and the Lease expiry time in its
+  //@# status has not passed, the Claim Controller SHALL reconcile the claim
+  //@# again once that time has passed.
+  //
+  //@= docs/requirements/02-claims.md#renewal
+  //@# When battery lists a Bound claim's Lease in its answer to
+  //@# `ListLeases` with an expiry time that has passed, and the claim has no
+  //@# pending renewal, the Claim Controller SHALL set the claim's phase to
+  //@# `Expired`
+  //
+  // An unrenewed Bound claim eventually goes Expired (#45; CL-032,
+  // CL-014), unless its Holder renews it or deletes it first.
+  // idleMirrorsBattery is the state form of this. It waits for time, so it
+  // asks only about a claim whose Lease runs out by the horizon.
+  temporal unrenewedClaimExpires =
+    expiryAssumptions implies unrenewedLiveClaimDue.leadsTo(not(unrenewedBound(LIVE_CLAIM)))
+  temporal witnessUnrenewedClaimExpires = not(expiryAssumptions and eventually(unrenewedLiveClaimDue))
+
+  // An orphan runs out by the horizon.
+  def orphanDue: bool = orphans.exists(l => leaseEndsBy(l, HORIZON))
+
+  //@= docs/requirements/02-claims.md#renewal
+  //@# The Claim Controller SHALL call battery's `Heartbeat` only for
+  //@# a lease id that a claim's status records.
+  //
+  //@= docs/requirements/10-battery.md#expiry
+  //@# battery SHALL delete an expired Lease only in a sweep, which
+  //@# runs once every `sweep_interval` while battery runs, and which deletes
+  //@# every Lease whose expiry is at or before the time of the sweep.
+  //
+  // ADR 0001, consequence 2: an orphaned Lease is eventually gone. Nothing
+  // renews it (CL-019), so it runs out and battery's sweep deletes it
+  // (BA-020), whatever the controller does. It waits for time too, so it
+  // asks only about orphans that run out by the horizon. With no
+  // quantifier over a temporal formula, it says that again and again no
+  // such orphan is left. That is the same as each one going: an orphan
+  // stays one until battery deletes it, and battery hands out one Lease
+  // per MicroVM, so new orphans stop coming.
+  temporal orphanEventuallyGone =
+    orphanAssumptions implies always(eventually(not(orphanDue)))
+  temporal witnessOrphanEventuallyGone = not(orphanAssumptions and eventually(orphanDue))
 
   // ---------------------------------------------------------------------
   // Witnesses: states quint run reports reaching, to show the simulation

@@ -227,11 +227,15 @@ duvet-models-write:
 
 QUINT ?= quint
 
-.PHONY: quint claims-traces
+.PHONY: quint quint-verify claims-traces
 
 ## quint: typecheck, test and simulate the Quint models in specs/quint, checking their invariants
 quint:
 	QUINT=$(QUINT) hack/quint.sh
+
+## quint-verify: check the Quint models exhaustively up to a bound with Apalache (needs Java 17+); CHECKS picks some
+quint-verify:
+	QUINT=$(QUINT) hack/quint-verify.sh $(CHECKS)
 
 ## claims-traces: write the claim model's traces that the Claim Controller's replay test replays
 claims-traces:

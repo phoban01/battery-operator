@@ -1,0 +1,59 @@
+name: quint-verify
+
+# The bounded exhaustive checks of the Quint models, with Apalache
+# (specs/quint/README.md, "Bounded checks"). They are slow, so they are not
+# in ci.yml and not a required check: ci.yml's quint job simulates the same
+# models on every PR. They run on a PR that changes the models or the
+# checks, weekly on main, and by hand; one check per job, so that they run
+# side by side and a slow one does not hold up the others.
+
+on:
+  pull_request:
+    paths:
+      - specs/quint/**
+      - hack/quint-verify.sh
+      - .dagger/**
+      - .github/workflows/quint-verify.yml
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quint-verify-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  # matches DAGGER_VERSION in devbox.json and ci.yml
+  DAGGER_VERSION: 0.21.9
+  DAGGER_NO_NAG: 1
+
+jobs:
+  verify:
+    name: ${{ matrix.check }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        # hack/quint-verify.sh's checks
+        check:
+          - claims:safety
+          - certificates:safety
+          - pools:safety
+          - claims:deletedClaimGone
+          - claims:witnessDeletedClaimGone
+          - claims:pendingClaimBinds
+          - claims:witnessPendingClaimBinds
+          - claims:unrenewedClaimExpires
+          - claims:witnessUnrenewedClaimExpires
+          - claims:orphanEventuallyGone
+          - claims:witnessOrphanEventuallyGone
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: ./.github/actions/setup-dagger
+        with:
+          version: ${{ env.DAGGER_VERSION }}
+          call: quint-verify --checks=${{ matrix.check }}

@@ -18,6 +18,7 @@
 //	dagger call requirements --owns=none --base=$(git merge-base origin/main HEAD)
 //	dagger call duvet-report export --path=.duvet/reports
 //	dagger call quint
+//	dagger call quint-verify
 //	dagger call images export --path=dist/images
 //	dagger call operator-image export-image --name=battery-operator:dev
 //	dagger call fake-flintlockd-image export-image --name=fake-flintlockd:dev
@@ -60,6 +61,9 @@ const (
 	quintVersion          = "0.32.0"
 	quintEvaluatorVersion = "0.6.0"
 	quintHome             = "/opt/quint"
+	// apalacheVersion is the Apalache that quintVersion's `quint verify`
+	// runs, its default --apalache-version.
+	apalacheVersion = "0.56.1"
 
 	src = "/src"
 
@@ -275,6 +279,64 @@ func (m *BatteryOperator) Quint(ctx context.Context) (string, error) {
 		WithExec([]string{"make", "quint"}).
 		Stdout(ctx)
 }
+
+// QuintVerify checks the Quint models in specs/quint exhaustively up to a
+// bound with Apalache, through hack/quint-verify.sh: every model's
+// invariants, and the claim model's liveness properties and their
+// witnesses (specs/quint/README.md, "Bounded checks"). It is slow, so CI
+// runs it in a workflow of its own, one check per job, and it is not a
+// required check.
+func (m *BatteryOperator) QuintVerify(
+	ctx context.Context,
+	// The checks to run, separated by spaces, as hack/quint-verify.sh
+	// names them, for example "claims:safety claims:deletedClaimGone".
+	// Defaults to all of them.
+	// +optional
+	checks string,
+	// The bound for the invariants, in steps. Defaults to
+	// hack/quint-verify.sh's.
+	// +optional
+	steps string,
+	// The bound for the liveness properties and their witnesses, in
+	// steps. Defaults to hack/quint-verify.sh's.
+	// +optional
+	livenessSteps string,
+) (string, error) {
+	c := dag.Container().
+		From(goImage).
+		WithExec([]string{"sh", "-ec", installQuint}).
+		WithExec([]string{"sh", "-ec", installApalache}).
+		WithEnvVariable("QUINT_HOME", quintHome).
+		WithDirectory(src, m.Source).
+		WithWorkdir(src)
+	if steps != "" {
+		c = c.WithEnvVariable("QUINT_VERIFY_STEPS", steps)
+	}
+	if livenessSteps != "" {
+		c = c.WithEnvVariable("QUINT_VERIFY_LIVENESS_STEPS", livenessSteps)
+	}
+	return c.WithExec(append([]string{"hack/quint-verify.sh"}, strings.Fields(checks)...)).Stdout(ctx)
+}
+
+// installApalache installs a JVM from Debian, and the Apalache release
+// that `quint verify` runs, checked against its release checksum, where
+// quint and hack/quint-verify.sh look for it under $QUINT_HOME. The script
+// pins the same release and checksum, and installs it itself when it is
+// not there.
+var installApalache = fmt.Sprintf(`
+apt-get update -qq
+apt-get install -y -qq --no-install-recommends openjdk-21-jre-headless >/dev/null
+curl -fsSLo /tmp/apalache.tgz https://github.com/apalache-mc/apalache/releases/download/v%[1]s/apalache.tgz
+echo "%[2]s  /tmp/apalache.tgz" | sha256sum -c -
+mkdir -p %[3]s/apalache-dist-%[1]s
+tar -xzf /tmp/apalache.tgz -C %[3]s/apalache-dist-%[1]s
+rm /tmp/apalache.tgz
+`,
+	apalacheVersion,
+	// sha256 of apalache.tgz, as the release's sha256sum.txt gives it
+	"91125e5a3646b9c9d3a7d921d3323f321fac5071909f72b3960c66ff2f998ee1",
+	quintHome,
+)
 
 // installQuint installs quint's release binary and the Rust evaluator that
 // `quint run` uses, both checked against their release checksums. quint
