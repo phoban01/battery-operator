@@ -17,7 +17,6 @@ limitations under the License.
 package fakebattery
 
 import (
-	"errors"
 	"testing"
 	"time"
 
@@ -40,21 +39,10 @@ func TestDocumentedDifferences(t *testing.T) {
 		host := h.stubs[hostA]
 		// A REPLACE_ON_DELETE Pool whose first create fails has no deletion
 		// to replace; battery would leave it short, the fake's tick fills it.
-		host.set(func(s *testHost) { s.createErr = errors.New("host busy") })
+		// Config.SeedOnce turns this difference off (TestSeedOnce).
 		spec := h.spec("pool", 1, hostA)
 		spec.Replenishment = replenishment{Type: poolmgrv1.ReplenishmentStrategyType_REPLACE_ON_DELETE}
-		if _, err := h.client.CreatePool(h.ctx, spec); err != nil {
-			t.Fatalf("CreatePool: %v", err)
-		}
-		h.waitEvent(poolmgrv1.EventType_POOL_REPLENISHING)
-		// The refused create drops its reservation.
-		for len(h.b.VMs()) != 0 {
-			if h.ctx.Err() != nil {
-				t.Fatalf("the reservation of the refused create was never dropped: %v", h.b.VMs())
-			}
-			time.Sleep(time.Millisecond)
-		}
-		host.set(func(s *testHost) { s.createErr = nil })
+		h.failSeed(host, spec)
 		h.tick()
 		h.waitEvent(poolmgrv1.EventType_VM_AVAILABLE)
 		if st := h.pool("pool").Status; st.Available != 1 {

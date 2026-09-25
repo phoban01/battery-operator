@@ -73,6 +73,46 @@ func (s strategy) onDeleted() int {
 	return 0
 }
 
+//= docs/requirements/08-test-doubles.md#fake-battery
+//# Where a test sets `SeedOnce`, the fake battery SHALL
+//# provision for a Pool whose replenishment strategy is `IMMEDIATE_ON_LEASE`
+//# or `REPLACE_ON_DELETE` on its tick only on the first tick after each
+//# `CreatePool` or `UpdatePool` of the Pool, whether or not those provisions
+//# succeed, as battery v0.3.3 seeds such a Pool (BA-075, BA-076).
+
+//= docs/requirements/10-battery.md#seeding
+//# When a Pool's reconciler starts, battery SHALL provision for
+//# the Pool once, whether or not those provisions succeed, its size less its
+//# available and provisioning MicroVMs for `IMMEDIATE_ON_LEASE`, and its size
+//# less its available, leased and provisioning MicroVMs for
+//# `REPLACE_ON_DELETE`.
+
+//= docs/requirements/10-battery.md#seeding
+//# While a Pool's replenishment strategy is `IMMEDIATE_ON_LEASE`
+//# or `REPLACE_ON_DELETE`, battery SHALL provision a MicroVM for it only when
+//# its reconciler starts, on a claim for `IMMEDIATE_ON_LEASE`, and on a
+//# deletion for `REPLACE_ON_DELETE`.
+
+//= docs/requirements/10-battery.md#seeding
+//= type=exception
+//= reason=Unless a test sets Config.SeedOnce, the fake's tick tops up a Pool of every strategy, so that a Pool recovers from a failed create without a claim, a deletion or an UpdatePool.
+//# While a Pool's replenishment strategy is `IMMEDIATE_ON_LEASE`
+//# or `REPLACE_ON_DELETE`, battery SHALL provision a MicroVM for it only when
+//# its reconciler starts, on a claim for `IMMEDIATE_ON_LEASE`, and on a
+//# deletion for `REPLACE_ON_DELETE`.
+
+// eventDriven reports whether battery tops the Pool up only when its
+// reconciler starts and on the strategy's events, and not on its tick
+// (BA-076). With Config.SeedOnce, the fake's tick provisions for such a
+// Pool only while the Pool is fresh: the first tick after CreatePool or
+// UpdatePool, which is where battery's reconciler seeds it (BA-075). The
+// seed's count is tickDeficit, which for REPLACE_ON_DELETE also counts the
+// MicroVMs being deleted, where battery's seed does not.
+func (s strategy) eventDriven() bool {
+	return s.typ == poolmgrv1.ReplenishmentStrategyType_IMMEDIATE_ON_LEASE ||
+		s.typ == poolmgrv1.ReplenishmentStrategyType_REPLACE_ON_DELETE
+}
+
 // tickDeficit is how many MicroVMs the tick starts to reach the target.
 func (s strategy) tickDeficit(c counts) int {
 	//= docs/requirements/10-battery.md#delete-pool
@@ -163,6 +203,9 @@ func (b *Battery) tick(ctx context.Context) {
 				"target": ps.spec.Size, "available": c.available, "leased": c.leased,
 				"provisioning": c.provisioning, "quarantined": c.quarantined,
 			})
+		}
+		if b.cfg.SeedOnce && !ps.fresh && strategyOf(ps.spec).eventDriven() {
+			deficit = 0
 		}
 		ps.fresh = false
 		b.provisionNLocked(ps, deficit, "tick")

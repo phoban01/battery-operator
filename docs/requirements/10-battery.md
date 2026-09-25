@@ -314,6 +314,33 @@ provisioning and quarantined MicroVMs (`CountVMs`), so a Pool whose
 counts are all 0 can still be refused while one of its MicroVMs is
 `DELETING`.
 
+## Seeding a Pool {#seeding}
+
+- **BA-075** When a Pool's reconciler starts, battery SHALL provision for
+  the Pool once, whether or not those provisions succeed, its size less its
+  available and provisioning MicroVMs for `IMMEDIATE_ON_LEASE`, and its size
+  less its available, leased and provisioning MicroVMs for
+  `REPLACE_ON_DELETE`.
+- **BA-076** While a Pool's replenishment strategy is `IMMEDIATE_ON_LEASE`
+  or `REPLACE_ON_DELETE`, battery SHALL provision a MicroVM for it only when
+  its reconciler starts, on a claim for `IMMEDIATE_ON_LEASE`, and on a
+  deletion for `REPLACE_ON_DELETE`.
+
+| ID | Source at v0.3.3 |
+|----|------------------|
+| BA-075 | [`internal/reconciler/reconciler.go`, `Reconciler.Run`, L97-L126](https://github.com/liquidmetal-dev/battery/blob/v0.3.3/internal/reconciler/reconciler.go#L97-L126), [`Reconciler.seed`, L128-L145](https://github.com/liquidmetal-dev/battery/blob/v0.3.3/internal/reconciler/reconciler.go#L128-L145); [`internal/reconciler/strategy.go`, `InitialNewVMs`, L81-L83 and L121-L123](https://github.com/liquidmetal-dev/battery/blob/v0.3.3/internal/reconciler/strategy.go#L74-L127) |
+| BA-076 | [`internal/reconciler/strategy.go`, `immediateOnLease` and `replaceOnDelete`, L74-L127](https://github.com/liquidmetal-dev/battery/blob/v0.3.3/internal/reconciler/strategy.go#L74-L127); [`internal/reconciler/reconciler.go`, `Reconciler.Run`, L106-L124](https://github.com/liquidmetal-dev/battery/blob/v0.3.3/internal/reconciler/reconciler.go#L97-L126) |
+
+`seed` sets `seeded` before it provisions, and a failed `Provision` is
+only logged, so battery does not try a failed seed again. A Pool's
+reconciler starts when battery starts (`Manager.Seed`), on `CreatePool`,
+and on every `UpdatePool`, which restarts it whether or not the spec
+changed (BA-074;
+[`internal/api/pooladmin.go`, `PoolAdminServer.UpdatePool`, L228-L240](https://github.com/liquidmetal-dev/battery/blob/v0.3.3/internal/api/pooladmin.go#L228-L240)).
+So a Pool of these two strategies whose seed fails stays short until the
+next claim, deletion or restart. The Pool Controller works around this
+(03-pools.md, PO-035 to PO-038).
+
 ## Where the stand-ins differ {#stand-ins}
 
 The fake battery meets every assumption above except these, each cited
@@ -324,11 +351,17 @@ in its code as an exception:
 - a new `Events` subscriber is replayed only the last events of each Pool
   (BA-050);
 - it reaches its Hosts over connections the test gives it, and reads no
-  certificate (BA-061).
+  certificate (BA-061);
+- its tick tops up a Pool of every strategy, unless a test sets
+  `SeedOnce` (TD-007), where battery's tick tops up only a
+  `MIN_SIZE_THRESHOLD` Pool (BA-076).
 
 The pools model (`specs/quint/pools.qnt`) has no phases between created
 and available, so no MicroVM is being provisioned when `UpdatePool` comes
-(BA-074), and it has no quarantined MicroVM (BA-073).
+(BA-074), and it has no quarantined MicroVM (BA-073). It has no
+replenishment strategies either: its battery tops a Pool up whenever the
+Pool is below its size. That stands for battery and the Pool
+Controller's reseeds of PO-036 together (BA-075, BA-076).
 
 The claim lifecycle model (`specs/quint/claims.qnt`) is coarser than
 battery in these ways:

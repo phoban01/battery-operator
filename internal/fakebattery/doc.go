@@ -57,7 +57,12 @@ limitations under the License.
 //     Pool up once, when its reconciler starts (at startup, CreatePool and
 //     UpdatePool), and otherwise relies on the strategy's events. So the
 //     fake recovers from a failed create or a quarantined MicroVM on the
-//     next tick, where battery waits for the next event or restart.
+//     next tick, where battery waits for the next event or restart, and a
+//     Pool whose first provisioning fails fills in the fake but stays
+//     short in battery (BA-075, BA-076). Config.SeedOnce turns this
+//     difference off: the tick then tops up an event-driven Pool only on
+//     the first tick after its CreatePool or UpdatePool, as battery seeds
+//     it, so a test can reach the Pool that stays short.
 //   - The fake does not check a Host's flintlock version; battery refuses
 //     to create a MicroVM on a Host whose ServerInfo reports a version
 //     older than v0.15.2.

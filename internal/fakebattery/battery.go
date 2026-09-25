@@ -94,6 +94,14 @@ type Config struct {
 	EventReplay int
 	// Log receives the fake's warnings; the zero Logger discards them.
 	Log logr.Logger
+	// SeedOnce makes the tick top up an IMMEDIATE_ON_LEASE or
+	// REPLACE_ON_DELETE Pool only on the first tick after its CreatePool or
+	// UpdatePool, whether or not those provisions succeed, as battery
+	// v0.3.3 seeds such a Pool once per reconciler (BA-075, BA-076). After
+	// that, only the strategy's claims and deletions provision for it, so a
+	// Pool whose seed fails stays short, as in battery. False, the default,
+	// tops up every Pool on every tick.
+	SeedOnce bool
 }
 
 // Battery is the fake battery. Build it with New, then Serve it, or Run it

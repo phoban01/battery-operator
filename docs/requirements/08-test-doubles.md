@@ -23,6 +23,11 @@ flintlock-runner, where `10-test-doubles.md` specifies them.
 - **TD-006** The fake battery SHALL let a test make it unavailable for a
   period, delay its answers to `ClaimVM`, refuse heartbeats, fail a Pool's
   hooks, and drop its `Events` streams.
+- **TD-007** Where a test sets `SeedOnce`, the fake battery SHALL
+  provision for a Pool whose replenishment strategy is `IMMEDIATE_ON_LEASE`
+  or `REPLACE_ON_DELETE` on its tick only on the first tick after each
+  `CreatePool` or `UpdatePool` of the Pool, whether or not those provisions
+  succeed, as battery v0.3.3 seeds such a Pool (BA-075, BA-076).
 
 ## The fake flintlockd {#fake-flintlockd}
 

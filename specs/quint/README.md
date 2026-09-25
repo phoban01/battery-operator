@@ -423,6 +423,10 @@ only when it starts (ADR 0001, consequence 1; BA-061). The steps are:
   whose heartbeat expiry threshold is not positive, which stands for every
   spec it refuses (PO-004). The model has no replenishment strategies,
   hooks, provisioning phase or quarantine (10-battery.md, stand-ins).
+  Its replenishment whenever a Pool is below its size stands for battery
+  together with the Pool Controller's reseed of a stalled Pool (PO-035 to
+  PO-038), which works around battery v0.3.3 seeding an event-driven Pool
+  only once (BA-075, BA-076).
 - **the environment:** Nodes are labelled, cordoned, uncordoned, deleted
   and created again; Node reports flip; Pools are created, changed (to a
   spec battery refuses, too) and deleted; claims lease available MicroVMs

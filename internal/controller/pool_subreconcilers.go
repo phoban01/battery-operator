@@ -49,6 +49,7 @@ func poolChain() []poolSubreconciler {
 		poolDeclaration{},
 		poolUpdate{},
 		poolRejection{},
+		poolReseed{},
 		poolCounts{},
 		poolExhaustion{},
 		poolReadiness{},
@@ -113,6 +114,7 @@ func (poolDeclaration) Reconcile(ctx context.Context, s *poolScope) (poolNext, e
 	case err == nil:
 		s.held = held
 		s.Pool.Status.ObservedGeneration = s.Pool.Generation
+		s.sent = true
 		s.Log.Info("Created Pool in battery", "pool", ref.String(), "generation", s.Pool.Generation)
 		return poolContinue, nil
 	case errors.Is(err, battery.ErrAlreadyExists):
@@ -169,6 +171,7 @@ func (poolUpdate) Reconcile(ctx context.Context, s *poolScope) (poolNext, error)
 	case err == nil:
 		s.held = held
 		s.Pool.Status.ObservedGeneration = s.Pool.Generation
+		s.sent = true
 		s.Log.Info("Updated Pool in battery", "pool", ref.String(), "generation", s.Pool.Generation, "hosts", s.hosts)
 		return poolContinue, nil
 	case errors.Is(err, battery.ErrInvalid):

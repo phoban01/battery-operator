@@ -139,3 +139,60 @@ renew it. battery deletes it and its MicroVM once the Pool's
 `heartbeat_expiry_threshold` has passed (BA-023), and the deletion then
 goes on. PO-032 keeps the drain from releasing a Lease it cannot tell
 from a claim's (CL-031).
+
+## Refilling {#refill}
+
+- **PO-035** The Pool Controller SHALL treat a Pool as stalled while its
+  replenishment strategy is `ImmediateOnLease` or `ReplaceOnDelete`,
+  battery holds the Pool and has accepted its current spec, its selector
+  matches a Host, battery reports no provisioning MicroVM in it, and its
+  shortfall is greater than zero.
+- **PO-036** When a Pool has been stalled for its reseed wait, counted
+  from the later of the time the Pool Controller first saw it stalled and
+  the Pool Controller's last `UpdatePool` for it, the Pool Controller SHALL
+  send battery the Pool's unchanged spec with `UpdatePool`.
+- **PO-037** The Pool Controller SHALL make a Pool's reseed wait one
+  minute, double it after each `UpdatePool` of PO-036 up to 30 minutes,
+  and set it back to one minute when the Pool's shortfall changes or
+  reaches zero.
+- **PO-038** While a Pool's shortfall is greater than zero and its
+  replenishment strategy is `ImmediateOnLease` or `ReplaceOnDelete`, the
+  Pool Controller SHALL reconcile the Pool again no later than the end of
+  its reseed wait.
+
+A Pool's shortfall is its size less its available MicroVMs for
+`ImmediateOnLease`, and its size less its available and leased MicroVMs
+for `ReplaceOnDelete`. While nothing is provisioning in the Pool, that is
+what battery would provision for it if its reconciler started now
+(BA-075). The shortfall leaves the provisioning MicroVMs out, so that a
+reseed's own provisioning does not count as progress: if it fails, the
+shortfall is as it was, and the wait goes on growing.
+
+This section works around battery v0.3.3, and is to be removed once
+battery retries a failed seed. battery seeds a Pool of these two
+strategies once, when the Pool's reconciler starts, and marks it seeded
+whether or not the provisions succeed (BA-075). After that it provisions
+for the Pool only on a claim or a deletion (BA-076). So a Pool whose seed
+fails has nothing to claim and nothing to delete, and stays short for
+good. The same holds for a Pool whose replacement after a claim or a
+deletion fails. `UpdatePool` starts a new reconciler, which seeds again
+(BA-074), and the workaround relies on that: battery v0.3.3 restarts the
+reconciler on every `UpdatePool`, even with an unchanged spec, but battery
+does not promise it. A `MinSizeThreshold` Pool needs none of this, since
+battery tops it up on its tick.
+
+The wait and its backoff keep the Pool Controller from calling battery
+often. A MicroVM that battery is provisioning counts as provisioning, and
+a Pool is stalled only when nothing is provisioning, so the wait does not
+race a slow boot. Outside a failure, a Pool is stalled only for the moment
+between a claim or a deletion and the start of its replacement, which is
+far less than a minute. Each `UpdatePool` makes battery try to provision
+the whole shortfall again; when those attempts keep failing, as when
+`flintlockd` refuses the Pool's template, the doubling brings the calls
+down to one every 30 minutes. A change in the shortfall is progress, or a
+new failure, and starts the wait again from one minute.
+
+The Pool Controller keeps the waits in memory. A restart of the Operator
+loses them, which only starts each wait again. battery sends no event for
+a stalled Pool, so the Pool Controller asks for its own reconcile when the
+wait ends (PO-038).
