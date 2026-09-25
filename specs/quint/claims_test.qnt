@@ -511,4 +511,28 @@ module claims_test {
       .then(ctlReleaseVM("a"))
       .then(ctlRemoveFinalizer("a"))
       .expect(and { isGone(slot("a")), safety })
+
+  // unrenewedClaimExpires and orphanEventuallyGone are checked from
+  // CLAIM_RUN_OUT and ORPHAN_RUN_OUT (claims.qnt, "Liveness"). Each is a
+  // state the model reaches from init.
+  run claimRunOutReachableTest =
+    init
+      .then(createClaim(LIVE_CLAIM))
+      .then(ctlAddFinalizer(LIVE_CLAIM))
+      .then(replenish("v1"))
+      .then(replenish("v2"))
+      .then(ctlClaimVM(LIVE_CLAIM, "v1"))
+      .then(ctlWriteBound(LIVE_CLAIM))
+      .then(ticks(EXPIRY))
+      .expect(and { isAt(CLAIM_RUN_OUT), safety })
+
+  run orphanRunOutReachableTest =
+    init
+      .then(createClaim(LIVE_CLAIM))
+      .then(ctlAddFinalizer(LIVE_CLAIM))
+      .then(replenish("v1"))
+      .then(replenish("v2"))
+      .then(ctlClaimVMLost(LIVE_CLAIM, "v1"))
+      .then(ticks(EXPIRY))
+      .expect(and { isAt(ORPHAN_RUN_OUT), orphans == Set(1), safety })
 }

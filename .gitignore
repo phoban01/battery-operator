@@ -21,3 +21,6 @@ go.work
 
 # the e2e suite writes its kustomization for each run here
 /test/e2e/.run/
+
+# hack/quint-verify.sh leaves Apalache's counterexamples here
+/_apalache-out/
