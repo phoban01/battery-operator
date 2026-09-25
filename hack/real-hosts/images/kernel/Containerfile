@@ -1,0 +1,26 @@
+# The MicroVM kernel as flintlockd takes it: an OCI image with the kernel
+# at the path the Pool's spec.template.kernel.filename names (boot/vmlinux).
+#
+# Firecracker's CI kernel, 6.1, from the Firecracker release the Host runs,
+# for the image's platform: aarch64 or x86_64. It has virtio-vsock,
+# virtio-blk, ext4 and devtmpfs built in, so the guest-agent is reachable
+# and systemd boots without an initrd. On aarch64 it is the uncompressed
+# Image that Firecracker loads, whatever its name; on x86_64 an ELF vmlinux.
+# The sha256s are pinned here, computed from the downloads: Firecracker's
+# bucket publishes no checksum.
+FROM --platform=$BUILDPLATFORM alpine:3.22 AS fetch
+ARG TARGETARCH
+ARG KERNEL_VERSION=6.1.128
+ARG KERNEL_SHA256_ARM64=cb1291c66bca75bc11cb9c8357fcef9965bb1786dffcb42a60923c3e0e49f319
+ARG KERNEL_SHA256_AMD64=27a8310b9a727517e9eb02044524b6ceb77de5728e3491b6974d5c846227ecc8
+RUN apk add --no-cache curl && \
+    case "${TARGETARCH}" in \
+      arm64) uarch=aarch64; sum="${KERNEL_SHA256_ARM64}" ;; \
+      amd64) uarch=x86_64; sum="${KERNEL_SHA256_AMD64}" ;; \
+      *) echo "no kernel for ${TARGETARCH}" >&2; exit 1 ;; \
+    esac && \
+    curl -fsSL -o /vmlinux "https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/v1.12/${uarch}/vmlinux-${KERNEL_VERSION}" && \
+    echo "${sum}  /vmlinux" | sha256sum -c -
+
+FROM scratch
+COPY --from=fetch /vmlinux /boot/vmlinux

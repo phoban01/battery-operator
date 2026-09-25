@@ -1,0 +1,13 @@
+# Restarts flintlockd when the Exec Agent renews its certificate or rewrites
+# the client CA bundle. The agent renames each file into place, which
+# PathChanged= sees.
+[Unit]
+Description=Restart flintlockd when its certificates change
+
+[Path]
+PathChanged=/etc/battery/flintlockd/tls.crt
+PathChanged=/etc/battery/flintlockd/client-ca.crt
+Unit=flintlockd-restart.service
+
+[Install]
+WantedBy=multi-user.target

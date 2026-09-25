@@ -1,0 +1,24 @@
+# containerd for flintlockd (containerd-config.toml), after the thin pool so
+# that the devmapper snapshotter finds it. KillMode=process, as upstream's
+# unit has it.
+[Unit]
+Description=containerd for flintlockd
+Documentation=https://containerd.io
+After=network.target local-fs.target bo-thin-pool.service
+Requires=bo-thin-pool.service
+
+[Service]
+ExecStart=/usr/local/bin/containerd --config /etc/containerd/config.toml
+Type=notify
+Delegate=yes
+KillMode=process
+Restart=always
+RestartSec=5
+LimitNPROC=infinity
+LimitCORE=infinity
+LimitNOFILE=infinity
+TasksMax=infinity
+OOMScoreAdjust=-999
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,15 @@
+# containerd's thin pool, flintlock-thinpool (thin-pool.sh). Loop devices do
+# not survive a reboot, so the pool is put together again at every boot.
+[Unit]
+Description=Thin pool flintlock-thinpool for containerd's devmapper snapshotter
+DefaultDependencies=no
+After=local-fs.target systemd-modules-load.service
+Before=containerd.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/libexec/bo-trial/thin-pool
+
+[Install]
+WantedBy=multi-user.target

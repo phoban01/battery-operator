@@ -1,0 +1,24 @@
+# containerd for flintlockd alone (host/provision.sh), from flintlock's
+# provision and flintlock-runner's Host Image (image/rootfs/etc/containerd/
+# config.toml) without its CRI settings: k3s runs its own containerd for the
+# kubelet, on /run/k3s/containerd, so this one serves no pods.
+version = 2
+
+root = "/var/lib/containerd"
+state = "/run/containerd"
+disabled_plugins = ["io.containerd.grpc.v1.cri"]
+
+[grpc]
+  address = "/run/containerd/containerd.sock"
+
+[metrics]
+  address = "127.0.0.1:1338"
+
+[plugins]
+  # The thin pool bo-thin-pool.service creates. flintlockd puts MicroVM
+  # volumes on it.
+  [plugins."io.containerd.snapshotter.v1.devmapper"]
+    pool_name = "flintlock-thinpool"
+    root_path = "/var/lib/containerd/snapshotter/devmapper"
+    base_image_size = "10GB"
+    discard_blocks = true

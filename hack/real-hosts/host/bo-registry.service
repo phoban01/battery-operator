@@ -1,0 +1,14 @@
+# The registry for the MicroVM images, on 127.0.0.1:5000. flintlockd pulls
+# a MicroVM's kernel and root volume through containerd, which speaks plain
+# HTTP only to localhost; up.sh pushes the images here on every Host.
+[Unit]
+Description=Registry for the trial's MicroVM images
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/registry serve /etc/bo-trial/registry.yml
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

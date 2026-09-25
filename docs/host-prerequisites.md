@@ -37,11 +37,24 @@ directory (EA-033); the agent reports those as `HostImageNotReady`.
   the Operator's pod network and from the Host itself (ADR 0002,
   consequence 2).
 
-Until #31, the Exec Agent's client certificate for `flintlockd`, the serving
-CA and the Exec Agent's own serving certificate are files on the Host under
-`/etc/battery/exec-agent`, readable by user 65532. #31 replaces them with
-certificates the Exec Agent requests itself
-([ADR 0003](adr/0003-host-certificates-through-kubernetes-csrs.md)).
+`flintlockd`'s certificates come from the Exec Agent
+([ADR 0003](adr/0003-host-certificates-through-kubernetes-csrs.md), EA-061
+and EA-064). The agent writes the serving certificate, its key and the
+client CA bundle to `/etc/battery/flintlockd` on the Host, as `tls.crt`,
+`tls.key` and `client-ca.crt`, with `tls.crt` written last. So the Host
+Image:
+
+- creates `/etc/battery/flintlockd`, writable by the agent's user, 65532;
+- starts `flintlockd` once `tls.crt` exists, with `--tls-cert`,
+  `--tls-key` and `--tls-client-ca` naming those three files;
+- restarts `flintlockd` whenever `tls.crt` or `client-ca.crt` changes. The
+  agent replaces each file by renaming a new one into place, and it renews
+  the certificate before two thirds of its validity have passed (EA-063).
+
+A systemd `.path` unit with `PathExists=` on `tls.crt` does the first, and
+another with `PathChanged=` on both files does the second.
+`hack/real-hosts/host/` has both. The agent's own client certificate and
+serving certificate stay in its memory and are not on the Host.
 
 ### KVM
 
