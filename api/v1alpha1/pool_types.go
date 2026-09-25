@@ -223,20 +223,40 @@ type PoolLease struct {
 // MicroVMTemplate is flintlock's MicroVMSpec without the fields that identify
 // one MicroVM (id, namespace, uid and the timestamps) and without
 // allow_guest_agent, which battery forces true.
+//
+// The limits on vcpu, memoryInMb and interfaces are the ones flintlock
+// v0.15.2 validates a MicroVMSpec against (core/models/microvm.go in
+// github.com/liquidmetal-dev/flintlock): vcpu required,gte=1,lte=64;
+// memory_in_mb required,gte=1024,lte=32768; network_interfaces
+// required,dive,required. flintlockd refuses a spec outside them in
+// CreateMicroVM, long after the Pool was declared to battery, so the CRD
+// refuses it at admission instead. A later flintlock that relaxes them is
+// followed here, and in RS-014 to RS-016.
 type MicroVMTemplate struct {
 	// provider names the flintlock MicroVM provider. Empty uses flintlock's
 	// default.
 	// +optional
 	Provider *string `json:"provider,omitempty"`
 
-	// vcpu is the number of virtual CPUs.
+	//= docs/requirements/01-resources.md#pool
+	//# The CRDs SHALL reject a `Pool` whose `spec.template.vcpu` is less
+	//# than 1 or greater than 64.
+
+	// vcpu is the number of virtual CPUs, from 1 to 64 (flintlock v0.15.2).
 	// +required
 	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=64
 	VCPU int32 `json:"vcpu"`
 
-	// memoryInMb is the memory, in megabytes.
+	//= docs/requirements/01-resources.md#pool
+	//# The CRDs SHALL reject a `Pool` whose `spec.template.memoryInMb` is
+	//# less than 1024 or greater than 32768.
+
+	// memoryInMb is the memory, in megabytes, from 1024 to 32768 (flintlock
+	// v0.15.2).
 	// +required
-	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Minimum=1024
+	// +kubebuilder:validation:Maximum=32768
 	MemoryInMb int32 `json:"memoryInMb"`
 
 	// kernel is the kernel to boot.
@@ -256,11 +276,17 @@ type MicroVMTemplate struct {
 	// +listType=atomic
 	AdditionalVolumes []Volume `json:"additionalVolumes,omitempty"`
 
+	//= docs/requirements/01-resources.md#pool
+	//# The CRDs SHALL reject a `Pool` whose `spec.template.interfaces`
+	//# does not hold at least one network interface.
+
 	// interfaces are the network interfaces, which appear in the guest as
-	// eth1, eth2 and so on, in order.
-	// +optional
+	// eth1, eth2 and so on, in order. flintlock v0.15.2 requires at least
+	// one.
+	// +required
+	// +kubebuilder:validation:MinItems=1
 	// +listType=atomic
-	Interfaces []NetworkInterface `json:"interfaces,omitempty"`
+	Interfaces []NetworkInterface `json:"interfaces"`
 
 	// metadata is served by the metadata service, for cloud-init. Each
 	// value is base64 encoded.

@@ -37,6 +37,12 @@ status and the claims give a consumer the visibility it needs, and a
 - **RS-013** The `Pool` resource SHALL have a status subresource that carries
   `observedGeneration`, the counts of available, leased, provisioning and
   quarantined MicroVMs, and the conditions `Ready` and `Exhausted`.
+- **RS-014** The CRDs SHALL reject a `Pool` whose `spec.template.vcpu` is less
+  than 1 or greater than 64.
+- **RS-015** The CRDs SHALL reject a `Pool` whose `spec.template.memoryInMb` is
+  less than 1024 or greater than 32768.
+- **RS-016** The CRDs SHALL reject a `Pool` whose `spec.template.interfaces`
+  does not hold at least one network interface.
 
 A Pool's name and namespace in battery are the resource's own, so `PoolSpec`'s
 `name` and `namespace` have no field in `spec`. The proposal on battery#46
@@ -46,6 +52,14 @@ by the least number of MicroVMs on a Host, so it is left out.
 RS-012 moves to admission the refusals battery would otherwise give only when
 the Pool Controller calls it, so a bad Pool fails when it is applied rather
 than later in a condition.
+
+RS-014 to RS-016 do the same for what `flintlockd` refuses. flintlock
+v0.15.2 validates a `MicroVMSpec` (`core/models/microvm.go`) with `vcpu`
+from 1 to 64, `memory_in_mb` from 1024 to 32768, and at least one network
+interface. A template outside those limits was accepted, declared to
+battery, and then every MicroVM of its Pool failed in `flintlockd` (#141).
+The limits are flintlock v0.15.2's: a later flintlock that relaxes them
+changes these requirements and the markers on `MicroVMTemplate` together.
 
 ## MicroVMClaim {#microvmclaim}
 

@@ -30,6 +30,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/utils/ptr"
@@ -119,7 +120,6 @@ func poolFeature(poolNS string) features.Feature {
 		}).
 		Assess("a Pool gets battery's defaults", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
 			pool := validPool(poolNS, "defaults")
-			pool.Spec.Template.Interfaces = []batteryv1alpha1.NetworkInterface{{DeviceID: deviceID}}
 			if err := mustClient(t, cfg).Create(ctx, pool, client.DryRunAll); err != nil {
 				t.Fatalf("creating a minimal Pool: %v", err)
 			}
@@ -163,9 +163,10 @@ func poolFeature(poolNS string) features.Feature {
 			raw := unstructuredPool(poolNS, "placement-pruned", map[string]any{
 				"size": int64(1),
 				"template": map[string]any{
-					"vcpu": int64(1), "memoryInMb": int64(512),
+					"vcpu": int64(1), "memoryInMb": int64(1024),
 					"kernel":     map[string]any{"image": "k"},
 					"rootVolume": map[string]any{"containerSource": "r"},
+					"interfaces": []any{map[string]any{"deviceId": deviceID}},
 				},
 				"flintlockHosts": []any{"host-a"},
 				"placement":      map[string]any{"nodeSelector": map[string]any{"a": "b"}, "strategy": "RoundRobin"},
@@ -202,6 +203,7 @@ func poolFeature(poolNS string) features.Feature {
 			})
 			return ctx
 		}).
+		Assess("a template outside flintlock v0.15.2's limits is refused", flintlockLimitsRefused(poolNS)).
 		Assess("a Pool's status is a subresource", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
 			//= docs/requirements/01-resources.md#pool
 			//= type=test
@@ -261,6 +263,56 @@ func poolFeature(poolNS string) features.Feature {
 		}).
 		Teardown(deleteNamespace(poolNS)).
 		Feature()
+}
+
+// flintlockLimitsRefused: the Pool CRD refuses a template that flintlock
+// v0.15.2 would refuse in CreateMicroVM, and accepts one at its limits, in
+// the namespace poolNS.
+func flintlockLimitsRefused(poolNS string) features.Func {
+	return func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+		//= docs/requirements/01-resources.md#pool
+		//= type=test
+		//# The CRDs SHALL reject a `Pool` whose `spec.template.vcpu` is less
+		//# than 1 or greater than 64.
+
+		//= docs/requirements/01-resources.md#pool
+		//= type=test
+		//# The CRDs SHALL reject a `Pool` whose `spec.template.memoryInMb` is
+		//# less than 1024 or greater than 32768.
+
+		//= docs/requirements/01-resources.md#pool
+		//= type=test
+		//# The CRDs SHALL reject a `Pool` whose `spec.template.interfaces`
+		//# does not hold at least one network interface.
+		c := mustClient(t, cfg)
+		for _, tc := range outOfLimitPools {
+			t.Run(tc.name, func(t *testing.T) {
+				p := validPool(poolNS, "out-of-limits")
+				tc.mutate(p)
+				wantInvalid(t, c.Create(ctx, p, client.DryRunAll), tc.field)
+			})
+		}
+		t.Run("no interfaces field", func(t *testing.T) {
+			obj, err := runtime.DefaultUnstructuredConverter.ToUnstructured(validPool(poolNS, "no-interfaces"))
+			if err != nil {
+				t.Fatalf("converting a Pool: %v", err)
+			}
+			raw := &unstructured.Unstructured{Object: obj}
+			raw.SetGroupVersionKind(batteryv1alpha1.GroupVersion.WithKind("Pool"))
+			unstructured.RemoveNestedField(raw.Object, "spec", "template", "interfaces")
+			wantInvalid(t, c.Create(ctx, raw, client.DryRunAll), interfacesField)
+		})
+
+		// The limits themselves are accepted.
+		for _, limits := range []struct{ vcpu, memoryInMb int32 }{{1, 1024}, {64, 32768}} {
+			p := validPool(poolNS, "at-limits")
+			p.Spec.Template.VCPU, p.Spec.Template.MemoryInMb = limits.vcpu, limits.memoryInMb
+			if err := c.Create(ctx, p, client.DryRunAll); err != nil {
+				t.Errorf("creating a Pool with vcpu %d and memoryInMb %d: %v", limits.vcpu, limits.memoryInMb, err)
+			}
+		}
+		return ctx
+	}
 }
 
 // claimFeature: what the MicroVMClaim CRD enforces, in the namespace claimNS.
@@ -482,6 +534,30 @@ var invalidPools = []struct {
 	}, "exactly one of containerSource and virtiofsSource"},
 }
 
+// outOfLimitPools are changes to validPool that take its template outside
+// what flintlock v0.15.2 accepts, each with what the refusal names.
+var outOfLimitPools = []struct {
+	name   string
+	mutate func(*batteryv1alpha1.Pool)
+	field  string
+}{
+	{"no vcpu", func(p *batteryv1alpha1.Pool) { p.Spec.Template.VCPU = 0 }, vcpuField},
+	{"65 vcpus", func(p *batteryv1alpha1.Pool) { p.Spec.Template.VCPU = 65 }, vcpuField},
+	{"512 MB of memory", func(p *batteryv1alpha1.Pool) { p.Spec.Template.MemoryInMb = 512 }, memoryField},
+	{"1023 MB of memory", func(p *batteryv1alpha1.Pool) { p.Spec.Template.MemoryInMb = 1023 }, memoryField},
+	{"32769 MB of memory", func(p *batteryv1alpha1.Pool) { p.Spec.Template.MemoryInMb = 32769 }, memoryField},
+	{"an empty list of interfaces", func(p *batteryv1alpha1.Pool) {
+		p.Spec.Template.Interfaces = []batteryv1alpha1.NetworkInterface{}
+	}, interfacesField},
+}
+
+// The fields outOfLimitPools name.
+const (
+	vcpuField       = "spec.template.vcpu"
+	memoryField     = "spec.template.memoryInMb"
+	interfacesField = "spec.template.interfaces"
+)
+
 // validPool is a Pool the CRD accepts.
 func validPool(ns, name string) *batteryv1alpha1.Pool {
 	return &batteryv1alpha1.Pool{
@@ -493,6 +569,7 @@ func validPool(ns, name string) *batteryv1alpha1.Pool {
 				MemoryInMb: 2048,
 				Kernel:     batteryv1alpha1.Kernel{Image: "ghcr.io/example/kernel:6.6"},
 				RootVolume: batteryv1alpha1.Volume{ContainerSource: ptr.To("ghcr.io/example/root:24.04")},
+				Interfaces: []batteryv1alpha1.NetworkInterface{{DeviceID: deviceID}},
 			},
 		},
 	}
