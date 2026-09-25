@@ -240,7 +240,8 @@ spec:
                   interfaces:
                     description: |-
                       interfaces are the network interfaces, which appear in the guest as
-                      eth1, eth2 and so on, in order.
+                      eth1, eth2 and so on, in order. flintlock v0.15.2 requires at least
+                      one.
                     items:
                       description: NetworkInterface is flintlock's NetworkInterface.
                       properties:
@@ -295,6 +296,7 @@ spec:
                       required:
                       - deviceId
                       type: object
+                    minItems: 1
                     type: array
                     x-kubernetes-list-type: atomic
                   kernel:
@@ -326,9 +328,12 @@ spec:
                     description: labels are flintlock's labels on each MicroVM.
                     type: object
                   memoryInMb:
-                    description: memoryInMb is the memory, in megabytes.
+                    description: |-
+                      memoryInMb is the memory, in megabytes, from 1024 to 32768 (flintlock
+                      v0.15.2).
                     format: int32
-                    minimum: 1
+                    maximum: 32768
+                    minimum: 1024
                     type: integer
                   metadata:
                     additionalProperties:
@@ -378,11 +383,14 @@ spec:
                         required
                       rule: has(self.containerSource) != has(self.virtiofsSource)
                   vcpu:
-                    description: vcpu is the number of virtual CPUs.
+                    description: vcpu is the number of virtual CPUs, from 1 to 64
+                      (flintlock v0.15.2).
                     format: int32
+                    maximum: 64
                     minimum: 1
                     type: integer
                 required:
+                - interfaces
                 - kernel
                 - memoryInMb
                 - rootVolume

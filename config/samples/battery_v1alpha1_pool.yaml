@@ -18,6 +18,9 @@ spec:
         reboot: k
     rootVolume:
       containerSource: ghcr.io/example/ubuntu:24.04
+    interfaces:
+      - deviceId: eth1
+        type: Macvtap
   placement:
     nodeSelector:
       kubernetes.io/arch: amd64
