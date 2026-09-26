@@ -75,9 +75,24 @@ meanwhile is removed from battery once the drain timeout of IN-013 passes.
 - **PO-024** While the Pool Controller's subscription to battery's `Events`
   stream is not connected, the Pool Controller SHALL refresh every Pool's
   status at the configured resync interval.
+- **PO-041** When battery's `Events` stream reports a `VM_HOOK_FAILED`
+  event for a Pool, the Pool Controller SHALL record on the Pool a
+  Kubernetes Event of type `Warning` with the reason `HookFailed`, whose
+  message names the MicroVM and, where the event's payload gives them, the
+  hook and its error.
 
 The Events stream makes the status prompt; the resync of PO-024 makes it
 eventually right when the stream drops.
+
+PO-041 shows on the Pool the one provisioning failure battery v0.3.3
+reports. battery v0.3.3 records `VM_HOOK_FAILED` with no payload, so its
+Event names the MicroVM only, and the cause is in the log of the battery
+container; the fake battery's payload also gives the hook and the error.
+battery replays its outbox on each subscription (BA-050), so the Pool
+Controller remembers the last event id it recorded for each Pool and
+records no event twice. A restart of the Operator forgets the ids, and may
+record the replayed events again. Like PO-039, PO-041 is to be refactored
+once battery reports why a provision fails.
 
 ## Deletion {#deletion}
 
@@ -159,6 +174,16 @@ from a claim's (CL-031).
   replenishment strategy is `ImmediateOnLease` or `ReplaceOnDelete`, the
   Pool Controller SHALL reconcile the Pool again no later than the end of
   its reseed wait.
+- **PO-039** While a Pool's shortfall is unchanged since the Pool
+  Controller saw the Pool stalled after an `UpdatePool` of PO-036, and the
+  sum of its available, leased and provisioning MicroVMs is less than its
+  size, the Pool Controller SHALL set the Pool's condition `Ready` false
+  with the reason `NotFilling`.
+- **PO-040** The Pool Controller SHALL give the condition `Ready` with the
+  reason `NotFilling` a message that gives the Pool's shortfall, the number
+  of `UpdatePool` calls of PO-036 since the shortfall last changed, the time
+  of the next one while the Pool is stalled, and the log of the battery
+  container as the place to find the cause.
 
 A Pool's shortfall is its size less its available MicroVMs for
 `ImmediateOnLease`, and its size less its available and leased MicroVMs
@@ -196,3 +221,18 @@ The Pool Controller keeps the waits in memory. A restart of the Operator
 loses them, which only starts each wait again. battery sends no event for
 a stalled Pool, so the Pool Controller asks for its own reconcile when the
 wait ends (PO-038).
+
+The reason `NotFilling` (PO-039, PO-040) also works around battery
+v0.3.3, and is to be refactored once battery reports why a provision
+fails. battery v0.3.3 reports a failed provision nowhere the Operator can
+read: `PoolStatus` holds only counts, and a `CreateMicroVM` that
+`flintlockd` refuses records no event. So the Pool Controller can say only
+that the Pool is not filling, and where to look. It says so once a reseed
+has gone by and the Pool is stalled again with the same shortfall: one
+failed reseed is evidence, where the first stall may be the short moment
+after a claim. The reason stays while battery provisions for the next
+reseed, so that `Ready` does not move between `NotFilling` and
+`BelowSize` with each attempt. It goes, back to the reason of PO-022, when
+the shortfall changes or reaches zero, which also sets the reseed wait
+back (PO-037). While the provisioning MicroVMs make up the shortfall,
+PO-022 sets `Ready` true, as for any Pool.

@@ -67,6 +67,23 @@ type poolReseedState struct {
 	// battery, for a reseed or a change, which starts battery's reconciler
 	// again.
 	lastSent time.Time
+	// notFilling is set once the Pool Controller has seen the Pool stalled
+	// after a reseed for this shortfall: the reseed made no difference
+	// (PO-039). A change in the shortfall clears it with the rest of the
+	// state.
+	notFilling bool
+}
+
+// poolNotFilling is what poolReseed tells poolReadiness about a Pool that
+// reseeds have not filled (PO-039, PO-040).
+type poolNotFilling struct {
+	// shortfall is the Pool's shortfall.
+	shortfall int32
+	// reseeds is how many reseeds have gone by for this shortfall.
+	reseeds int
+	// next is when the next reseed is due; zero while the Pool is not
+	// stalled, because battery is provisioning for it.
+	next time.Time
 }
 
 func newPoolReseeds() *poolReseeds {
@@ -114,6 +131,9 @@ func (r *poolReseeds) observe(key types.NamespacedName, shortfall int32, stalled
 	if st.stalledSince.IsZero() {
 		st.stalledSince = now
 	}
+	if st.reseeds > 0 {
+		st.notFilling = true
+	}
 	start := st.stalledSince
 	if st.lastSent.After(start) {
 		start = st.lastSent
@@ -122,6 +142,18 @@ func (r *poolReseeds) observe(key types.NamespacedName, shortfall int32, stalled
 		return false, dueAt.Sub(now)
 	}
 	return true, 0
+}
+
+// notFilling reports the Pool as not filling, or nil while it is not: no
+// reseed for its current shortfall has yet been followed by a stall.
+func (r *poolReseeds) notFilling(key types.NamespacedName) *poolNotFilling {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	st := r.pools[key]
+	if st == nil || !st.notFilling {
+		return nil
+	}
+	return &poolNotFilling{shortfall: st.shortfall, reseeds: st.reseeds}
 }
 
 // reseeded records a reseed of the Pool at now and returns the next wait.
@@ -168,8 +200,13 @@ func poolShortfall(s *poolScope) (int32, bool) {
 // unchanged spec, and the new reconciler seeds the Pool again (BA-074).
 // battery does not promise that restart; this relies on it.
 //
+// poolReseed also tells poolReadiness when a reseed has not filled the
+// Pool, so that the Ready condition says so (PO-039, PO-040): battery
+// v0.3.3 reports a failed provision nowhere the Operator can read.
+//
 // Remove poolReseed, and PO-035 to PO-038, once battery retries a failed
-// seed on its tick.
+// seed on its tick. Refactor the NotFilling reason of PO-039 and PO-040
+// once battery reports why a provision fails.
 type poolReseed struct{}
 
 func (poolReseed) Reconcile(ctx context.Context, s *poolScope) (poolNext, error) {
@@ -204,6 +241,10 @@ func (poolReseed) Reconcile(ctx context.Context, s *poolScope) (poolNext, error)
 		//# Pool Controller SHALL reconcile the Pool again no later than the end of
 		//# its reseed wait.
 		s.requeueAfter(after)
+		s.notFilling = s.Reseeds.notFilling(key)
+		if s.notFilling != nil && stalled {
+			s.notFilling.next = now.Add(after)
+		}
 		return poolContinue, nil
 	}
 
@@ -220,6 +261,10 @@ func (poolReseed) Reconcile(ctx context.Context, s *poolScope) (poolNext, error)
 	s.held = held
 	next := s.Reseeds.reseeded(key, now)
 	s.requeueAfter(next)
+	s.notFilling = s.Reseeds.notFilling(key)
+	if s.notFilling != nil {
+		s.notFilling.next = now.Add(next)
+	}
 	s.Log.Info("Sent unchanged Pool to battery to seed it again", "pool", ref.String(),
 		"shortfall", shortfall, "nextWait", next.String())
 	return poolContinue, nil
