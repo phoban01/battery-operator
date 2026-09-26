@@ -10,9 +10,8 @@
 #                     steps keeps its invariants (claims, certificates,
 #                     pools);
 #   claims:PROPERTY   a liveness property of claims.qnt: no behaviour of up
-#                     to QUINT_VERIFY_LIVENESS_STEPS steps that ends in a
-#                     loop meets the property's assumptions and never gets
-#                     there;
+#                     to the check's bound that ends in a loop meets the
+#                     property's assumptions and never gets there;
 #   claims:witnessPROPERTY
 #                     the property's witness, which must be violated: some
 #                     such behaviour meets the assumptions and reaches the
@@ -34,8 +33,10 @@
 # there already. A counterexample, as TLA+ and as an ITF trace, is left in
 # _apalache-out/ at the repository root.
 #
-# QUINT names the quint binary. QUINT_VERIFY_STEPS and
-# QUINT_VERIFY_LIVENESS_STEPS set the bounds.
+# QUINT names the quint binary. QUINT_VERIFY_STEPS sets the bound of the
+# safety checks, 5 steps. Each liveness check has its own bound, in run()
+# below; QUINT_VERIFY_LIVENESS_STEPS, if set, sets one bound for them all.
+# JVM_ARGS goes to Apalache's JVM, and sets its heap.
 set -euo pipefail
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -43,7 +44,12 @@ cd "$root"
 : "${QUINT:=quint}"
 : "${QUINT_HOME:=$HOME/.quint}"
 : "${QUINT_VERIFY_STEPS:=5}"
-: "${QUINT_VERIFY_LIVENESS_STEPS:=5}"
+: "${QUINT_VERIFY_LIVENESS_STEPS:=}"
+# Apalache's own default heap is 4 GiB, too small for the checks from
+# ORPHAN_RUN_OUT. A GitHub runner has 16 GiB, and Z3 needs some outside the
+# heap.
+: "${JVM_ARGS:=-Xmx10g}"
+export JVM_ARGS
 
 # The Apalache that quint 0.32.0's `quint verify` runs, and the sha256 of
 # its apalache.tgz from the release's sha256sum.txt. .dagger/main.go pins
@@ -105,7 +111,6 @@ run() {
       steps=$QUINT_VERIFY_STEPS
       args=(--next=step --inv=safety) ;;
     *)
-      steps=$QUINT_VERIFY_LIVENESS_STEPS
       args=(--next=stepOrStutter "--temporal=$name")
       case "$name" in witness*) expect=violate ;; esac
       # The two about a Lease that has run out start where one has
@@ -113,7 +118,16 @@ run() {
       case "$name" in
         *[uU]nrenewedClaimExpires) init=initClaimRunOut ;;
         *[oO]rphanEventuallyGone) init=initOrphanRunOut ;;
-      esac ;;
+      esac
+      # Each check's own bound, unless QUINT_VERIFY_LIVENESS_STEPS sets
+      # one for all (specs/quint/README.md, "Bounded checks").
+      case "$name" in
+        *[dD]eletedClaimGone) steps=6 ;;
+        *[uU]nrenewedClaimExpires) steps=4 ;;
+        *[oO]rphanEventuallyGone) steps=3 ;;
+        *) steps=5 ;;
+      esac
+      steps=${QUINT_VERIFY_LIVENESS_STEPS:-$steps} ;;
   esac
   echo "==> $1, from $init, up to $steps steps"
   local start=$SECONDS rc log="$work/$model-$name.log" input
@@ -138,7 +152,7 @@ run() {
       echo "FAIL $1: a counterexample of up to $steps steps, in $out/$model-$name" >&2
       return 1 ;;
     violate:0)
-      echo "FAIL $1: no behaviour of up to $steps steps meets the assumptions and reaches the left-hand side; raise QUINT_VERIFY_LIVENESS_STEPS" >&2
+      echo "FAIL $1: no behaviour of up to $steps steps meets the assumptions and reaches the left-hand side; raise its bound" >&2
       return 1 ;;
     *)
       tail -40 "$log"

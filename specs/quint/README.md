@@ -69,7 +69,7 @@ of them. `make quint-verify`
 | Check | What |
 |-------|------|
 | `claims:safety`, `certificates:safety`, `pools:safety` | every behaviour of up to `QUINT_VERIFY_STEPS` steps keeps the model's `safety` |
-| `claims:<property>` | a liveness property of `claims.qnt` ([below](#liveness)): no behaviour of up to `QUINT_VERIFY_LIVENESS_STEPS` steps that ends in a loop meets its assumptions and never gets there |
+| `claims:<property>` | a liveness property of `claims.qnt` ([below](#liveness)): no behaviour of up to the check's bound that ends in a loop meets its assumptions and never gets there |
 | `claims:witness<Property>` | the property's witness, which must be violated: some such behaviour meets the assumptions and reaches the property's left-hand side, so the property is not checked only where it holds vacuously |
 
 The checks are slow, minutes each at small bounds, and each step more of
@@ -83,14 +83,40 @@ last one shows that Apalache can still read the step and the temporal
 properties (#151). `dagger call quint-verify --checks="claims:safety"`
 runs them locally the same way.
 
-The bounds are small, `QUINT_VERIFY_STEPS=5` and
-`QUINT_VERIFY_LIVENESS_STEPS=6`, and so is what they cover: a claim takes
-five steps to be created, get its finalizer and bind. They find a mistake
-in a model's first steps that simulation might miss, and show that the
+The bounds are small, and so is what they cover. They find a mistake in a
+model's first steps that simulation might miss, and show that the
 liveness properties hold at all; the simulations' 60 steps do the rest.
-On GitHub's runners, at these bounds, `claims:safety` takes about ten
-minutes and `pools:safety` about twenty; each step more of bound costs
-several times the step before.
+The safety checks take `QUINT_VERIFY_STEPS`, 5 steps. Each liveness check
+has its own bound, set in the script:
+
+| Check | From | Bound | What the bound reaches | Time |
+|-------|------|-------|------------------------|------|
+| `deletedClaimGone` | `init` | 6 | a claim with no Lease, deleted by the fourth step. A claim takes five steps to bind, so none is deleted with a Lease within the bound. | TIME |
+| `witnessDeletedClaimGone` | `init` | 6 | `createClaim`, `ctlAddFinalizer`, `deleteClaim`, `ctlReleasePending`, and two steps that change nothing | TIME |
+| `pendingClaimBinds` | `init` | 5 | a claim created in the first step that stays Pending | TIME |
+| `witnessPendingClaimBinds` | `init` | 5 | `createClaim`, and the steps to bind it | TIME |
+| `unrenewedClaimExpires` | `CLAIM_RUN_OUT` | 4 | a Bound claim whose Lease has run out, for up to 4 steps | TIME |
+| `witnessUnrenewedClaimExpires` | `CLAIM_RUN_OUT` | 4 | the claim goes Expired, and the steps that close the loop | TIME |
+| `orphanEventuallyGone` | `ORPHAN_RUN_OUT` | 3 | an orphan that has run out, for up to 3 steps | TIME |
+| `witnessOrphanEventuallyGone` | `ORPHAN_RUN_OUT` | 3 | `batteryExpire` sweeps the orphan, and two steps that change nothing | TIME |
+
+Each property has the bound of its witness: the least bound at which
+Apalache finds the witness. A witness needs more steps than its behaviour
+has, for the reason in [Liveness](#liveness). A lower bound would check
+the property only where it holds vacuously. A higher bound for
+`unrenewedClaimExpires` and the orphan checks would not fit in a job: at
+5 steps `unrenewedClaimExpires` took 4 hours 48 minutes, and
+`orphanEventuallyGone` at 4 steps ran out of memory after 4 hours.
+`QUINT_VERIFY_LIVENESS_STEPS`, if set, is the bound of every liveness
+check; the quick PR job sets it to 1.
+
+The times are from GitHub's runners, where a job may take 6 hours; each
+step more of bound costs several times the step before. The checks from
+`ORPHAN_RUN_OUT` cost the most, since battery holds a Lease and the claim
+is Pending, so many more steps are enabled. Apalache's own default heap,
+4 GiB, is too small for them. The script gives its JVM 10 GiB
+(`JVM_ARGS=-Xmx10g`) unless `JVM_ARGS` is set; Z3 needs memory outside
+the heap, and the runner has 16 GiB.
 
 Apalache needs Java 17 or later, which devbox does not install; `dagger
 call quint-verify` has one. The script installs Apalache 0.56.1, the
@@ -305,12 +331,35 @@ the model's comments too:
   `match`, which means the same. Apalache 0.58.0 fixes this
   ([apalache#2107](https://github.com/apalache-mc/apalache/issues/2107)),
   but quint 0.32.0 runs 0.56.1.
+- It needs more steps than a behaviour has. Apalache gives each part of
+  the formula a variable in each state. The variable of an `and`, `or`,
+  `not` or `implies` above a temporal operator takes the value its parts
+  had in the state before, not in its own state. A loop counts only when
+  every such variable has the same value at both of its ends. So when a
+  part of the formula changes its value, the loop can close only one step
+  later for each of those operators above that part. Its `TableauEncoder`
+  does this in 0.56.1 and in its newest code too.
 
 Each property has a witness, `witness<Property>`, that `make
 quint-verify` requires to be violated: a behaviour within the bound that
 meets the assumptions and reaches the property's left-hand side. Without
 one, the property would hold at that bound only because no behaviour gets
 there.
+
+The witness of `deletedClaimGone` shows why the witnesses need more steps.
+The shortest behaviour is `createClaim`, `ctlAddFinalizer`, `deleteClaim`
+and `ctlReleasePending`: four steps, and then the claim is gone for ever.
+The fairness assumptions rule out a loop in which the claim is still being
+deleted, so the left-hand side holds only before the loop. Written as
+`not(controllerAssumptions and eventually(deletingLiveClaim))`, the
+`eventually` turns false at the fourth step, with a `not` and an `and`
+above it, so Apalache finds the witness only at 7 steps. Written as
+`always(not(deletingLiveClaim)) or not(controllerAssumptions)`, which is
+the same formula, the `always` turns true at the fourth step with one
+`or` above it, so Apalache finds it at 6 steps. `witnessOrphanEventuallyGone`
+is written the same way, for the same reason: the sweep is one step, and
+Apalache finds it at 3 steps, not 4. The other two witnesses have their
+left-hand side early enough to fit their bounds as they are.
 
 ### Replaying its traces against the Claim Controller
 
