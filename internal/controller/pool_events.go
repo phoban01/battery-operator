@@ -32,7 +32,8 @@ import (
 const poolEventsBuffer = 256
 
 // poolEvents is the Pool Controller's side of BatteryEvents. It turns each
-// event into a reconcile of the Pool it names (PO-023), and each resync,
+// event into a reconcile of the Pool it names (PO-023), records a
+// Kubernetes Event on the Pool for a failed hook (PO-041), and each resync,
 // which BatteryEvents asks for while it is not subscribed, into a
 // reconcile of every Pool (PO-024). The Pool Controller watches its
 // Requests through a source.Channel.
@@ -41,6 +42,9 @@ type poolEvents struct {
 	Pools client.Reader
 	// Log is the logger; the zero Logger discards.
 	Log logr.Logger
+	// HookEvents records an Event on the Pool for each VM_HOOK_FAILED
+	// (PO-041); nil records none.
+	HookEvents *poolHookEvents
 
 	requests chan event.TypedGenericEvent[*batteryv1alpha1.Pool]
 }
@@ -73,6 +77,7 @@ func (e *poolEvents) handle(ctx context.Context, ev *battery.Event) {
 	if ev.Pool.Name == "" {
 		return
 	}
+	e.HookEvents.handle(ctx, ev)
 	e.enqueue(ctx, ev.Pool.Namespace, ev.Pool.Name)
 }
 

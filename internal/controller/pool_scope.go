@@ -78,6 +78,10 @@ type poolScope struct {
 	// for the Pool again (BA-074).
 	sent bool
 
+	// notFilling is set by poolReseed when a reseed has not filled the
+	// Pool, for poolReadiness (PO-039).
+	notFilling *poolNotFilling
+
 	// Reseeds is the Pool Controller's memory of its stalled Pools, for
 	// poolReseed; nil turns the reseed off.
 	Reseeds *poolReseeds

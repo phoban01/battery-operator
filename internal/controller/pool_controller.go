@@ -24,6 +24,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -59,6 +60,10 @@ type PoolReconciler struct {
 	// stream is down (PO-023, PO-024). The caller adds Events to the
 	// manager. Nil watches Pools only.
 	Events *BatteryEvents
+	// Recorder records the Kubernetes Events on Pools for the failed
+	// hooks battery reports on Events (PO-041); nil is the manager's
+	// recorder.
+	Recorder events.EventRecorder
 
 	// reseeds is the memory of stalled Pools that poolReseed keeps across
 	// reconciles, a workaround for battery v0.3.3 (PO-035 to PO-038).
@@ -70,6 +75,7 @@ type PoolReconciler struct {
 // +kubebuilder:rbac:groups=battery.liquidmetal-x.dev,resources=pools/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=battery.liquidmetal-x.dev,resources=pools/finalizers,verbs=update
 // +kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch
+// +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch
 
 // Reconcile runs the Pool Controller's chain for one Pool.
 func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -106,9 +112,14 @@ func (r *PoolReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&corev1.Node{}, handler.EnqueueRequestsFromMapFunc(r.everyPoolForNode),
 			builder.WithPredicates(nodeLabelsChanged))
 	if r.Events != nil {
-		events := newPoolEvents(mgr.GetClient(), mgr.GetLogger().WithName("pool-events"))
-		r.Events.add(events)
-		b = b.WatchesRawSource(source.Channel(events.Requests(),
+		pe := newPoolEvents(mgr.GetClient(), mgr.GetLogger().WithName("pool-events"))
+		recorder := r.Recorder
+		if recorder == nil {
+			recorder = mgr.GetEventRecorder("pool-controller")
+		}
+		pe.HookEvents = &poolHookEvents{Pools: mgr.GetClient(), Recorder: recorder, Log: pe.Log}
+		r.Events.add(pe)
+		b = b.WatchesRawSource(source.Channel(pe.Requests(),
 			&handler.TypedEnqueueRequestForObject[*batteryv1alpha1.Pool]{}))
 	}
 	return b.Complete(r)
