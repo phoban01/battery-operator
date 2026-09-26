@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/go-logr/logr"
 	"k8s.io/apimachinery/pkg/api/equality"
@@ -71,6 +72,15 @@ type poolScope struct {
 	// matches, as poolPlacement resolved them in this reconcile: the
 	// Pool's flintlock_hosts in battery (PO-010).
 	hosts []string
+
+	// sent is set once poolDeclaration or poolUpdate has sent the Pool's
+	// spec to battery in this reconcile, which starts battery's reconciler
+	// for the Pool again (BA-074).
+	sent bool
+
+	// Reseeds is the Pool Controller's memory of its stalled Pools, for
+	// poolReseed; nil turns the reseed off.
+	Reseeds *poolReseeds
 }
 
 func newPoolScope(pool *batteryv1alpha1.Pool, c client.Client, b battery.Client, hosts PoolHosts,
@@ -97,6 +107,17 @@ func (s *poolScope) setCondition(conditionType string, status metav1.ConditionSt
 		ObservedGeneration: s.Pool.Generation,
 		LastTransitionTime: metav1.NewTime(s.Clock.Now()),
 	})
+}
+
+// requeueAfter asks for the Pool's next reconcile no later than d from
+// now, and keeps an earlier request.
+func (s *poolScope) requeueAfter(d time.Duration) {
+	if d <= 0 {
+		return
+	}
+	if s.Result.RequeueAfter == 0 || d < s.Result.RequeueAfter {
+		s.Result.RequeueAfter = d
+	}
 }
 
 // patch writes what the subreconcilers changed: the status first, then

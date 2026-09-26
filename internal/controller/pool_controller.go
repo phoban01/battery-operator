@@ -19,8 +19,10 @@ package controller
 import (
 	"context"
 	"errors"
+	"sync"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -57,6 +59,11 @@ type PoolReconciler struct {
 	// stream is down (PO-023, PO-024). The caller adds Events to the
 	// manager. Nil watches Pools only.
 	Events *BatteryEvents
+
+	// reseeds is the memory of stalled Pools that poolReseed keeps across
+	// reconciles, a workaround for battery v0.3.3 (PO-035 to PO-038).
+	reseedsOnce sync.Once
+	reseeds     *poolReseeds
 }
 
 // +kubebuilder:rbac:groups=battery.liquidmetal-x.dev,resources=pools,verbs=get;list;watch;update;patch
@@ -66,8 +73,12 @@ type PoolReconciler struct {
 
 // Reconcile runs the Pool Controller's chain for one Pool.
 func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	r.reseedsOnce.Do(func() { r.reseeds = newPoolReseeds() })
 	pool := &batteryv1alpha1.Pool{}
 	if err := r.Get(ctx, req.NamespacedName, pool); err != nil {
+		if apierrors.IsNotFound(err) {
+			r.reseeds.forget(req.NamespacedName)
+		}
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 	clk := r.Clock
@@ -75,6 +86,7 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		clk = clock.Real{}
 	}
 	s := newPoolScope(pool, r.Client, r.Battery, r.Hosts, logf.FromContext(ctx), clk)
+	s.Reseeds = r.reseeds
 	chainErr := runPoolChain(ctx, s, poolChain())
 	patchErr := s.patch(ctx)
 	return s.Result, errors.Join(chainErr, patchErr)
