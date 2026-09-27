@@ -6,7 +6,8 @@ name: quint-verify
 # models on every PR.
 #
 # - quick: on a PR that changes the models or the checks, every model's
-#   safety at a bound small enough to finish in a few minutes.
+#   safety at a bound small enough to finish in a few minutes, and one
+#   liveness property at one step.
 # - full: weekly on main and by hand, every check at hack/quint-verify.sh's
 #   bounds, the liveness properties and their witnesses included; these
 #   take hours. One check per job, so that they run side by side.
@@ -47,12 +48,16 @@ jobs:
           - claims:safety
           - certificates:safety
           - pools:safety
+          # one liveness check at one step: Apalache reads the whole step
+          # and the temporal properties, so a model it cannot check fails
+          # here in a minute or two, not only in the full run (#151)
+          - claims:deletedClaimGone
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - uses: ./.github/actions/setup-dagger
         with:
           version: ${{ env.DAGGER_VERSION }}
-          call: quint-verify --checks=${{ matrix.check }} --steps=3
+          call: quint-verify --checks=${{ matrix.check }} --steps=3 --liveness-steps=1
 
   full:
     name: full ${{ matrix.check }}

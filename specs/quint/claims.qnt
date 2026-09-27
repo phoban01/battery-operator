@@ -389,9 +389,13 @@ module claims {
   // A claim the controller can reconcile as Bound: live, Bound and not
   // being deleted (claim.HoldsLease). A claim being deleted is released
   // instead (CL-020): claim.Release runs first and stops the chain, so no
-  // step expires it, or reads its expiry (#132).
-  def boundNotDeleting(c: ClaimName): bool =
-    and { live(c), not(obj(c).deleting), obj(c).status.phase == Bound }
+  // step expires it, or reads its expiry (#132). Written as a match, not
+  // as a conjunction, so that a conjunction that uses it has no
+  // conjunction directly inside it (specs/quint/README.md, "Liveness").
+  def boundNotDeleting(c: ClaimName): bool = match slot(c) {
+    | Live(o) => and { not(o.deleting), o.status.phase == Bound }
+    | _ => false
+  }
 
   def leaseOf(c: ClaimName): LeaseId = getOr(obj(c).status.leaseId, 0)
 
@@ -720,11 +724,11 @@ module claims {
   // the claim is not being deleted, and its own step is not half done.
   // controller-runtime never reconciles a claim twice at once, so a claim
   // whose step is half done is reconciled for the event only after that
-  // step's write, as ctlExpireDeleted (#133). Written as and { }, not as a
-  // chain of `and`: Apalache 0.56.1 fails on a chain of three or more
-  // inside an `if` in a lambda once it checks a temporal property
-  // (specs/quint/README.md, "Liveness"). Here and in ctlRecover's
-  // recoversNow.
+  // step's write, as ctlExpireDeleted (#133). Written as one and { }, with
+  // no `and` directly inside it: Apalache 0.56.1 fails on an `and` inside
+  // an `and` under a `mapBy` or a `filter`, once it checks a temporal
+  // property (specs/quint/README.md, "Liveness"). Here and in
+  // ctlRecover's recoversNow, recoveryRenews and filters.
   def expiresOnEvent(c: ClaimName, vm: VMId): bool =
     and { boundNotDeleting(c), idle(c), obj(c).status.microVM == Some(vm) }
 
@@ -987,11 +991,14 @@ module claims {
   // done is reconciled only after that step's write, since
   // controller-runtime never reconciles a claim twice at once (#133); what
   // the recovery read waits for it in ctrl.unlisted (ctlExpireUnlisted).
+  // A conjunction that uses it would have an `and` directly inside it, so
+  // recoveryRenews and ctlRecover write out its two parts instead
+  // (specs/quint/README.md, "Liveness").
   def recoversNow(c: ClaimName): bool = boundNotDeleting(c) and idle(c)
 
   // The recovery's reconcile relays c's pending renewal with Heartbeat.
   def recoveryRenews(c: ClaimName): bool =
-    and { recoversNow(c), not(knownDeleted(c)), holds(leaseOf(c)), pendingRenewal(c) }
+    and { boundNotDeleting(c), idle(c), not(knownDeleted(c)), holds(leaseOf(c)), pendingRenewal(c) }
 
   // The later of a status's expiry and battery's: claim.Recover writes
   // battery's when it is later, or the status has none (CL-011).
@@ -1071,7 +1078,7 @@ module claims {
         recovering: false,
         unlisted: CLAIMS.filter(c => boundNotDeleting(c) and not(holds(leaseOf(c)))).map(c => leaseOf(c)),
       },
-      hist' = if (CLAIMS.exists(c => recoversNow(c) and knownDeleted(c)))
+      hist' = if (CLAIMS.exists(c => and { boundNotDeleting(c), idle(c), knownDeleted(c) }))
         { ...hist, expiredVia: hist.expiredVia.union(Set("event", "remembered")) } else hist,
     },
     now' = now,

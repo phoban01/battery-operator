@@ -77,8 +77,11 @@ bound costs more than the one before. So they are not in `ci.yml` and not
 a required check.
 [.github/workflows/quint-verify.yml](../../.github/workflows/quint-verify.yml)
 runs them, one per job, on a PR that changes the models or the checks,
-weekly on `main`, and by hand. `dagger call quint-verify
---checks="claims:safety"` runs them locally the same way.
+weekly on `main`, and by hand. On a PR, it runs quick ones only: each
+model's `safety` at 3 steps, and `claims:deletedClaimGone` at 1 step. The
+last one shows that Apalache can still read the step and the temporal
+properties (#151). `dagger call quint-verify --checks="claims:safety"`
+runs them locally the same way.
 
 The bounds are small, `QUINT_VERIFY_STEPS=5` and
 `QUINT_VERIFY_LIVENESS_STEPS=6`, and so is what they cover: a claim takes
@@ -288,10 +291,20 @@ the model's comments too:
   Bound at time 0 with time at its expiry, and `ORPHAN_RUN_OUT`, an orphan
   claimed at time 0 and time at its expiry. `claimRunOutReachableTest` and
   `orphanRunOutReachableTest` show each is reachable from `init`.
-- Apalache 0.56.1 fails with a `ClassCastException` on a chain of three or
-  more `and`s inside an `if` in a lambda once it checks a temporal
-  property. The conditions of `ctlEventDeleted` and `ctlRecover` are
-  written as `and { }`, which it takes, and which means the same.
+- For a temporal property, Apalache 0.56.1 flattens each `and` directly
+  inside an `and` in the step and in `init`, and each `or` inside an `or`.
+  It gets the flattening wrong: it gives every expression above the
+  flattened one the type `bool`. If one of those expressions is a set, a
+  map or a record, Apalache can fail: an `AssertionError` in
+  `SetFilterRule` under a `filter` (#151), a `ClassCastException` in
+  `FunCtorRule` under a `mapBy`. So, once the operators are inlined, no
+  `and` in a step has an `and` directly inside it under such an
+  expression. A chain `a and b and c` has one, and so does `and { f(c), d
+  }` if `f` is itself an `and`. `ctlEventDeleted` and `ctlRecover` write
+  their conditions as `and { a, b, c }`, and `boundNotDeleting` is a
+  `match`, which means the same. Apalache 0.58.0 fixes this
+  ([apalache#2107](https://github.com/apalache-mc/apalache/issues/2107)),
+  but quint 0.32.0 runs 0.56.1.
 
 Each property has a witness, `witness<Property>`, that `make
 quint-verify` requires to be violated: a behaviour within the bound that
