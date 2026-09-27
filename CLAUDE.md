@@ -215,5 +215,5 @@ finally) and `Group[S]` (a sub-chain whose stop ends only itself, such as a
 set of checks), and the generic `EnsureFinalizer` and `SetCondition`. A
 controller's own scope embeds `*reconcile.Scope[T]` and adds its fields; the
 CertificateSigningRequest signer (`csr_scope.go`) and the CA bundle
-reconciler are examples. New controllers use these. The Claim, Pool and
-Inventory Controllers still have local types of the same shape.
+reconciler are examples. All controllers now use these, the Claim, Pool
+and Inventory Controllers included, and new controllers do the same.
