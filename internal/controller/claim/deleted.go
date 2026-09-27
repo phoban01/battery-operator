@@ -95,10 +95,11 @@ func (d *DeletedVMs) now() time.Time {
 }
 
 // ExpireDeleted expires a Bound claim whose MicroVM battery's Events
-// stream has reported deleted. It calls nothing: the event is battery's
-// answer. A renewal pending on the claim does not hold it back, because
-// battery deletes the Lease before the MicroVM (BA-023), and a Heartbeat
-// could only be answered NOT_FOUND.
+// stream has reported deleted, whether the event came before or after the
+// claim became Bound (CL-013, #135). It calls nothing: the event is
+// battery's answer. A renewal pending on the claim does not hold it back,
+// because battery deletes the Lease before the MicroVM (BA-023), and a
+// Heartbeat could only be answered NOT_FOUND.
 type ExpireDeleted struct {
 	// Deleted is the set the event watcher fills; nil expires nothing.
 	Deleted *DeletedVMs
@@ -114,10 +115,11 @@ func (e ExpireDeleted) Reconcile(_ context.Context, s *claimscope.Scope) (reconc
 	}
 	uid := c.Status.MicroVM.UID
 	//= docs/requirements/02-claims.md#renewal
-	//# When battery's `Events` stream reports the deletion of the
-	//# MicroVM of a Bound claim that is not being deleted, the Claim Controller
-	//# SHALL set the claim's phase to `Expired` and its condition `Bound` false
-	//# with the reason `LeaseExpired`.
+	//# When battery's `Events` stream has reported the deletion of the
+	//# MicroVM of a Bound claim that is not being deleted, whether before or
+	//# after the claim became Bound, the Claim Controller SHALL set the claim's
+	//# phase to `Expired` and its condition `Bound` false with the reason
+	//# `LeaseExpired`.
 	if !e.Deleted.Has(uid) {
 		return reconcile.Result{}, nil
 	}

@@ -714,10 +714,11 @@ module claims {
   }
 
   //@= docs/requirements/02-claims.md#renewal
-  //@# When battery's `Events` stream reports the deletion of the
-  //@# MicroVM of a Bound claim that is not being deleted, the Claim Controller
-  //@# SHALL set the claim's phase to `Expired` and its condition `Bound` false
-  //@# with the reason `LeaseExpired`.
+  //@# When battery's `Events` stream has reported the deletion of the
+  //@# MicroVM of a Bound claim that is not being deleted, whether before or
+  //@# after the claim became Bound, the Claim Controller SHALL set the claim's
+  //@# phase to `Expired` and its condition `Bound` false with the reason
+  //@# `LeaseExpired`.
   def canReceiveEvent: bool = battery.up and battery.events != Set()
 
   // The controller's event expires claim c, Bound to MicroVM vm, at once:
@@ -751,10 +752,11 @@ module claims {
   }
 
   //@= docs/requirements/02-claims.md#renewal
-  //@# When battery's `Events` stream reports the deletion of the
-  //@# MicroVM of a Bound claim that is not being deleted, the Claim Controller
-  //@# SHALL set the claim's phase to `Expired` and its condition `Bound` false
-  //@# with the reason `LeaseExpired`.
+  //@# When battery's `Events` stream has reported the deletion of the
+  //@# MicroVM of a Bound claim that is not being deleted, whether before or
+  //@# after the claim became Bound, the Claim Controller SHALL set the claim's
+  //@# phase to `Expired` and its condition `Bound` false with the reason
+  //@# `LeaseExpired`.
   //
   // A claim whose MicroVM the controller has heard is deleted, and which
   // the event did not expire: it was not Bound yet, as when the controller
