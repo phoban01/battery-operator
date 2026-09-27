@@ -48,10 +48,14 @@ package controller
 // names the difference and its issue, and the replay of that trace stops at
 // the step that reaches it. Any other difference fails the test.
 //
-// The traces are written by `make claims-traces` (hack/claims-traces.sh)
-// from specs/quint/claims_replay.qnt with a fixed seed, and committed, so
-// that `make test` needs no quint and a failure replays the same way every
-// time. `make quint` checks that they are up to date with the model.
+// The traces are written by `make claims-traces` (hack/claims-traces.sh),
+// and committed, so that `make test` needs no quint and a failure replays
+// the same way every time. The random ones (trace-N) are simulated from
+// specs/quint/claims_replay.qnt with a fixed seed. The fixed ones
+// (fixed-TEST) are scenario tests of specs/quint/claims_test.qnt that take
+// the steps the random ones take only rarely (#149). The replay reads both
+// the same way. `make quint` checks that they are up to date with the
+// model.
 // BATTERY_OPERATOR_CLAIMS_TRACES, a glob, replays other traces instead.
 
 import (
@@ -891,7 +895,7 @@ func TestClaimControllerReplaysTheModelsTraces(t *testing.T) {
 	}
 	for _, a := range modelSteps {
 		if replayed[a] == 0 {
-			t.Errorf("no trace in testdata replays the model's step %s: generate more with make claims-traces", a)
+			t.Errorf("no trace in testdata replays the model's step %s: add a scenario test that takes it to FIXED in hack/claims-traces.sh, and run make claims-traces", a)
 		}
 	}
 }

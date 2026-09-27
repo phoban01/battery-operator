@@ -11,7 +11,8 @@ code. They do not replace Go tests. How they cite requirements is in
 | `types.qnt` | The shared types: `Pool` and `MicroVMClaim` (spec, status, phase, conditions) and their places in the API server, battery's Leases, MicroVMs and Pools, Nodes, Node reports and Hosts |
 | `claims.qnt` | The claim lifecycle against battery (CL-001 to CL-042; ADR 0001, consequences 2 to 4), with battery as `docs/requirements/10-battery.md` describes it (BA-*) |
 | `claims_test.qnt` | Scenario tests for `claims.qnt`, one interleaving each |
-| `claims_replay.qnt` | The traces of `claims.qnt` that the Claim Controller's replay test replays: `claims.qnt`'s steps, weighted towards the controller's (#62) |
+| `claims_replay.qnt` | The random traces of `claims.qnt` that the Claim Controller's replay test replays: `claims.qnt`'s steps, weighted towards the controller's (#62) |
+| `claims_picks.qnt` | `claims.qnt`'s steps that take arguments, each recording them as the replay's picks, for the scenario tests the replay replays as fixed traces (#149) |
 | `certificates.qnt` | Certificate approval and signing, and the address pins (CT-001 to CT-020; EA-061, EA-062, EA-068; ADR 0003 and ADR 0004) |
 | `certificates_test.qnt` | Scenario tests for `certificates.qnt` |
 | `pools.qnt` | Pools, placement and inventory: the Pool Controller and the Inventory Controller against battery (PO-001 to PO-004, PO-010 to PO-012, PO-030 to PO-032, IN-001 to IN-013, DP-007, DP-008, BA-061, BA-070, BA-072; ADR 0001, consequence 1) |
@@ -253,8 +254,8 @@ do a claim expired from a deletion the controller remembered
 found gone (`witnessExpiredByUnlistedLease`). Each needs battery to end a
 Lease while the controller holds an answer for its claim. The scenario
 tests `rememberedDeletionTest`, `eventWaitsForHalfDoneStepTest` and
-`recoveryWaitsForHalfDoneStepTest` reach them, and so do the replay's
-traces (below), but `make quint` does not list them.
+`recoveryWaitsForHalfDoneStepTest` reach them, and the replay replays
+those tests as fixed traces (below), but `make quint` does not list them.
 
 ### Liveness
 
@@ -369,16 +370,64 @@ left-hand side early enough to fit their bounds as they are.
 against the Claim Controller's subreconciler chain, with controller-runtime's
 fake client, a scripted battery and a fake clock, and compares the claims,
 battery's Leases and what the controller holds in memory with the trace
-after every step (#62). `make claims-traces`
-([hack/claims-traces.sh](../../hack/claims-traces.sh)) writes the traces to
-`internal/controller/testdata/claims-traces`: it simulates
-`claims_replay.qnt`, whose `replayStep` takes `claims.qnt`'s steps weighted
-towards the controller's, with a fixed seed and quint's `--mbt` metadata,
-which names each step and its picks, and keeps a few traces that between
-them take every step. `make quint` fails if the committed traces are not
-what the model writes now, so a change to `claims.qnt`'s steps or state
-runs `make claims-traces` and commits the new traces, and `make test`
-replays them.
+after every step (#62). Between them, the traces must take every step of
+the model at least once, or the test fails.
+
+`make claims-traces` ([hack/claims-traces.sh](../../hack/claims-traces.sh))
+writes the traces to `internal/controller/testdata/claims-traces`. They are
+of two kinds:
+
+- Random traces (`trace-N`). The script simulates `claims_replay.qnt`,
+  whose `replayStep` takes `claims.qnt`'s steps weighted towards the
+  controller's, with a fixed seed and quint's `--mbt` metadata, which names
+  each step and its picks. It simulates 200 traces of 60 steps, and keeps
+  the first 12 and, for each step, the first 3 that take it.
+- Fixed traces (`fixed-TEST`). The script writes each scenario test of
+  `claims_test.qnt` named in its `FIXED` list as a trace, with `quint run
+  --init TEST --max-steps 0 --mbt`.
+
+Some steps need a long chain of events, such as a crash, a recovery that
+cannot reconcile a claim at once, and then a later reconcile of that
+claim (`ctlExpireUnlisted`). The random traces take such a step only
+rarely, and a change to the model can make it rarer still. Then the new
+random traces miss it, and the replay fails on a change that did nothing
+wrong (#149). The scenario tests take these steps on purpose, so the fixed
+traces take them whatever the random search finds.
+
+`FIXED` has a scenario test for each step that fewer than 1 in 10 of the
+200 random traces take:
+
+| Scenario test | Rare steps it takes |
+|---------------|---------------------|
+| `recoveryWaitsForHalfDoneStepTest` | `ctlExpireUnlisted`, `ctlWriteRenewed` |
+| `eventWaitsForHalfDoneStepTest` | `ctlExpireDeleted`, after a held `Heartbeat` answer |
+| `rememberedDeletionTest` | `ctlExpireDeleted`, after a held `ClaimVM` answer |
+| `renewAfterExpiryTest` | `ctlHeartbeatUnknown` |
+| `heartbeatAnswerLostTest` | `ctlHeartbeatLost`, `ctlWriteRenewed` |
+| `releaseAnswerLostTest` | `ctlReleaseLost` |
+| `unrenewedClaimExpiresByTimeTest` | `dropEvent`, `ctlExpiryPassed` |
+| `listLeasesUnavailableTest` | `ctlListUnanswered` |
+
+The replay reads a step's arguments from its picks. `quint run --mbt`
+records a step's nondet picks, not its arguments, and a scenario test
+writes its arguments out. So these tests take each step that has
+arguments from `claims_picks.qnt` (`P::ctlExpireUnlisted("a")`). Each step
+there is the step of `claims.qnt` with the same name. It picks its
+arguments from the one value given, under the names `replayStep` gives
+them, and takes the step as the only branch of an `any`, so that `--mbt`
+names the step of `claims.qnt`. A new fixed trace does the same.
+
+The random traces took every step without the fixed ones only with a
+pool of 600 traces (#147). With the fixed traces, 200 are enough, and the
+script runs three times faster. If a step that `FIXED` does not cover
+becomes rare, the replay names it: add a scenario test that takes it to
+`FIXED`.
+
+`make quint` runs `hack/claims-traces.sh --check`, which fails if the
+committed traces, random or fixed, are not what the model and the tests
+write now. So a change to `claims.qnt`'s steps or state, or to a fixed
+test, runs `make claims-traces` and commits the new traces, and `make
+test` replays them.
 
 Where the model and the controller are known to differ, the test's
 `knownDivergences` names the difference and its issue, and the replay of a
@@ -390,8 +439,8 @@ controller remembers with the model's.
 `claims_replay.qnt` lets time pass, and battery sweep, stop and start,
 more often while the controller holds a `Heartbeat` answer, so that the
 traces reach a Lease that ends while its claim's step is half done.
-`ctlExpireUnlisted` is still rare: the traces are 60 steps long, from a
-pool of 600, so that the few kept take it.
+`ctlExpireUnlisted` and `ctlExpireDeleted` are still rare, and the fixed
+traces take them.
 
 ## The certificates model
 

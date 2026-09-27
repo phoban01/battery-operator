@@ -6,37 +6,69 @@
 #        hack/claims-traces.sh --check   fail unless the ones there are
 #                                        what the model writes now
 #
-# quint run simulates specs/quint/claims_replay.qnt, whose replayStep takes
-# claims.qnt's steps weighted towards the controller's, checking claims.qnt's
-# safety invariant, with a fixed seed. Of the traces it writes, the ones
-# kept are the first CLAIMS_TRACES_BASE, and for every step the first
-# CLAIMS_TRACES_PER that take it, so that the few kept replay every step of
-# the model, the rare ones included. Each is written gzipped, with the
-# header's creation time dropped, so that the same model and seed write the
-# same files and the test replays the same steps every time.
+# The traces are of two kinds, and the replay reads both the same way.
+#
+# The random traces (trace-N): quint run simulates
+# specs/quint/claims_replay.qnt, whose replayStep takes claims.qnt's steps
+# weighted towards the controller's, checking claims.qnt's safety invariant,
+# with a fixed seed. Of the traces it writes, the ones kept are the first
+# CLAIMS_TRACES_BASE, and for every step the first CLAIMS_TRACES_PER that
+# take it.
+#
+# The fixed traces (fixed-TEST): the scenario tests of
+# specs/quint/claims_test.qnt named in FIXED, each written as a trace with
+# quint run --init TEST --max-steps 0. They take the steps that the random
+# traces take only rarely, on purpose, so that the replay takes every step
+# of the model however rare a later change to the model makes it (#149).
+# Each of these tests takes its steps from claims_picks.qnt, which records
+# a step's arguments as the picks that the replay reads.
+#
+# Each trace is written gzipped, with the header's creation time dropped,
+# so that the same model and seed write the same files and the test
+# replays the same steps every time.
 #
 # QUINT names the quint binary. CLAIMS_TRACES_POOL, CLAIMS_TRACES_STEPS and
-# CLAIMS_TRACES_SEED set how many traces are simulated, how long, and the
-# seed; the defaults are what the committed traces were written with.
+# CLAIMS_TRACES_SEED set how many random traces are simulated, how long,
+# and the seed; the defaults are what the committed traces were written
+# with.
 set -euo pipefail
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$root"
 : "${QUINT:=quint}"
-: "${CLAIMS_TRACES_POOL:=600}"
+: "${CLAIMS_TRACES_POOL:=200}"
 : "${CLAIMS_TRACES_STEPS:=60}"
 : "${CLAIMS_TRACES_SEED:=62}"
 : "${CLAIMS_TRACES_BASE:=12}"
 : "${CLAIMS_TRACES_PER:=3}"
 : "${CLAIMS_TRACES_DIR:=internal/controller/testdata/claims-traces}"
 
+# The scenario tests written as fixed traces, and the rare steps each is
+# here for: the steps that fewer than 1 in 10 of the random traces take.
+# specs/quint/README.md says more.
+FIXED=(
+  recoveryWaitsForHalfDoneStepTest # ctlExpireUnlisted, ctlWriteRenewed
+  eventWaitsForHalfDoneStepTest    # ctlExpireDeleted, from a held Heartbeat answer
+  rememberedDeletionTest           # ctlExpireDeleted, from a held ClaimVM answer
+  renewAfterExpiryTest             # ctlHeartbeatUnknown
+  heartbeatAnswerLostTest          # ctlHeartbeatLost, ctlWriteRenewed
+  releaseAnswerLostTest            # ctlReleaseLost
+  unrenewedClaimExpiresByTimeTest  # dropEvent, ctlExpiryPassed
+  listLeasesUnavailableTest        # ctlListUnanswered
+)
+
 tmp=$(mktemp -d)
 trap 'rm -rf "${tmp:?}"' EXIT
 
+# pack IN OUT: IN, gzipped as OUT, without the header's creation time.
+pack() {
+  sed -E 's/^\{"#meta":\{[^}]*\},/{/' "$1" | gzip -n -9 >"$2"
+}
+
 # write DIR: the traces kept, into DIR.
 write() {
-  local dir=$1 f n keep
-  mkdir -p "$dir/pool"
+  local dir=$1 f n t kept
+  mkdir -p "$dir/pool" "$dir/fixed"
   if ! "$QUINT" run specs/quint/claims_replay.qnt --step replayStep --mbt \
       --invariant safety --seed "$CLAIMS_TRACES_SEED" --n-threads 1 \
       --n-traces "$CLAIMS_TRACES_POOL" --max-samples "$CLAIMS_TRACES_POOL" \
@@ -52,21 +84,30 @@ write() {
     n=${n%.itf.json}
     grep -o '"mbt::actionTaken":"[A-Za-z]*"' "$f" | cut -d'"' -f4 | sort -u | sed "s/^/$n /"
   done | sort -n -k1,1 -s >"$dir/steps"
-  keep=$({
+  kept=$({
     seq 0 $((CLAIMS_TRACES_BASE - 1))
     awk -v per="$CLAIMS_TRACES_PER" '$2 != "init" && seen[$2]++ < per { print $1 }' "$dir/steps"
   } | sort -nu)
-  for n in $keep; do
-    sed -E 's/^\{"#meta":\{[^}]*\},/{/' "$dir/pool/trace-$n.itf.json" |
-      gzip -n -9 >"$dir/trace-$n.itf.json.gz"
+  for n in $kept; do
+    pack "$dir/pool/trace-$n.itf.json" "$dir/trace-$n.itf.json.gz"
+  done
+  for t in "${FIXED[@]}"; do
+    if ! "$QUINT" run specs/quint/claims_test.qnt --init "$t" --max-steps 0 \
+        --max-samples 1 --invariant safety --mbt --seed "$CLAIMS_TRACES_SEED" \
+        --out-itf "$dir/fixed/$t.itf.json" >"$dir/log" 2>&1; then
+      cat "$dir/log" >&2
+      echo "FAIL: quint run failed on the scenario test $t" >&2
+      return 1
+    fi
+    pack "$dir/fixed/$t.itf.json" "$dir/fixed-$t.itf.json.gz"
   done
 }
 
 if [ "${1:-}" = "--check" ]; then
   echo "==> $0 --check"
   write "$tmp"
-  want=$(cd "$tmp" && ls trace-*.itf.json.gz)
-  have=$(cd "$CLAIMS_TRACES_DIR" && ls trace-*.itf.json.gz 2>/dev/null || true)
+  want=$(cd "$tmp" && ls -- *.itf.json.gz)
+  have=$(cd "$CLAIMS_TRACES_DIR" && ls -- *.itf.json.gz 2>/dev/null || true)
   stale=0
   [ "$want" = "$have" ] || stale=1
   for f in $want; do
@@ -82,6 +123,6 @@ fi
 
 write "$tmp"
 mkdir -p "$CLAIMS_TRACES_DIR"
-rm -f "$CLAIMS_TRACES_DIR"/trace-*.itf.json.gz
-cp "$tmp"/trace-*.itf.json.gz "$CLAIMS_TRACES_DIR"/
-echo "wrote $(ls "$CLAIMS_TRACES_DIR"/trace-*.itf.json.gz | wc -l | tr -d ' ') traces to $CLAIMS_TRACES_DIR"
+rm -f "$CLAIMS_TRACES_DIR"/*.itf.json.gz
+cp "$tmp"/*.itf.json.gz "$CLAIMS_TRACES_DIR"/
+echo "wrote $(ls "$tmp"/trace-*.itf.json.gz | wc -l | tr -d ' ') random and ${#FIXED[@]} fixed traces to $CLAIMS_TRACES_DIR"
