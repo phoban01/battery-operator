@@ -29,6 +29,7 @@ import (
 
 	batteryv1alpha1 "github.com/phoban01/battery-operator/api/v1alpha1"
 	"github.com/phoban01/battery-operator/internal/battery"
+	"github.com/phoban01/battery-operator/internal/reconcile"
 )
 
 // PoolFinalizer holds a Pool until battery has deleted it.
@@ -41,10 +42,10 @@ const (
 )
 
 // poolChain is the Pool Controller's chain, in order.
-func poolChain() []poolSubreconciler {
-	return []poolSubreconciler{
+func poolChain() reconcile.Chain[*poolScope] {
+	return reconcile.Steps[*poolScope](
 		poolDeletion{},
-		poolFinalizer{},
+		poolFinalizer,
 		poolPlacement{},
 		poolDeclaration{},
 		poolUpdate{},
@@ -53,46 +54,41 @@ func poolChain() []poolSubreconciler {
 		poolCounts{},
 		poolExhaustion{},
 		poolReadiness{},
-	}
+	)
 }
+
+//= docs/requirements/03-pools.md#declaration
+//# The Pool Controller SHALL add a finalizer to each Pool, and when
+//# the Pool is deleted SHALL call `DeletePool`, drain the Pool while battery
+//# refuses it (PO-030, PO-031), and remove the finalizer only once battery
+//# has deleted the Pool or reported it unknown.
+//
+//= docs/requirements/03-pools.md#declaration
+//# When a Pool exists that battery does not hold, the Pool
+//# Controller SHALL add the finalizer `battery.liquidmetal-x.dev/pool` to the
+//# Pool before it creates it in battery with `CreatePool`, under the Pool's
+//# namespace and name.
 
 // poolFinalizer adds the finalizer to a Pool that lacks it, and ends the
 // chain so that the Pool reaches battery only once the finalizer is stored:
-// the patch that adds it brings the Pool back for the next reconcile.
-type poolFinalizer struct{}
-
-func (poolFinalizer) Reconcile(_ context.Context, s *poolScope) (poolNext, error) {
-	//= docs/requirements/03-pools.md#declaration
-	//# The Pool Controller SHALL add a finalizer to each Pool, and when
-	//# the Pool is deleted SHALL call `DeletePool`, drain the Pool while battery
-	//# refuses it (PO-030, PO-031), and remove the finalizer only once battery
-	//# has deleted the Pool or reported it unknown.
-	//
-	//= docs/requirements/03-pools.md#declaration
-	//# When a Pool exists that battery does not hold, the Pool
-	//# Controller SHALL add the finalizer `battery.liquidmetal-x.dev/pool` to the
-	//# Pool before it creates it in battery with `CreatePool`, under the Pool's
-	//# namespace and name.
-	if controllerutil.AddFinalizer(s.Pool, PoolFinalizer) {
-		return poolStop, nil
-	}
-	return poolContinue, nil
-}
+// the patch that adds it brings the Pool back for the next reconcile. It
+// comes after poolDeletion, which handles a deleted Pool.
+var poolFinalizer = reconcile.EnsureFinalizer[*poolScope, *batteryv1alpha1.Pool]{Name: PoolFinalizer}
 
 // poolDeclaration creates the Pool in battery when battery does not hold
 // it. The spec it creates is the Pool's current generation, which is then
 // the observed one.
 type poolDeclaration struct{}
 
-func (poolDeclaration) Reconcile(ctx context.Context, s *poolScope) (poolNext, error) {
-	ref := poolRef(s.Pool)
+func (poolDeclaration) Reconcile(ctx context.Context, s *poolScope) (reconcile.Result, error) {
+	ref := poolRef(s.Object)
 	held, err := s.Battery.GetPool(ctx, ref)
 	switch {
 	case err == nil:
 		s.held = held
-		return poolContinue, nil
+		return reconcile.Result{}, nil
 	case !errors.Is(err, battery.ErrNotFound):
-		return poolStop, fmt.Errorf("getting Pool %s from battery: %w", ref, err)
+		return reconcile.Result{Stop: true}, fmt.Errorf("getting Pool %s from battery: %w", ref, err)
 	}
 
 	//= docs/requirements/03-pools.md#declaration
@@ -106,25 +102,25 @@ func (poolDeclaration) Reconcile(ctx context.Context, s *poolScope) (poolNext, e
 	// adds one; this looks at the Pool as fetched, not as the chain has
 	// changed it, so that no order of the chain can create in battery a Pool
 	// the API server could still delete at once.
-	if !controllerutil.ContainsFinalizer(s.fetched, PoolFinalizer) {
-		return poolStop, nil
+	if !controllerutil.ContainsFinalizer(s.Original, PoolFinalizer) {
+		return reconcile.Result{Stop: true}, nil
 	}
-	held, err = s.Battery.CreatePool(ctx, poolSpecToBattery(s.Pool, s.hosts))
+	held, err = s.Battery.CreatePool(ctx, poolSpecToBattery(s.Object, s.hosts))
 	switch {
 	case err == nil:
 		s.held = held
-		s.Pool.Status.ObservedGeneration = s.Pool.Generation
+		s.Object.Status.ObservedGeneration = s.Object.Generation
 		s.sent = true
-		s.Log.Info("Created Pool in battery", "pool", ref.String(), "generation", s.Pool.Generation)
-		return poolContinue, nil
+		s.Log.Info("Created Pool in battery", "pool", ref.String(), "generation", s.Object.Generation)
+		return reconcile.Result{}, nil
 	case errors.Is(err, battery.ErrAlreadyExists):
 		// Created since GetPool; poolUpdate sends the spec.
-		return poolContinue, nil
+		return reconcile.Result{}, nil
 	case errors.Is(err, battery.ErrInvalid):
 		s.refusal = err
-		return poolContinue, nil
+		return reconcile.Result{}, nil
 	default:
-		return poolStop, fmt.Errorf("creating Pool %s in battery: %w", ref, err)
+		return reconcile.Result{Stop: true}, fmt.Errorf("creating Pool %s in battery: %w", ref, err)
 	}
 }
 
@@ -133,11 +129,11 @@ func (poolDeclaration) Reconcile(ctx context.Context, s *poolScope) (poolNext, e
 // matches are no longer the ones battery's Pool names.
 type poolUpdate struct{}
 
-func (poolUpdate) Reconcile(ctx context.Context, s *poolScope) (poolNext, error) {
+func (poolUpdate) Reconcile(ctx context.Context, s *poolScope) (reconcile.Result, error) {
 	if s.refusal != nil {
-		return poolContinue, nil
+		return reconcile.Result{}, nil
 	}
-	ref := poolRef(s.Pool)
+	ref := poolRef(s.Object)
 	if s.held == nil {
 		// CreatePool found the Pool already there: see what battery holds.
 		held, err := s.Battery.GetPool(ctx, ref)
@@ -145,9 +141,9 @@ func (poolUpdate) Reconcile(ctx context.Context, s *poolScope) (poolNext, error)
 		case err == nil:
 			s.held = held
 		case errors.Is(err, battery.ErrNotFound):
-			return poolContinue, nil
+			return reconcile.Result{}, nil
 		default:
-			return poolStop, fmt.Errorf("getting Pool %s from battery: %w", ref, err)
+			return reconcile.Result{Stop: true}, fmt.Errorf("getting Pool %s from battery: %w", ref, err)
 		}
 	}
 
@@ -156,31 +152,31 @@ func (poolUpdate) Reconcile(ctx context.Context, s *poolScope) (poolNext, error)
 	//# `status.observedGeneration`, the Pool Controller SHALL send the Pool's spec
 	//# to battery with `UpdatePool` and then set `status.observedGeneration` to
 	//# that generation.
-	moved := s.Pool.Generation != s.Pool.Status.ObservedGeneration
+	moved := s.Object.Generation != s.Object.Status.ObservedGeneration
 
 	//= docs/requirements/03-pools.md#placement
 	//# When the set of Hosts a Pool's selector matches changes, the
 	//# Pool Controller SHALL update the Pool in battery with `UpdatePool`.
 	placed := slices.Equal(slices.Sorted(slices.Values(s.held.Spec.FlintlockHosts)), s.hosts)
 	if !moved && placed {
-		return poolContinue, nil
+		return reconcile.Result{}, nil
 	}
 
-	held, err := s.Battery.UpdatePool(ctx, poolSpecToBattery(s.Pool, s.hosts))
+	held, err := s.Battery.UpdatePool(ctx, poolSpecToBattery(s.Object, s.hosts))
 	switch {
 	case err == nil:
 		s.held = held
-		s.Pool.Status.ObservedGeneration = s.Pool.Generation
+		s.Object.Status.ObservedGeneration = s.Object.Generation
 		s.sent = true
-		s.Log.Info("Updated Pool in battery", "pool", ref.String(), "generation", s.Pool.Generation, "hosts", s.hosts)
-		return poolContinue, nil
+		s.Log.Info("Updated Pool in battery", "pool", ref.String(), "generation", s.Object.Generation, "hosts", s.hosts)
+		return reconcile.Result{}, nil
 	case errors.Is(err, battery.ErrInvalid):
 		s.refusal = err
-		return poolContinue, nil
+		return reconcile.Result{}, nil
 	default:
 		// ErrNotFound included: battery lost the Pool since poolDeclaration
 		// looked, and the retry creates it again.
-		return poolStop, fmt.Errorf("updating Pool %s in battery: %w", ref, err)
+		return reconcile.Result{Stop: true}, fmt.Errorf("updating Pool %s in battery: %w", ref, err)
 	}
 }
 
@@ -189,13 +185,13 @@ func (poolUpdate) Reconcile(ctx context.Context, s *poolScope) (poolNext, error)
 // retried: a new spec, which is a new generation, is.
 type poolRejection struct{}
 
-func (poolRejection) Reconcile(_ context.Context, s *poolScope) (poolNext, error) {
+func (poolRejection) Reconcile(_ context.Context, s *poolScope) (reconcile.Result, error) {
 	if s.refusal == nil {
-		ready := meta.FindStatusCondition(s.Pool.Status.Conditions, batteryv1alpha1.PoolConditionReady)
+		ready := meta.FindStatusCondition(s.Object.Status.Conditions, batteryv1alpha1.PoolConditionReady)
 		if ready != nil && ready.Reason == PoolReasonRejected {
-			meta.RemoveStatusCondition(&s.Pool.Status.Conditions, batteryv1alpha1.PoolConditionReady)
+			meta.RemoveStatusCondition(&s.Object.Status.Conditions, batteryv1alpha1.PoolConditionReady)
 		}
-		return poolContinue, nil
+		return reconcile.Result{}, nil
 	}
 
 	//= docs/requirements/03-pools.md#declaration
@@ -204,8 +200,8 @@ func (poolRejection) Reconcile(_ context.Context, s *poolScope) (poolNext, error
 	//# battery's message.
 	msg := batteryMessage(s.refusal, battery.ErrInvalid)
 	s.setCondition(batteryv1alpha1.PoolConditionReady, metav1.ConditionFalse, PoolReasonRejected, msg)
-	s.Log.Info("Battery refused Pool", "pool", poolRef(s.Pool).String(), "message", msg)
-	return poolContinue, nil
+	s.Log.Info("Battery refused Pool", "pool", poolRef(s.Object).String(), "message", msg)
+	return reconcile.Result{}, nil
 }
 
 // batteryMessage is battery's own message in an error the battery client

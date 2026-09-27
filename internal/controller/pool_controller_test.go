@@ -174,9 +174,9 @@ func TestPoolScopePatchesStatusAndFinalizerOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := newPoolScope(fetched, k8s, newStubBattery(), newStubHosts(), ctrl.Log, clock.NewFake(poolTestEpoch))
-	s.Pool.Finalizers = append(s.Pool.Finalizers, PoolFinalizer)
-	s.Pool.Status.ObservedGeneration = 1
-	if err := s.patch(ctx); err != nil {
+	s.Object.Finalizers = append(s.Object.Finalizers, PoolFinalizer)
+	s.Object.Status.ObservedGeneration = 1
+	if err := s.Patch(ctx); err != nil {
 		t.Fatalf("patch: %v", err)
 	}
 	got := &batteryv1alpha1.Pool{}

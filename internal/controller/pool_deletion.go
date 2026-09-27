@@ -30,6 +30,7 @@ import (
 
 	batteryv1alpha1 "github.com/phoban01/battery-operator/api/v1alpha1"
 	"github.com/phoban01/battery-operator/internal/battery"
+	"github.com/phoban01/battery-operator/internal/reconcile"
 )
 
 // Reasons for the Ready condition of a Pool being deleted
@@ -61,12 +62,12 @@ const poolDrainRequeue = 5 * time.Second
 // Ready condition.
 type poolDeletion struct{}
 
-func (poolDeletion) Reconcile(ctx context.Context, s *poolScope) (poolNext, error) {
-	if s.Pool.DeletionTimestamp.IsZero() {
-		return poolContinue, nil
+func (poolDeletion) Reconcile(ctx context.Context, s *poolScope) (reconcile.Result, error) {
+	if s.Object.DeletionTimestamp.IsZero() {
+		return reconcile.Result{}, nil
 	}
-	if !controllerutil.ContainsFinalizer(s.Pool, PoolFinalizer) {
-		return poolStop, nil
+	if !controllerutil.ContainsFinalizer(s.Object, PoolFinalizer) {
+		return reconcile.Result{Stop: true}, nil
 	}
 
 	//= docs/requirements/03-pools.md#declaration
@@ -74,25 +75,25 @@ func (poolDeletion) Reconcile(ctx context.Context, s *poolScope) (poolNext, erro
 	//# the Pool is deleted SHALL call `DeletePool`, drain the Pool while battery
 	//# refuses it (PO-030, PO-031), and remove the finalizer only once battery
 	//# has deleted the Pool or reported it unknown.
-	ref := poolRef(s.Pool)
+	ref := poolRef(s.Object)
 	if done, err := deletePoolFromBattery(ctx, s, ref); done || err != nil {
-		return poolStop, err
+		return reconcile.Result{Stop: true}, err
 	}
 
 	held, err := s.Battery.GetPool(ctx, ref)
 	switch {
 	case errors.Is(err, battery.ErrNotFound):
 		releasePool(s, ref)
-		return poolStop, nil
+		return reconcile.Result{Stop: true}, nil
 	case err != nil:
-		return poolStop, fmt.Errorf("getting Pool %s from battery: %w", ref, err)
+		return reconcile.Result{Stop: true}, fmt.Errorf("getting Pool %s from battery: %w", ref, err)
 	}
 
 	if !isDrainedSpec(held.Spec) {
 		if held.Status.Provisioning > 0 {
 			// UpdatePool would cancel these under the Pool's old hook
 			// failure policy (BA-074), which may quarantine them.
-			return poolStop, reportRefusal(s, ref, held.Status)
+			return reportRefusal(s, ref, held.Status)
 		}
 
 		//= docs/requirements/03-pools.md#deletion
@@ -102,25 +103,26 @@ func (poolDeletion) Reconcile(ctx context.Context, s *poolScope) (poolNext, erro
 		//# the Pool Controller SHALL send battery the Pool's drained spec with
 		//# `UpdatePool`.
 		if held, err = s.Battery.UpdatePool(ctx, drainedSpec(held.Spec)); err != nil {
-			return poolStop, fmt.Errorf("draining Pool %s in battery: %w", ref, err)
+			return reconcile.Result{Stop: true}, fmt.Errorf("draining Pool %s in battery: %w", ref, err)
 		}
 		s.Log.Info("Sent Pool's drained spec to battery", "pool", ref.String())
 	}
 
 	if err := drainAvailable(ctx, s, ref, held.Status.Available); err != nil {
-		return poolStop, errors.Join(err, reportRefusal(s, ref, held.Status))
+		res, refusal := reportRefusal(s, ref, held.Status)
+		return res, errors.Join(err, refusal)
 	}
 	if done, err := deletePoolFromBattery(ctx, s, ref); done || err != nil {
-		return poolStop, err
+		return reconcile.Result{Stop: true}, err
 	}
 	switch held, err = s.Battery.GetPool(ctx, ref); {
 	case errors.Is(err, battery.ErrNotFound):
 		releasePool(s, ref)
-		return poolStop, nil
+		return reconcile.Result{Stop: true}, nil
 	case err != nil:
-		return poolStop, fmt.Errorf("getting Pool %s from battery: %w", ref, err)
+		return reconcile.Result{Stop: true}, fmt.Errorf("getting Pool %s from battery: %w", ref, err)
 	}
-	return poolStop, reportRefusal(s, ref, held.Status)
+	return reportRefusal(s, ref, held.Status)
 }
 
 // reportRefusal shows on the Pool's Ready condition why battery still
@@ -128,8 +130,9 @@ func (poolDeletion) Reconcile(ctx context.Context, s *poolScope) (poolNext, erro
 // is still draining is asked for again soon; one that waits on leased or
 // quarantined MicroVMs returns an error, so that the workqueue retries it
 // with its exponential backoff, and the Events stream brings it back
-// sooner when a MicroVM goes (PO-023).
-func reportRefusal(s *poolScope, ref battery.PoolRef, st battery.PoolStatus) error {
+// sooner when a MicroVM goes (PO-023). It returns poolDeletion's result,
+// which stops the chain.
+func reportRefusal(s *poolScope, ref battery.PoolRef, st battery.PoolStatus) (reconcile.Result, error) {
 	setDeletionCounts(s, st)
 	if st.Leased == 0 && st.Quarantined == 0 {
 		//= docs/requirements/03-pools.md#deletion
@@ -139,8 +142,7 @@ func reportRefusal(s *poolScope, ref battery.PoolRef, st battery.PoolStatus) err
 		msg := fmt.Sprintf("The Pool Controller is emptying the Pool in battery, which deletes it once it has no MicroVM: "+
 			"%d available, %d provisioning", st.Available, st.Provisioning)
 		s.setCondition(batteryv1alpha1.PoolConditionReady, metav1.ConditionFalse, PoolReasonDraining, msg)
-		s.Result.RequeueAfter = poolDrainRequeue
-		return nil
+		return reconcile.Result{Stop: true, RequeueAfter: poolDrainRequeue}, nil
 	}
 
 	//= docs/requirements/03-pools.md#deletion
@@ -153,7 +155,7 @@ func reportRefusal(s *poolScope, ref battery.PoolRef, st battery.PoolStatus) err
 		st.Leased, st.Quarantined)
 	s.setCondition(batteryv1alpha1.PoolConditionReady, metav1.ConditionFalse, PoolReasonDeletionBlocked, msg)
 	s.Log.Info("Battery refused to delete Pool", "pool", ref.String(), "leased", st.Leased, "quarantined", st.Quarantined)
-	return fmt.Errorf("battery refused to delete Pool %s: %d leased and %d quarantined MicroVMs remain: %w",
+	return reconcile.Result{Stop: true}, fmt.Errorf("battery refused to delete Pool %s: %d leased and %d quarantined MicroVMs remain: %w",
 		ref, st.Leased, st.Quarantined, battery.ErrFailedPrecondition)
 }
 
@@ -176,7 +178,7 @@ func deletePoolFromBattery(ctx context.Context, s *poolScope, ref battery.PoolRe
 
 // releasePool removes the finalizer of a Pool battery no longer holds.
 func releasePool(s *poolScope, ref battery.PoolRef) {
-	controllerutil.RemoveFinalizer(s.Pool, PoolFinalizer)
+	controllerutil.RemoveFinalizer(s.Object, PoolFinalizer)
 	s.Log.Info("Deleted Pool from battery", "pool", ref.String())
 }
 
@@ -216,7 +218,7 @@ func drainAvailable(ctx context.Context, s *poolScope, ref battery.PoolRef, n in
 // setDeletionCounts copies battery's counts into a Pool being deleted, as
 // poolCounts does for the others (PO-020).
 func setDeletionCounts(s *poolScope, counts battery.PoolStatus) {
-	st := &s.Pool.Status
+	st := &s.Object.Status
 	st.Available = counts.Available
 	st.Leased = counts.Leased
 	st.Provisioning = counts.Provisioning

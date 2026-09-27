@@ -17,46 +17,25 @@ limitations under the License.
 package controller
 
 import (
-	"context"
-	"errors"
-	"time"
-
 	"github.com/go-logr/logr"
-	"k8s.io/apimachinery/pkg/api/equality"
-	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	batteryv1alpha1 "github.com/phoban01/battery-operator/api/v1alpha1"
 	"github.com/phoban01/battery-operator/internal/battery"
 	"github.com/phoban01/battery-operator/internal/clock"
+	"github.com/phoban01/battery-operator/internal/reconcile"
 )
 
-// The Pool Controller's scope and subreconciler interface are local, in
-// the shape of the shared Scope[T] and SubReconciler[T] that #58 brings
-// (CLAUDE.md, "Controller structure"). Moving onto those changes no logic:
-// poolScope becomes Scope[*Pool] with the Pool-specific fields beside it,
-// and each subreconciler keeps its Reconcile.
-
 // poolScope is one reconcile of one Pool. Subreconcilers change the Pool
-// and the result here and never write to the API server; patch writes the
-// Pool once, at the end.
+// and never write to the API server; the Pool Controller writes the Pool
+// once, at the end, with the embedded Scope's Patch.
 type poolScope struct {
-	// Pool is the Pool as the subreconcilers leave it.
-	Pool *batteryv1alpha1.Pool
-	// fetched is the Pool as it was read, the base of the patch.
-	fetched *batteryv1alpha1.Pool
+	*reconcile.Scope[*batteryv1alpha1.Pool]
 
-	Client  client.Client
 	Battery battery.Client
 	// Hosts resolves the Pool's selector to the Hosts it matches.
 	Hosts PoolHosts
-	Log   logr.Logger
-	Clock clock.Clock
-
-	// Result is the result so far.
-	Result ctrl.Result
 
 	// refusal is battery's refusal of the Pool's spec in this reconcile,
 	// from CreatePool or UpdatePool, wrapping battery.ErrInvalid.
@@ -90,87 +69,14 @@ type poolScope struct {
 func newPoolScope(pool *batteryv1alpha1.Pool, c client.Client, b battery.Client, hosts PoolHosts,
 	log logr.Logger, clk clock.Clock) *poolScope {
 	return &poolScope{
-		Pool:    pool,
-		fetched: pool.DeepCopy(),
-		Client:  c,
+		Scope:   reconcile.NewScope(pool, c, log, clk),
 		Battery: b,
 		Hosts:   hosts,
-		Log:     log,
-		Clock:   clk,
 	}
 }
 
 // setCondition sets one of the Pool's conditions for its current
 // generation, stamping a transition with the scope's clock.
 func (s *poolScope) setCondition(conditionType string, status metav1.ConditionStatus, reason, message string) {
-	meta.SetStatusCondition(&s.Pool.Status.Conditions, metav1.Condition{
-		Type:               conditionType,
-		Status:             status,
-		Reason:             reason,
-		Message:            message,
-		ObservedGeneration: s.Pool.Generation,
-		LastTransitionTime: metav1.NewTime(s.Clock.Now()),
-	})
-}
-
-// requeueAfter asks for the Pool's next reconcile no later than d from
-// now, and keeps an earlier request.
-func (s *poolScope) requeueAfter(d time.Duration) {
-	if d <= 0 {
-		return
-	}
-	if s.Result.RequeueAfter == 0 || d < s.Result.RequeueAfter {
-		s.Result.RequeueAfter = d
-	}
-}
-
-// patch writes what the subreconcilers changed: the status first, then
-// the metadata (the finalizer), because removing the last finalizer lets
-// the API server delete the Pool. A Pool already gone is not an error.
-func (s *poolScope) patch(ctx context.Context) error {
-	base := client.MergeFrom(s.fetched)
-	var errs []error
-	if !equality.Semantic.DeepEqual(s.fetched.Status, s.Pool.Status) {
-		if err := s.Client.Status().Patch(ctx, s.Pool.DeepCopy(), base); client.IgnoreNotFound(err) != nil {
-			errs = append(errs, err)
-		}
-	}
-	if !equality.Semantic.DeepEqual(s.fetched.ObjectMeta, s.Pool.ObjectMeta) {
-		if err := s.Client.Patch(ctx, s.Pool.DeepCopy(), base); client.IgnoreNotFound(err) != nil {
-			errs = append(errs, err)
-		}
-	}
-	return errors.Join(errs...)
-}
-
-// poolNext says whether the chain goes on after a subreconciler.
-type poolNext int
-
-const (
-	// poolContinue runs the next subreconciler.
-	poolContinue poolNext = iota
-	// poolStop ends the chain; the scope is still patched.
-	poolStop
-)
-
-// poolSubreconciler is one concern of the Pool Controller. It reads and
-// changes the scope; an error ends the chain and is returned from the
-// reconcile, so the workqueue retries it with backoff.
-type poolSubreconciler interface {
-	Reconcile(ctx context.Context, s *poolScope) (poolNext, error)
-}
-
-// runPoolChain runs the subreconcilers in order until one stops the chain
-// or fails.
-func runPoolChain(ctx context.Context, s *poolScope, chain []poolSubreconciler) error {
-	for _, sub := range chain {
-		next, err := sub.Reconcile(ctx, s)
-		if err != nil {
-			return err
-		}
-		if next == poolStop {
-			return nil
-		}
-	}
-	return nil
+	reconcile.SetCondition(&s.Object.Status.Conditions, s.Object, s.Clock, conditionType, status, reason, message)
 }

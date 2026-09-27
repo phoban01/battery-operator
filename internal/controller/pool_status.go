@@ -26,6 +26,7 @@ import (
 
 	batteryv1alpha1 "github.com/phoban01/battery-operator/api/v1alpha1"
 	"github.com/phoban01/battery-operator/internal/battery"
+	"github.com/phoban01/battery-operator/internal/reconcile"
 )
 
 // Reasons for the Pool's Ready and Exhausted conditions set by the status
@@ -69,15 +70,15 @@ const (
 // poolCounts asks battery with GetPool.
 type poolCounts struct{}
 
-func (poolCounts) Reconcile(ctx context.Context, s *poolScope) (poolNext, error) {
+func (poolCounts) Reconcile(ctx context.Context, s *poolScope) (reconcile.Result, error) {
 	if s.held == nil && s.refusal == nil {
-		ref := poolRef(s.Pool)
+		ref := poolRef(s.Object)
 		held, err := s.Battery.GetPool(ctx, ref)
 		switch {
 		case err == nil:
 			s.held = held
 		case !errors.Is(err, battery.ErrNotFound):
-			return poolStop, fmt.Errorf("getting Pool %s from battery: %w", ref, err)
+			return reconcile.Result{Stop: true}, fmt.Errorf("getting Pool %s from battery: %w", ref, err)
 		}
 	}
 
@@ -89,35 +90,35 @@ func (poolCounts) Reconcile(ctx context.Context, s *poolScope) (poolNext, error)
 	if s.held != nil {
 		counts = s.held.Status
 	}
-	st := &s.Pool.Status
+	st := &s.Object.Status
 	st.Available = counts.Available
 	st.Leased = counts.Leased
 	st.Provisioning = counts.Provisioning
 	st.Quarantined = counts.Quarantined
-	return poolContinue, nil
+	return reconcile.Result{}, nil
 }
 
 // poolExhaustion sets the Exhausted condition from the counts poolCounts
 // took from battery.
 type poolExhaustion struct{}
 
-func (poolExhaustion) Reconcile(_ context.Context, s *poolScope) (poolNext, error) {
+func (poolExhaustion) Reconcile(_ context.Context, s *poolScope) (reconcile.Result, error) {
 	//= docs/requirements/03-pools.md#pool-status
 	//# The Pool Controller SHALL set a Pool's condition `Exhausted`
 	//# true while battery reports no available MicroVM in a Pool whose size is
 	//# greater than zero, and false otherwise.
 	switch {
-	case s.Pool.Spec.Size <= 0:
+	case s.Object.Spec.Size <= 0:
 		s.setCondition(batteryv1alpha1.PoolConditionExhausted, metav1.ConditionFalse,
 			PoolReasonSizeZero, "The Pool's size is zero")
-	case s.Pool.Status.Available == 0:
+	case s.Object.Status.Available == 0:
 		s.setCondition(batteryv1alpha1.PoolConditionExhausted, metav1.ConditionTrue,
 			PoolReasonNoneAvailable, "battery reports no available MicroVM")
 	default:
 		s.setCondition(batteryv1alpha1.PoolConditionExhausted, metav1.ConditionFalse,
-			PoolReasonAvailable, fmt.Sprintf("battery reports %d available MicroVMs", s.Pool.Status.Available))
+			PoolReasonAvailable, fmt.Sprintf("battery reports %d available MicroVMs", s.Object.Status.Available))
 	}
-	return poolContinue, nil
+	return reconcile.Result{}, nil
 }
 
 // poolReadiness sets the Ready condition from the Hosts poolPlacement
@@ -129,16 +130,16 @@ func (poolExhaustion) Reconcile(_ context.Context, s *poolScope) (poolNext, erro
 // battery holds the Pool: it is what the Pool's owner has to change.
 type poolReadiness struct{}
 
-func (poolReadiness) Reconcile(_ context.Context, s *poolScope) (poolNext, error) {
+func (poolReadiness) Reconcile(_ context.Context, s *poolScope) (reconcile.Result, error) {
 	if s.refusal != nil {
-		return poolContinue, nil
+		return reconcile.Result{}, nil
 	}
 
 	//= docs/requirements/03-pools.md#pool-status
 	//# The Pool Controller SHALL set a Pool's condition `Ready` true
 	//# while battery holds the Pool, its selector matches a Host, and the sum of
 	//# its available, leased and provisioning MicroVMs is at least its size.
-	st := s.Pool.Status
+	st := s.Object.Status
 	total := st.Available + st.Leased + st.Provisioning
 	switch {
 	case len(s.hosts) == 0:
@@ -151,7 +152,7 @@ func (poolReadiness) Reconcile(_ context.Context, s *poolScope) (poolNext, error
 	case s.held == nil:
 		s.setCondition(batteryv1alpha1.PoolConditionReady, metav1.ConditionFalse,
 			PoolReasonNotInBattery, "battery does not hold the Pool")
-	case total < s.Pool.Spec.Size && s.notFilling != nil:
+	case total < s.Object.Spec.Size && s.notFilling != nil:
 		//= docs/requirements/03-pools.md#refill
 		//# While a Pool's shortfall is unchanged since the Pool
 		//# Controller saw the Pool stalled after an `UpdatePool` of PO-036, and the
@@ -160,14 +161,14 @@ func (poolReadiness) Reconcile(_ context.Context, s *poolScope) (poolNext, error
 		//# with the reason `NotFilling`.
 		s.setCondition(batteryv1alpha1.PoolConditionReady, metav1.ConditionFalse, PoolReasonNotFilling,
 			notFillingMessage(s.notFilling))
-	case total < s.Pool.Spec.Size:
+	case total < s.Object.Spec.Size:
 		s.setCondition(batteryv1alpha1.PoolConditionReady, metav1.ConditionFalse, PoolReasonBelowSize,
-			fmt.Sprintf("%d of %d MicroVMs are available, leased or provisioning", total, s.Pool.Spec.Size))
+			fmt.Sprintf("%d of %d MicroVMs are available, leased or provisioning", total, s.Object.Spec.Size))
 	default:
 		s.setCondition(batteryv1alpha1.PoolConditionReady, metav1.ConditionTrue, PoolReasonAtSize,
-			fmt.Sprintf("%d of %d MicroVMs are available, leased or provisioning", total, s.Pool.Spec.Size))
+			fmt.Sprintf("%d of %d MicroVMs are available, leased or provisioning", total, s.Object.Spec.Size))
 	}
-	return poolContinue, nil
+	return reconcile.Result{}, nil
 }
 
 // notFillingMessage is the message of Ready with the reason NotFilling.

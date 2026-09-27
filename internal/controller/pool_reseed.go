@@ -27,6 +27,7 @@ import (
 
 	batteryv1alpha1 "github.com/phoban01/battery-operator/api/v1alpha1"
 	"github.com/phoban01/battery-operator/internal/clock"
+	"github.com/phoban01/battery-operator/internal/reconcile"
 )
 
 // The reseed wait of PO-036 and PO-037 (03-pools.md#refill). It starts at
@@ -179,11 +180,11 @@ func (r *poolReseeds) reseeded(key types.NamespacedName, now time.Time) time.Dur
 // like progress and set the wait back.
 func poolShortfall(s *poolScope) (int32, bool) {
 	st := s.held.Status
-	switch s.Pool.Spec.Replenishment.Type {
+	switch s.Object.Spec.Replenishment.Type {
 	case batteryv1alpha1.ReplenishImmediateOnLease:
-		return s.Pool.Spec.Size - st.Available, true
+		return s.Object.Spec.Size - st.Available, true
 	case batteryv1alpha1.ReplenishReplaceOnDelete:
-		return s.Pool.Spec.Size - (st.Available + st.Leased), true
+		return s.Object.Spec.Size - (st.Available + st.Leased), true
 	default:
 		return 0, false
 	}
@@ -209,20 +210,20 @@ func poolShortfall(s *poolScope) (int32, bool) {
 // once battery reports why a provision fails.
 type poolReseed struct{}
 
-func (poolReseed) Reconcile(ctx context.Context, s *poolScope) (poolNext, error) {
+func (poolReseed) Reconcile(ctx context.Context, s *poolScope) (reconcile.Result, error) {
 	if s.Reseeds == nil {
-		return poolContinue, nil
+		return reconcile.Result{}, nil
 	}
-	key := client.ObjectKeyFromObject(s.Pool)
+	key := client.ObjectKeyFromObject(s.Object)
 	if s.refusal != nil || s.held == nil || len(s.hosts) == 0 ||
-		s.Pool.Generation != s.Pool.Status.ObservedGeneration {
+		s.Object.Generation != s.Object.Status.ObservedGeneration {
 		s.Reseeds.forget(key)
-		return poolContinue, nil
+		return reconcile.Result{}, nil
 	}
 	shortfall, eventDriven := poolShortfall(s)
 	if !eventDriven || shortfall <= 0 {
 		s.Reseeds.forget(key)
-		return poolContinue, nil
+		return reconcile.Result{}, nil
 	}
 
 	//= docs/requirements/03-pools.md#refill
@@ -240,12 +241,12 @@ func (poolReseed) Reconcile(ctx context.Context, s *poolScope) (poolNext, error)
 		//# replenishment strategy is `ImmediateOnLease` or `ReplaceOnDelete`, the
 		//# Pool Controller SHALL reconcile the Pool again no later than the end of
 		//# its reseed wait.
-		s.requeueAfter(after)
+		res := reconcile.Result{RequeueAfter: after}
 		s.notFilling = s.Reseeds.notFilling(key)
 		if s.notFilling != nil && stalled {
 			s.notFilling.next = now.Add(after)
 		}
-		return poolContinue, nil
+		return res, nil
 	}
 
 	//= docs/requirements/03-pools.md#refill
@@ -253,19 +254,19 @@ func (poolReseed) Reconcile(ctx context.Context, s *poolScope) (poolNext, error)
 	//# from the later of the time the Pool Controller first saw it stalled and
 	//# the Pool Controller's last `UpdatePool` for it, the Pool Controller SHALL
 	//# send battery the Pool's unchanged spec with `UpdatePool`.
-	ref := poolRef(s.Pool)
-	held, err := s.Battery.UpdatePool(ctx, poolSpecToBattery(s.Pool, s.hosts))
+	ref := poolRef(s.Object)
+	held, err := s.Battery.UpdatePool(ctx, poolSpecToBattery(s.Object, s.hosts))
 	if err != nil {
-		return poolStop, fmt.Errorf("sending Pool %s to battery again to seed it: %w", ref, err)
+		return reconcile.Result{Stop: true}, fmt.Errorf("sending Pool %s to battery again to seed it: %w", ref, err)
 	}
 	s.held = held
 	next := s.Reseeds.reseeded(key, now)
-	s.requeueAfter(next)
+	res := reconcile.Result{RequeueAfter: next}
 	s.notFilling = s.Reseeds.notFilling(key)
 	if s.notFilling != nil {
 		s.notFilling.next = now.Add(next)
 	}
 	s.Log.Info("Sent unchanged Pool to battery to seed it again", "pool", ref.String(),
 		"shortfall", shortfall, "nextWait", next.String())
-	return poolContinue, nil
+	return res, nil
 }

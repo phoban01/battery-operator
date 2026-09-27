@@ -28,10 +28,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	ctrlreconcile "sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	batteryv1alpha1 "github.com/phoban01/battery-operator/api/v1alpha1"
 	"github.com/phoban01/battery-operator/internal/controller/inventory"
+	"github.com/phoban01/battery-operator/internal/reconcile"
 )
 
 // PoolHosts is where the Pool Controller resolves a Pool's selector: the
@@ -61,28 +62,28 @@ var _ PoolHosts = (*inventory.HostSet)(nil)
 // publication brings every Pool back (hostsChangedSource).
 type poolPlacement struct{}
 
-func (poolPlacement) Reconcile(ctx context.Context, s *poolScope) (poolNext, error) {
+func (poolPlacement) Reconcile(ctx context.Context, s *poolScope) (reconcile.Result, error) {
 	//= docs/requirements/03-pools.md#placement
 	//# The Pool Controller SHALL set a Pool's `flintlock_hosts` in
 	//# battery to the names of the Hosts whose Nodes match the Pool's
 	//# `spec.placement.nodeSelector`.
-	hosts, err := s.Hosts.Matching(ctx, s.Client, s.Pool.Spec.Placement.NodeSelector)
+	hosts, err := s.Hosts.Matching(ctx, s.Client, s.Object.Spec.Placement.NodeSelector)
 	switch {
 	case errors.Is(err, inventory.ErrNotSynced):
-		s.Log.V(1).Info("Waiting for battery's Hosts before placing Pool", "pool", poolRef(s.Pool).String())
-		return poolStop, nil
+		s.Log.V(1).Info("Waiting for battery's Hosts before placing Pool", "pool", poolRef(s.Object).String())
+		return reconcile.Result{Stop: true}, nil
 	case err != nil:
-		return poolStop, fmt.Errorf("resolving the selector of Pool %s: %w", poolRef(s.Pool), err)
+		return reconcile.Result{Stop: true}, fmt.Errorf("resolving the selector of Pool %s: %w", poolRef(s.Object), err)
 	}
 	s.hosts = hosts
-	return poolContinue, nil
+	return reconcile.Result{}, nil
 }
 
 // hostsChangedSource is the Pool Controller's watch of the Hosts battery
 // runs with: each time they change, and once when it starts if they are
 // published already, it asks for a reconcile of every Pool (PO-011). It
 // takes the channel before it looks, so a change in between is not lost.
-func (r *PoolReconciler) hostsChangedSource(ctx context.Context, q workqueue.TypedRateLimitingInterface[reconcile.Request]) error {
+func (r *PoolReconciler) hostsChangedSource(ctx context.Context, q workqueue.TypedRateLimitingInterface[ctrlreconcile.Request]) error {
 	go func() {
 		for {
 			changed := r.Hosts.Changed()
@@ -102,22 +103,22 @@ func (r *PoolReconciler) hostsChangedSource(ctx context.Context, q workqueue.Typ
 }
 
 // everyPool is a reconcile request for each Pool.
-func (r *PoolReconciler) everyPool(ctx context.Context) []reconcile.Request {
+func (r *PoolReconciler) everyPool(ctx context.Context) []ctrlreconcile.Request {
 	var pools batteryv1alpha1.PoolList
 	if err := r.List(ctx, &pools); err != nil {
 		logf.FromContext(ctx).Error(err, "Failed to list Pools to place")
 		return nil
 	}
-	reqs := make([]reconcile.Request, 0, len(pools.Items))
+	reqs := make([]ctrlreconcile.Request, 0, len(pools.Items))
 	for i := range pools.Items {
-		reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&pools.Items[i])})
+		reqs = append(reqs, ctrlreconcile.Request{NamespacedName: client.ObjectKeyFromObject(&pools.Items[i])})
 	}
 	return reqs
 }
 
 // everyPoolForNode maps a Node event to every Pool: a Node's labels
 // decide which Pools' selectors match its Host.
-func (r *PoolReconciler) everyPoolForNode(ctx context.Context, _ client.Object) []reconcile.Request {
+func (r *PoolReconciler) everyPoolForNode(ctx context.Context, _ client.Object) []ctrlreconcile.Request {
 	return r.everyPool(ctx)
 }
 

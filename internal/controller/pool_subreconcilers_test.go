@@ -29,6 +29,7 @@ import (
 
 	batteryv1alpha1 "github.com/phoban01/battery-operator/api/v1alpha1"
 	"github.com/phoban01/battery-operator/internal/battery"
+	"github.com/phoban01/battery-operator/internal/reconcile"
 )
 
 // finalizedPool is testPool with the Pool Controller's finalizer.
@@ -70,16 +71,16 @@ func readyCondition(pool *batteryv1alpha1.Pool) *metav1.Condition {
 func TestPoolFinalizerIsAddedBeforeBatteryHearsOfThePool(t *testing.T) {
 	b := newStubBattery()
 	s := newTestPoolScope(testPool(), b)
-	if err := runPoolChain(context.Background(), s, poolChain()); err != nil {
+	if _, err := poolChain().Run(context.Background(), s); err != nil {
 		t.Fatalf("chain: %v", err)
 	}
-	if !controllerutil.ContainsFinalizer(s.Pool, PoolFinalizer) {
-		t.Errorf("finalizers = %v, want %q", s.Pool.Finalizers, PoolFinalizer)
+	if !controllerutil.ContainsFinalizer(s.Object, PoolFinalizer) {
+		t.Errorf("finalizers = %v, want %q", s.Object.Finalizers, PoolFinalizer)
 	}
 	wantCalls(t, b)
 
-	next, err := poolFinalizer{}.Reconcile(context.Background(), s)
-	if err != nil || next != poolContinue {
+	next, err := poolFinalizer.Reconcile(context.Background(), s)
+	if err != nil || next != (reconcile.Result{}) {
 		t.Errorf("with the finalizer present: next = %v, err = %v; want continue", next, err)
 	}
 }
@@ -116,15 +117,15 @@ func TestDeletedPoolLeavesBatteryBeforeItsFinalizer(t *testing.T) {
 			b.deleteErr = tc.deleteErr
 			s := newTestPoolScope(pool, b)
 
-			err := runPoolChain(context.Background(), s, poolChain())
+			_, err := poolChain().Run(context.Background(), s)
 			if !errors.Is(err, tc.wantErr) || (tc.wantErr == nil) != (err == nil) {
 				t.Fatalf("chain error = %v, want %v", err, tc.wantErr)
 			}
 			wantCalls(t, b, "DeletePool ci/runners")
-			if got := controllerutil.ContainsFinalizer(s.Pool, PoolFinalizer); got != tc.wantFinalizer {
+			if got := controllerutil.ContainsFinalizer(s.Object, PoolFinalizer); got != tc.wantFinalizer {
 				t.Errorf("finalizer present = %v, want %v", got, tc.wantFinalizer)
 			}
-			if ready := readyCondition(s.Pool); ready != nil {
+			if ready := readyCondition(s.Object); ready != nil {
 				t.Errorf("Ready = %+v, want none", ready)
 			}
 		})
@@ -138,7 +139,7 @@ func TestDeletedPoolWithoutFinalizerIsLeftAlone(t *testing.T) {
 	pool := deletedPool()
 	pool.Finalizers = []string{"example.com/other"}
 	s := newTestPoolScope(pool, b)
-	if err := runPoolChain(context.Background(), s, poolChain()); err != nil {
+	if _, err := poolChain().Run(context.Background(), s); err != nil {
 		t.Fatalf("chain: %v", err)
 	}
 	wantCalls(t, b)
@@ -157,7 +158,7 @@ func TestDeletedPoolWithoutFinalizerIsLeftAlone(t *testing.T) {
 func TestPoolBatteryDoesNotHoldIsCreated(t *testing.T) {
 	b := newStubBattery()
 	s := newTestPoolScope(finalizedPool(), b)
-	if err := runPoolChain(context.Background(), s, poolChain()); err != nil {
+	if _, err := poolChain().Run(context.Background(), s); err != nil {
 		t.Fatalf("chain: %v", err)
 	}
 	wantCalls(t, b, "GetPool ci/runners", "CreatePool ci/runners")
@@ -168,8 +169,8 @@ func TestPoolBatteryDoesNotHoldIsCreated(t *testing.T) {
 	if spec.Size != 3 {
 		t.Errorf("battery's size = %d, want 3", spec.Size)
 	}
-	if s.Pool.Status.ObservedGeneration != 1 {
-		t.Errorf("observedGeneration = %d, want 1", s.Pool.Status.ObservedGeneration)
+	if s.Object.Status.ObservedGeneration != 1 {
+		t.Errorf("observedGeneration = %d, want 1", s.Object.Status.ObservedGeneration)
 	}
 }
 
@@ -181,7 +182,7 @@ func TestPoolBatteryHoldsIsNotCreatedAgain(t *testing.T) {
 	pool.Status.ObservedGeneration = 1
 	b.pools[poolRef(pool)] = poolSpecToBattery(pool, nil)
 	s := newTestPoolScope(pool, b)
-	if err := runPoolChain(context.Background(), s, poolChain()); err != nil {
+	if _, err := poolChain().Run(context.Background(), s); err != nil {
 		t.Fatalf("chain: %v", err)
 	}
 	wantCalls(t, b, "GetPool ci/runners")
@@ -193,12 +194,12 @@ func TestPoolIsNotCreatedWhileBatteryIsUnavailable(t *testing.T) {
 	b := newStubBattery()
 	b.getErr = battery.ErrUnavailable
 	s := newTestPoolScope(finalizedPool(), b)
-	if err := runPoolChain(context.Background(), s, poolChain()); !errors.Is(err, battery.ErrUnavailable) {
+	if _, err := poolChain().Run(context.Background(), s); !errors.Is(err, battery.ErrUnavailable) {
 		t.Fatalf("chain error = %v, want ErrUnavailable", err)
 	}
 	wantCalls(t, b, "GetPool ci/runners")
-	if s.Pool.Status.ObservedGeneration != 0 {
-		t.Errorf("observedGeneration = %d, want 0", s.Pool.Status.ObservedGeneration)
+	if s.Object.Status.ObservedGeneration != 0 {
+		t.Errorf("observedGeneration = %d, want 0", s.Object.Status.ObservedGeneration)
 	}
 }
 
@@ -218,15 +219,15 @@ func TestPoolWhoseGenerationMovedIsUpdated(t *testing.T) {
 	pool.Generation = 2
 	pool.Spec.Size = 5
 	s := newTestPoolScope(pool, b)
-	if err := runPoolChain(context.Background(), s, poolChain()); err != nil {
+	if _, err := poolChain().Run(context.Background(), s); err != nil {
 		t.Fatalf("chain: %v", err)
 	}
 	wantCalls(t, b, "GetPool ci/runners", "UpdatePool ci/runners")
 	if spec, _ := b.spec(poolRef(pool)); spec.Size != 5 {
 		t.Errorf("battery's size = %d, want 5", spec.Size)
 	}
-	if s.Pool.Status.ObservedGeneration != 2 {
-		t.Errorf("observedGeneration = %d, want 2", s.Pool.Status.ObservedGeneration)
+	if s.Object.Status.ObservedGeneration != 2 {
+		t.Errorf("observedGeneration = %d, want 2", s.Object.Status.ObservedGeneration)
 	}
 }
 
@@ -240,11 +241,11 @@ func TestFailedUpdateLeavesObservedGeneration(t *testing.T) {
 	pool.Generation = 2
 	b.updateErr = battery.ErrUnavailable
 	s := newTestPoolScope(pool, b)
-	if err := runPoolChain(context.Background(), s, poolChain()); !errors.Is(err, battery.ErrUnavailable) {
+	if _, err := poolChain().Run(context.Background(), s); !errors.Is(err, battery.ErrUnavailable) {
 		t.Fatalf("chain error = %v, want ErrUnavailable", err)
 	}
-	if s.Pool.Status.ObservedGeneration != 1 {
-		t.Errorf("observedGeneration = %d, want 1", s.Pool.Status.ObservedGeneration)
+	if s.Object.Status.ObservedGeneration != 1 {
+		t.Errorf("observedGeneration = %d, want 1", s.Object.Status.ObservedGeneration)
 	}
 }
 
@@ -279,19 +280,19 @@ func TestPoolBatteryRefusesIsRejected(t *testing.T) {
 			s := newTestPoolScope(pool, b)
 			wantGen := pool.Status.ObservedGeneration
 
-			if err := runPoolChain(context.Background(), s, poolChain()); err != nil {
+			if _, err := poolChain().Run(context.Background(), s); err != nil {
 				t.Fatalf("chain: %v, want a refusal reported on the Pool, not returned", err)
 			}
 			wantCalls(t, b, "GetPool ci/runners", tc.wantCall)
-			ready := readyCondition(s.Pool)
+			ready := readyCondition(s.Object)
 			if ready == nil || ready.Status != metav1.ConditionFalse || ready.Reason != PoolReasonRejected || ready.Message != msg {
 				t.Errorf("Ready = %+v, want False/Rejected/%q", ready, msg)
 			}
 			if ready != nil && ready.ObservedGeneration != pool.Generation {
 				t.Errorf("Ready.observedGeneration = %d, want %d", ready.ObservedGeneration, pool.Generation)
 			}
-			if s.Pool.Status.ObservedGeneration != wantGen {
-				t.Errorf("observedGeneration = %d, want %d: battery did not accept the spec", s.Pool.Status.ObservedGeneration, wantGen)
+			if s.Object.Status.ObservedGeneration != wantGen {
+				t.Errorf("observedGeneration = %d, want %d: battery did not accept the spec", s.Object.Status.ObservedGeneration, wantGen)
 			}
 		})
 	}
@@ -309,10 +310,10 @@ func TestAcceptedPoolClearsItsRejection(t *testing.T) {
 		Type: batteryv1alpha1.PoolConditionReady, Status: metav1.ConditionFalse, Reason: PoolReasonRejected, Message: "no",
 	})
 	s := newTestPoolScope(pool, b)
-	if err := runPoolChain(context.Background(), s, poolChain()); err != nil {
+	if _, err := poolChain().Run(context.Background(), s); err != nil {
 		t.Fatalf("chain: %v", err)
 	}
-	if ready := readyCondition(s.Pool); ready == nil || ready.Reason == PoolReasonRejected {
+	if ready := readyCondition(s.Object); ready == nil || ready.Reason == PoolReasonRejected {
 		t.Errorf("Ready = %+v, want the rejection cleared and Ready set from battery's answer", ready)
 	}
 }
@@ -330,14 +331,14 @@ func TestAcceptedPoolClearsItsRejection(t *testing.T) {
 func TestPoolDeclarationWaitsForTheStoredFinalizer(t *testing.T) {
 	b := newStubBattery()
 	s := newTestPoolScope(testPool(), b)
-	controllerutil.AddFinalizer(s.Pool, PoolFinalizer)
+	controllerutil.AddFinalizer(s.Object, PoolFinalizer)
 
 	next, err := poolDeclaration{}.Reconcile(context.Background(), s)
-	if err != nil || next != poolStop {
+	if err != nil || next != (reconcile.Result{Stop: true}) {
 		t.Errorf("next = %v, err = %v; want stop", next, err)
 	}
 	wantCalls(t, b, "GetPool ci/runners")
-	if _, ok := b.spec(poolRef(s.Pool)); ok {
+	if _, ok := b.spec(poolRef(s.Object)); ok {
 		t.Error("battery holds a Pool whose finalizer is not stored")
 	}
 }
