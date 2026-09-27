@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -37,6 +38,10 @@ const (
 	// PoolReasonBelowSize: battery holds the Pool with fewer available,
 	// leased and provisioning MicroVMs than its size (PO-022).
 	PoolReasonBelowSize = "BelowSize"
+	// PoolReasonNotFilling: Ready is false; the Pool is below its size
+	// and a reseed has not changed its shortfall (PO-039). It works around
+	// battery v0.3.3, which does not report why a provision fails.
+	PoolReasonNotFilling = "NotFilling"
 	// PoolReasonNotInBattery: battery does not hold the Pool (PO-022).
 	PoolReasonNotInBattery = "NotInBattery"
 	// PoolReasonNoEligibleHost: the Pool's selector matches no Host
@@ -146,6 +151,15 @@ func (poolReadiness) Reconcile(_ context.Context, s *poolScope) (poolNext, error
 	case s.held == nil:
 		s.setCondition(batteryv1alpha1.PoolConditionReady, metav1.ConditionFalse,
 			PoolReasonNotInBattery, "battery does not hold the Pool")
+	case total < s.Pool.Spec.Size && s.notFilling != nil:
+		//= docs/requirements/03-pools.md#refill
+		//# While a Pool's shortfall is unchanged since the Pool
+		//# Controller saw the Pool stalled after an `UpdatePool` of PO-036, and the
+		//# sum of its available, leased and provisioning MicroVMs is less than its
+		//# size, the Pool Controller SHALL set the Pool's condition `Ready` false
+		//# with the reason `NotFilling`.
+		s.setCondition(batteryv1alpha1.PoolConditionReady, metav1.ConditionFalse, PoolReasonNotFilling,
+			notFillingMessage(s.notFilling))
 	case total < s.Pool.Spec.Size:
 		s.setCondition(batteryv1alpha1.PoolConditionReady, metav1.ConditionFalse, PoolReasonBelowSize,
 			fmt.Sprintf("%d of %d MicroVMs are available, leased or provisioning", total, s.Pool.Spec.Size))
@@ -154,4 +168,31 @@ func (poolReadiness) Reconcile(_ context.Context, s *poolScope) (poolNext, error
 			fmt.Sprintf("%d of %d MicroVMs are available, leased or provisioning", total, s.Pool.Spec.Size))
 	}
 	return poolContinue, nil
+}
+
+// notFillingMessage is the message of Ready with the reason NotFilling.
+// battery v0.3.3 gives the Operator no cause, so it points at the log
+// that has one.
+func notFillingMessage(nf *poolNotFilling) string {
+	//= docs/requirements/03-pools.md#refill
+	//# The Pool Controller SHALL give the condition `Ready` with the
+	//# reason `NotFilling` a message that gives the Pool's shortfall, the number
+	//# of `UpdatePool` calls of PO-036 since the shortfall last changed, the time
+	//# of the next one while the Pool is stalled, and the log of the battery
+	//# container as the place to find the cause.
+	next := "battery is provisioning for the last one"
+	if !nf.next.IsZero() {
+		next = "the next is due at " + nf.next.UTC().Format(time.RFC3339)
+	}
+	return fmt.Sprintf("The Pool is %s short after %s; %s. "+
+		"battery does not report why provisioning fails: see the log of the battery container",
+		countOf(int(nf.shortfall), "MicroVM"), countOf(nf.reseeds, "reseed"), next)
+}
+
+// countOf is n and the noun, plural unless n is one.
+func countOf(n int, noun string) string {
+	if n == 1 {
+		return "1 " + noun
+	}
+	return fmt.Sprintf("%d %ss", n, noun)
 }
