@@ -3,20 +3,27 @@
 // Scenario tests for the claim lifecycle model (claims.qnt). Each run walks
 // one interleaving step by step and checks the state it reaches; quint test
 // runs every definition whose name ends in Test.
+//
+// The tests that hack/claims-traces.sh writes as fixed traces for the
+// replay test (FIXED) take each step that has arguments from
+// claims_picks.qnt (P::), which is the same step with its arguments
+// recorded as the replay's picks. A test that becomes a fixed trace does the
+// same.
 module claims_test {
   import types.* from "./types"
   import claims.* from "./claims"
+  import claims_picks as P from "./claims_picks"
 
   // A claim bound to vm from scratch: created, finalizer, ClaimVM, status,
   // and the Lease's expiry read with ListLeases (CL-016), since battery's
   // answer to ClaimVM carries none.
   run bind(c: ClaimName, vm: VMId): bool =
-    createClaim(c)
-      .then(ctlAddFinalizer(c))
-      .then(replenish(vm))
-      .then(ctlClaimVM(c, vm))
-      .then(ctlWriteBound(c))
-      .then(ctlListRenewed(c))
+    P::createClaim(c)
+      .then(P::ctlAddFinalizer(c))
+      .then(P::replenish(vm))
+      .then(P::ctlClaimVM(c, vm))
+      .then(P::ctlWriteBound(c))
+      .then(P::ctlListRenewed(c))
 
   run ticks(n: int): bool = n.reps(_ => tick)
 
@@ -148,8 +155,8 @@ module claims_test {
       .then(bind("a", "v1"))
       .then(ticks(EXPIRY))
       .then(batteryExpire)
-      .then(renewClaim("a"))
-      .then(ctlHeartbeatUnknown("a"))
+      .then(P::renewClaim("a"))
+      .then(P::ctlHeartbeatUnknown("a"))
       .expect(and {
         obj("a").status.phase == Expired,
         obj("a").status.bound == { status: CondFalse, reason: LeaseExpired },
@@ -351,9 +358,9 @@ module claims_test {
       .then(bind("a", "v1"))
       .then(ticks(EXPIRY))
       .then(batteryExpire)
-      .then(dropEvent("v1"))
+      .then(P::dropEvent("v1"))
       .expect(and { obj("a").status.phase == Bound, canExpiryPassed("a") })
-      .then(ctlExpiryPassed("a"))
+      .then(P::ctlExpiryPassed("a"))
       .expect(and { obj("a").status.phase == Expired, controllerIdle, safety })
 
   // The finding of #57: a crash between a successful Heartbeat and its
@@ -431,8 +438,8 @@ module claims_test {
     init
       .then(bind("a", "v1"))
       .then(ticks(2))
-      .then(renewClaim("a"))
-      .then(ctlHeartbeatLost("a"))
+      .then(P::renewClaim("a"))
+      .then(P::ctlHeartbeatLost("a"))
       .expect(and {
         obj("a").status.phase == Bound,
         obj("a").status.leaseExpiresAt == Some(EXPIRY),
@@ -443,8 +450,8 @@ module claims_test {
       })
       .then(tick)
       .expect(not(canExpiryPassed("a")))
-      .then(ctlHeartbeat("a"))
-      .then(ctlWriteRenewed("a"))
+      .then(P::ctlHeartbeat("a"))
+      .then(P::ctlWriteRenewed("a"))
       .expect(and {
         obj("a").status.phase == Bound,
         obj("a").status.leaseExpiresAt == Some(3 + EXPIRY),
@@ -461,7 +468,7 @@ module claims_test {
       .then(batteryStop)
       .then(ticks(EXPIRY + 1))
       .expect(canExpiryPassed("a"))
-      .then(ctlListUnanswered("a"))
+      .then(P::ctlListUnanswered("a"))
       .expect(and {
         obj("a").status.phase == Bound,
         obj("a").status.synced == { status: CondFalse, reason: BatteryUnavailable },
@@ -477,8 +484,8 @@ module claims_test {
   run releaseAnswerLostTest =
     init
       .then(bind("a", "v1"))
-      .then(deleteClaim("a"))
-      .then(ctlReleaseLost("a"))
+      .then(P::deleteClaim("a"))
+      .then(P::ctlReleaseLost("a"))
       .expect(and {
         live("a"),
         obj("a").hasFinalizer,
@@ -486,8 +493,8 @@ module claims_test {
         canRelease("a"),
         safety,
       })
-      .then(ctlReleaseVM("a"))
-      .then(ctlRemoveFinalizer("a"))
+      .then(P::ctlReleaseVM("a"))
+      .then(P::ctlRemoveFinalizer("a"))
       .expect(and { isGone(slot("a")), safety })
 
   // CL-022: battery answers UNAVAILABLE and keeps the Lease (flintlockd has
@@ -559,13 +566,13 @@ module claims_test {
     init
       .then(bind("a", "v1"))
       .then(ticks(2))
-      .then(renewClaim("a"))
-      .then(ctlHeartbeat("a"))
+      .then(P::renewClaim("a"))
+      .then(P::ctlHeartbeat("a"))
       .then(ticks(EXPIRY))
       .then(batteryExpire)
-      .then(ctlEventDeleted("v1"))
+      .then(P::ctlEventDeleted("v1"))
       .expect(and { obj("a").status.phase == Bound, not(idle("a")), ctrl.deleted == Set("v1"), safety })
-      .then(ctlWriteRenewed("a"))
+      .then(P::ctlWriteRenewed("a"))
       .expect(and {
         obj("a").status.phase == Bound,
         canExpireDeleted("a"),
@@ -573,7 +580,7 @@ module claims_test {
         not(canCallHeartbeat("a")),
         not(controllerIdle),
       })
-      .then(ctlExpireDeleted("a"))
+      .then(P::ctlExpireDeleted("a"))
       .expect(and { obj("a").status.phase == Expired, witnessExpiredByRememberedDeletion, controllerIdle, safety })
 
   // #133: the same for the recovery. It does not touch the claim whose
@@ -584,17 +591,17 @@ module claims_test {
     init
       .then(bind("a", "v1"))
       .then(ticks(2))
-      .then(renewClaim("a"))
-      .then(ctlHeartbeat("a"))
+      .then(P::renewClaim("a"))
+      .then(P::ctlHeartbeat("a"))
       .then(ticks(EXPIRY))
       .then(batteryExpire)
       .then(batteryStop)
       .then(batteryStart)
       .then(ctlRecover)
       .expect(and { obj("a").status.phase == Bound, not(idle("a")), ctrl.unlisted == Set(1), safety })
-      .then(ctlWriteRenewed("a"))
+      .then(P::ctlWriteRenewed("a"))
       .expect(and { canExpireUnlisted("a"), not(canExpiryPassed("a")), not(controllerIdle) })
-      .then(ctlExpireUnlisted("a"))
+      .then(P::ctlExpireUnlisted("a"))
       .expect(and {
         obj("a").status.phase == Expired,
         obj("a").status.synced == synced,
@@ -623,17 +630,17 @@ module claims_test {
   // expires the claim without calling battery.
   run rememberedDeletionTest =
     init
-      .then(createClaim("a"))
-      .then(ctlAddFinalizer("a"))
-      .then(replenish("v1"))
-      .then(ctlClaimVM("a", "v1"))
+      .then(P::createClaim("a"))
+      .then(P::ctlAddFinalizer("a"))
+      .then(P::replenish("v1"))
+      .then(P::ctlClaimVM("a", "v1"))
       .then(ticks(EXPIRY))
       .then(batteryExpire)
-      .then(ctlEventDeleted("v1"))
+      .then(P::ctlEventDeleted("v1"))
       .expect(and { obj("a").status.phase == Pending, ctrl.deleted == Set("v1"), safety })
-      .then(ctlWriteBound("a"))
+      .then(P::ctlWriteBound("a"))
       .expect(and { canExpireDeleted("a"), not(canExpiryPassed("a")), not(controllerIdle) })
-      .then(ctlExpireDeleted("a"))
+      .then(P::ctlExpireDeleted("a"))
       .expect(and {
         obj("a").status.phase == Expired,
         obj("a").status.synced == synced,
