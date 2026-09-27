@@ -70,6 +70,7 @@ export HOST_DRIVER=ssh HOST_SSH=ubuntu@203.0.113.10
 hack/real-hosts/up.sh      # everything, idempotent; or: up.sh machine host k3s images deploy
 hack/real-hosts/smoke.sh   # or: smoke.sh pool claim restart delete
 export KUBECONFIG=hack/real-hosts/.state/kubeconfig
+hack/real-hosts/demo.sh    # the docs site's demo; demo.sh --record records it to site/demo.cast
 hack/real-hosts/down.sh    # lima: deletes bo-host-1, and nothing else; ssh: leaves the machine
 ```
 

@@ -20,9 +20,11 @@ The design was discussed in
 This project starts outside battery so it can be proven without disturbing
 battery itself, with the aim of being adopted by liquidmetal-dev if it works.
 
-**Status:** design. The project is scaffolded with kubebuilder, with no
-APIs or controllers yet. Start with the
-[architecture decision records](docs/adr/), then the
+**Status:** `v1alpha1`. The Operator, the Exec Agent and the Client Library
+work end to end on a real Host. The
+[docs site](https://phoban01.github.io/battery-operator/) has a recorded
+demo, and [examples/demo](examples/demo/) has its manifests. For the design,
+start with the [architecture decision records](docs/adr/), then the
 [requirements](docs/requirements/), which every change is traced to.
 
 ## Development
