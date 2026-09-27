@@ -1,0 +1,15 @@
+# A claim made by hand (examples/demo/README.md): one MicroVM of Pool demo,
+# held for the Holder demo-holder. The Claim Controller binds it within a
+# second. Its Lease lasts the Pool's lease.expiryThreshold (30s), and the
+# holder renews it by setting spec.renewTime; unrenewed, the claim goes
+# Expired. A Consumer normally lets the Client Library (pkg/claimclient)
+# create, renew and delete its claims.
+apiVersion: battery.liquidmetal-x.dev/v1alpha1
+kind: MicroVMClaim
+metadata:
+  name: build-1
+  namespace: demo
+spec:
+  poolRef:
+    name: demo
+  serviceAccountName: demo-holder

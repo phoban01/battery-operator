@@ -23,7 +23,9 @@ the way you use anything else in a cluster:
 This recording is one Kubernetes Node with KVM. A Pool fills with two
 Firecracker MicroVMs. A Consumer claims one with the Client Library, and
 runs a command in it through the Exec Agent. The Pool starts a new MicroVM
-in place of the one claimed. Deleting the Pool deletes its MicroVMs.
+in place of the one claimed. Then a claim made with `kubectl` binds, is
+renewed, and goes Expired when nobody renews it. Deleting the Pool deletes
+its MicroVMs.
 
 <div id="demo"></div>
 <script src="https://cdn.jsdelivr.net/npm/asciinema-player@3.10.0/dist/bundle/asciinema-player.min.js"></script>
@@ -80,6 +82,38 @@ kubectl -n demo wait --for=jsonpath={.status.available}=2 pool/demo
 
 The [demo manifests](https://github.com/phoban01/battery-operator/tree/main/examples/demo)
 say what each object is for.
+
+## Claims are resources
+
+Every claim is a `MicroVMClaim` in the cluster, so `kubectl get` shows which
+MicroVMs are held, by whom, on which Node, and until when:
+
+```yaml
+apiVersion: battery.liquidmetal-x.dev/v1alpha1
+kind: MicroVMClaim
+metadata:
+  name: build-1
+  namespace: demo
+spec:
+  poolRef:
+    name: demo
+  serviceAccountName: demo-holder   # the Holder: only it can use the MicroVM
+```
+
+```console
+$ kubectl -n demo get microvmclaim build-1 -o jsonpath='{.status}' | jq '{phase, microVM, host, leaseExpiresAt}'
+{
+  "phase": "Bound",
+  "microVM": { "uid": "01M3J9T8R6826GNNC6PJ3TDTSC" },
+  "host": { "agentAddress": "192.168.5.15:10270", "nodeName": "bo-host-1" },
+  "leaseExpiresAt": "2026-09-27T20:46:09Z"
+}
+```
+
+A claim's Lease lasts the Pool's `lease.expiryThreshold`. The holder renews
+it by setting `spec.renewTime`, and the Client Library does this for its
+claims. A claim nobody renews goes `Expired`, and battery deletes its
+MicroVM. Deleting a claim releases its MicroVM at once.
 
 ## Claim a MicroVM from Go
 

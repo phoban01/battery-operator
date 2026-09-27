@@ -87,6 +87,21 @@ say "The Pool starts a new MicroVM in place of the one claimed; wait until it is
 run "kubectl -n ${NS} wait --for=jsonpath={.status.available}=2 pool/${POOL} --timeout=10m"
 run "kubectl -n ${NS} get pool ${POOL}"
 
+say "A claim is a resource too: claim a MicroVM with kubectl"
+run "grep -v '^#' examples/demo/claim.yaml"
+run "kubectl apply -f examples/demo/claim.yaml"
+run "kubectl -n ${NS} wait --for=jsonpath={.status.phase}=Bound microvmclaim/build-1 --timeout=2m"
+run "kubectl -n ${NS} get microvmclaim build-1 -o jsonpath='{.status}' | jq '{phase, microVM, host, leaseExpiresAt}'"
+
+say "The holder renews the Lease by setting spec.renewTime; the expiry moves on"
+run "kubectl -n ${NS} patch microvmclaim build-1 --type merge -p '{\"spec\":{\"renewTime\":\"'\$(date -u +%Y-%m-%dT%H:%M:%S.000000Z)'\"}}'"
+run "sleep 2; kubectl -n ${NS} get microvmclaim build-1 -o jsonpath='{.status.leaseExpiresAt}{\"\\n\"}'"
+
+say "Unrenewed, the Lease runs out after 30s and the claim goes Expired"
+run "kubectl -n ${NS} wait --for=jsonpath={.status.phase}=Expired microvmclaim/build-1 --timeout=2m"
+run "kubectl -n ${NS} get microvmclaim build-1 -o jsonpath='{.status.conditions[?(@.type==\"Bound\")].message}{\"\\n\"}'"
+run "kubectl -n ${NS} delete microvmclaim build-1"
+
 say "Deleting the Pool deletes its MicroVMs"
 run "kubectl -n ${NS} delete pool ${POOL}"
 run "limactl shell ${NODE_NAME} pgrep -c firecracker || true"
