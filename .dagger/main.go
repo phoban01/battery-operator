@@ -298,7 +298,7 @@ func (m *BatteryOperator) QuintVerify(
 	// +optional
 	steps string,
 	// The bound for the liveness properties and their witnesses, in
-	// steps. Defaults to hack/quint-verify.sh's.
+	// steps. Defaults to each check's own bound in hack/quint-verify.sh.
 	// +optional
 	livenessSteps string,
 ) (string, error) {

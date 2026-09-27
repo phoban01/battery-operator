@@ -1593,7 +1593,11 @@ module claims {
   // had a Lease or not.
   temporal deletedClaimGone =
     controllerAssumptions implies deletingLiveClaim.leadsTo(isGone(slot(LIVE_CLAIM)))
-  temporal witnessDeletedClaimGone = not(controllerAssumptions and eventually(deletingLiveClaim))
+  // The witness is not(controllerAssumptions and eventually(deletingLiveClaim)),
+  // written with one operator fewer above the eventually, so that Apalache
+  // finds it a step sooner (specs/quint/README.md, "Liveness").
+  temporal witnessDeletedClaimGone =
+    always(not(deletingLiveClaim)) or not(controllerAssumptions)
 
   // LIVE_CLAIM is Pending, and not deleted.
   def pendingLiveClaim: bool =
@@ -1671,7 +1675,10 @@ module claims {
   // so new ones stop coming. Checked from ORPHAN_RUN_OUT.
   temporal orphanEventuallyGone =
     sweepAssumptions implies always(eventually(not(orphanRunOut)))
-  temporal witnessOrphanEventuallyGone = not(sweepAssumptions and eventually(orphanRunOut))
+  // The witness is not(sweepAssumptions and eventually(orphanRunOut)),
+  // written as for witnessDeletedClaimGone.
+  temporal witnessOrphanEventuallyGone =
+    always(not(orphanRunOut)) or not(sweepAssumptions)
 
   // ---------------------------------------------------------------------
   // Witnesses: states quint run reports reaching, to show the simulation
