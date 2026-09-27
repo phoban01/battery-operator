@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/phoban01/battery-operator/internal/battery"
+	"github.com/phoban01/battery-operator/internal/reconcile"
 )
 
 // PoolLister lists the Pools battery holds: the Operator's battery client.
@@ -62,7 +63,7 @@ type Drain struct {
 	Timeout time.Duration
 }
 
-func (d Drain) Reconcile(ctx context.Context, s *Scope) (Result, error) {
+func (d Drain) Reconcile(ctx context.Context, s *Scope) (reconcile.Result, error) {
 	remaining := Hosts{}
 	var leaving []string
 	for name, address := range s.Config.Hosts {
@@ -74,7 +75,7 @@ func (d Drain) Reconcile(ctx context.Context, s *Scope) (Result, error) {
 	}
 	if len(leaving) == 0 {
 		s.State.drainStarted = time.Time{}
-		return Result{}, nil
+		return reconcile.Result{}, nil
 	}
 	slices.Sort(leaving)
 
@@ -85,7 +86,7 @@ func (d Drain) Reconcile(ctx context.Context, s *Scope) (Result, error) {
 	//# Host in its `flintlock_hosts` or the configured drain timeout has passed.
 	s.HostSet.publish(remaining)
 	if d.Timeout <= 0 {
-		return Result{}, nil
+		return reconcile.Result{}, nil
 	}
 	now := s.Clock.Now()
 	if s.State.drainStarted.IsZero() {
@@ -97,7 +98,7 @@ func (d Drain) Reconcile(ctx context.Context, s *Scope) (Result, error) {
 	switch {
 	case err == nil && len(naming) == 0:
 		s.Log.Info("Pools dropped the Hosts battery is restarting without", "leaving", leaving, "waited", waited)
-		return Result{}, nil
+		return reconcile.Result{}, nil
 	case waited >= d.Timeout:
 		msg := fmt.Sprintf("%v", naming)
 		if err != nil {
@@ -105,11 +106,11 @@ func (d Drain) Reconcile(ctx context.Context, s *Scope) (Result, error) {
 		}
 		s.Log.Info("Restarting battery while Pools may still name Hosts it removes",
 			"leaving", leaving, "pools", msg, "waited", waited)
-		return Result{}, nil
+		return reconcile.Result{}, nil
 	case err != nil:
 		s.Log.Error(err, "Failed to list battery's Pools", "leaving", leaving)
 	}
-	return Result{Stop: true, RequeueAfter: min(drainPoll, d.Timeout-waited)}, nil
+	return reconcile.Result{Stop: true, RequeueAfter: min(drainPoll, d.Timeout-waited)}, nil
 }
 
 // poolsNaming lists the Pools in battery whose flintlock_hosts name any

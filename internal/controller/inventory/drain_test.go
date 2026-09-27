@@ -22,11 +22,13 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+
+	"github.com/phoban01/battery-operator/internal/reconcile"
 )
 
 // leaveAndCloseWindow has two Hosts join, a Pool name both, and then
 // node-a be cordoned, up to the reconcile at which its window closes.
-func leaveAndCloseWindow(t *testing.T) (*harness, Result) {
+func leaveAndCloseWindow(t *testing.T) (*harness, reconcile.Result) {
 	t.Helper()
 	h := newHarness(t, host(nodeA, addrA), host(nodeB, addrB))
 	joinAll(h)

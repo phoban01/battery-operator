@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/phoban01/battery-operator/internal/batterysidecar"
+	"github.com/phoban01/battery-operator/internal/reconcile"
 )
 
 // The Node report the Inventory Controller reads (EA-034, EA-035). They
@@ -51,17 +52,17 @@ const (
 // configuration names: battery started with those.
 type Restore struct{}
 
-func (Restore) Reconcile(ctx context.Context, s *Scope) (Result, error) {
+func (Restore) Reconcile(ctx context.Context, s *Scope) (reconcile.Result, error) {
 	if s.Config.Written == nil {
 		s.Config.Written = s.Config.Hosts.clone()
 		if err := s.Store.Save(ctx, s.Config); err != nil {
-			return Result{Stop: true}, err
+			return reconcile.Result{Stop: true}, err
 		}
 		s.Log.Info("Recorded the Hosts battery's configuration names", "hosts", slices.Sorted(maps.Keys(s.Config.Hosts)))
-		return Result{}, nil
+		return reconcile.Result{}, nil
 	}
 	if s.Config.Hosts.Equal(s.Config.Written) {
-		return Result{}, nil
+		return reconcile.Result{}, nil
 	}
 
 	//= docs/requirements/04-inventory.md#keeping
@@ -71,19 +72,19 @@ func (Restore) Reconcile(ctx context.Context, s *Scope) (Result, error) {
 	//# battery.
 	raw, err := batterysidecar.Render(s.Config.Written.List())
 	if err != nil {
-		return Result{Stop: true}, err
+		return reconcile.Result{Stop: true}, err
 	}
 	found := s.Config.Hosts
 	restored := s.Config
 	restored.Hosts = s.Config.Written.clone()
 	restored.Raw = raw
 	if err := s.Store.Save(ctx, restored); err != nil {
-		return Result{Stop: true}, err
+		return reconcile.Result{Stop: true}, err
 	}
 	s.Config = restored
 	s.Log.Info("Restored battery's Hosts in its configuration, which something else had changed",
 		"hosts", slices.Sorted(maps.Keys(restored.Hosts)), "found", slices.Sorted(maps.Keys(found)))
-	return Result{}, nil
+	return reconcile.Result{}, nil
 }
 
 // Resume finishes a restart a previous reconcile started and did not
@@ -91,23 +92,23 @@ func (Restore) Reconcile(ctx context.Context, s *Scope) (Result, error) {
 // publishes the Hosts battery runs with, if they have not been yet.
 type Resume struct{}
 
-func (Resume) Reconcile(ctx context.Context, s *Scope) (Result, error) {
+func (Resume) Reconcile(ctx context.Context, s *Scope) (reconcile.Result, error) {
 	if s.Config.Pending {
 		s.Log.Info("Resumed restart of battery with a configuration written earlier", "hosts", slices.Sorted(maps.Keys(s.Config.Hosts)))
 		if err := restart(ctx, s); err != nil {
-			return Result{Stop: true}, err
+			return reconcile.Result{Stop: true}, err
 		}
 	}
 	if !s.HostSet.Synced() {
 		s.HostSet.publish(s.Config.Hosts)
 	}
-	return Result{}, nil
+	return reconcile.Result{}, nil
 }
 
 // Admit works out the Hosts the Nodes make now.
 type Admit struct{}
 
-func (Admit) Reconcile(_ context.Context, s *Scope) (Result, error) {
+func (Admit) Reconcile(_ context.Context, s *Scope) (reconcile.Result, error) {
 	s.Observed = Hosts{}
 	for i := range s.Nodes {
 		n := &s.Nodes[i]
@@ -129,7 +130,7 @@ func (Admit) Reconcile(_ context.Context, s *Scope) (Result, error) {
 			s.Observed[n.Name] = address
 		}
 	}
-	return Result{}, nil
+	return reconcile.Result{}, nil
 }
 
 // Settle works out the Hosts battery should have: battery's current Hosts,
@@ -141,7 +142,7 @@ type Settle struct {
 	Time time.Duration
 }
 
-func (st Settle) Reconcile(_ context.Context, s *Scope) (Result, error) {
+func (st Settle) Reconcile(_ context.Context, s *Scope) (reconcile.Result, error) {
 	now := s.Clock.Now()
 	names := map[string]bool{}
 	for _, m := range []map[string]string{s.Observed, s.Config.Hosts} {
@@ -154,7 +155,7 @@ func (st Settle) Reconcile(_ context.Context, s *Scope) (Result, error) {
 	}
 
 	s.Desired = Hosts{}
-	var res Result
+	var res reconcile.Result
 	for name := range names {
 		observed := s.Observed[name] // "" when not a Host
 		configured := s.Config.Hosts[name]
@@ -179,7 +180,7 @@ func (st Settle) Reconcile(_ context.Context, s *Scope) (Result, error) {
 			if configured != "" {
 				s.Desired[name] = configured
 			}
-			res = res.merge(Result{RequeueAfter: st.Time - held})
+			res = res.Merge(reconcile.Result{RequeueAfter: st.Time - held})
 			continue
 		}
 
@@ -204,30 +205,30 @@ func (st Settle) Reconcile(_ context.Context, s *Scope) (Result, error) {
 // without restarting battery.
 type Renew struct{}
 
-func (Renew) Reconcile(ctx context.Context, s *Scope) (Result, error) {
+func (Renew) Reconcile(ctx context.Context, s *Scope) (reconcile.Result, error) {
 	if s.ClientCertificate == nil {
 		// No Secret: battery cannot have started without it, and nothing
 		// has been renewed.
-		return Result{}, nil
+		return reconcile.Result{}, nil
 	}
 	digest := Digest(s.ClientCertificate)
 	switch s.Config.ClientCertificate {
 	case digest:
-		return Result{}, nil
+		return reconcile.Result{}, nil
 	case "":
 		s.Config.ClientCertificate = digest
 		if err := s.Store.Save(ctx, s.Config); err != nil {
-			return Result{Stop: true}, err
+			return reconcile.Result{Stop: true}, err
 		}
 		s.Log.Info("Recorded the client certificate battery started with", "sha256", digest)
-		return Result{}, nil
+		return reconcile.Result{}, nil
 	}
 
 	//= docs/requirements/06-deployment.md#battery-sidecar
 	//# When the client certificate in the Secret of DP-005 changes,
 	//# the Operator SHALL restart battery through the mechanism of DP-006
 	s.Renewed = true
-	return Result{}, nil
+	return reconcile.Result{}, nil
 }
 
 // Window batches the settled changes, and a renewed client certificate,
@@ -239,7 +240,7 @@ type Window struct {
 	Length time.Duration
 }
 
-func (w Window) Reconcile(_ context.Context, s *Scope) (Result, error) {
+func (w Window) Reconcile(_ context.Context, s *Scope) (reconcile.Result, error) {
 	opened, open := s.State.WindowOpened()
 	if s.Desired.Equal(s.Config.Hosts) && !s.Renewed {
 		if open {
@@ -250,7 +251,7 @@ func (w Window) Reconcile(_ context.Context, s *Scope) (Result, error) {
 		// published fewer Hosts than battery runs with: give them back.
 		s.State.drainStarted = time.Time{}
 		s.HostSet.publish(s.Config.Hosts)
-		return Result{Stop: true}, nil
+		return reconcile.Result{Stop: true}, nil
 	}
 
 	//= docs/requirements/04-inventory.md#applying
@@ -272,9 +273,9 @@ func (w Window) Reconcile(_ context.Context, s *Scope) (Result, error) {
 			"hostsChanged", !s.Desired.Equal(s.Config.Hosts), "clientCertificateRenewed", s.Renewed)
 	}
 	if left := opened.Add(w.Length).Sub(now); left > 0 {
-		return Result{Stop: true, RequeueAfter: left}, nil
+		return reconcile.Result{Stop: true, RequeueAfter: left}, nil
 	}
-	return Result{}, nil
+	return reconcile.Result{}, nil
 }
 
 // Apply writes the Hosts battery should have to its configuration and
@@ -282,7 +283,7 @@ func (w Window) Reconcile(_ context.Context, s *Scope) (Result, error) {
 // holds, once.
 type Apply struct{}
 
-func (Apply) Reconcile(ctx context.Context, s *Scope) (Result, error) {
+func (Apply) Reconcile(ctx context.Context, s *Scope) (reconcile.Result, error) {
 	//= docs/requirements/04-inventory.md#admission
 	//# The Inventory Controller SHALL configure battery to reach every
 	//# Host's `flintlockd` over TLS, verifying the serving certificate against
@@ -290,7 +291,7 @@ func (Apply) Reconcile(ctx context.Context, s *Scope) (Result, error) {
 	//# certificate for `flintlockd`.
 	raw, err := batterysidecar.Render(s.Desired.List())
 	if err != nil {
-		return Result{Stop: true}, err
+		return reconcile.Result{Stop: true}, err
 	}
 
 	//= docs/requirements/04-inventory.md#applying
@@ -301,7 +302,7 @@ func (Apply) Reconcile(ctx context.Context, s *Scope) (Result, error) {
 		ClientCertificate: s.Config.ClientCertificate, Written: s.Desired,
 	}
 	if err := s.Store.Save(ctx, pending); err != nil {
-		return Result{Stop: true}, err
+		return reconcile.Result{Stop: true}, err
 	}
 	// The window has closed: whatever happens to this restart, a change
 	// from here on waits for a window of its own, and a failed restart is
@@ -312,9 +313,9 @@ func (Apply) Reconcile(ctx context.Context, s *Scope) (Result, error) {
 	s.Log.Info("Wrote battery's configuration", "hosts", slices.Sorted(maps.Keys(s.Desired)),
 		"clientCertificateRenewed", s.Renewed)
 	if err := restart(ctx, s); err != nil {
-		return Result{Stop: true}, err
+		return reconcile.Result{Stop: true}, err
 	}
-	return Result{}, nil
+	return reconcile.Result{}, nil
 }
 
 // restart restarts battery with the pending configuration in s and the

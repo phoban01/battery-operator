@@ -128,8 +128,8 @@ func (r *InventoryReconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ct
 		Log:               logf.FromContext(ctx),
 		Clock:             clk,
 	}
-	err = inventory.NewChain(r.Options).Run(ctx, s)
-	return ctrl.Result{RequeueAfter: s.Result.RequeueAfter}, err
+	res, err := inventory.NewChain(r.Options).Run(ctx, s)
+	return res.Ctrl(), err
 }
 
 // clientCertificate reads battery's client certificate from its Secret:
