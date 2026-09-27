@@ -79,10 +79,11 @@ takes the agent's address from the Node report instead.
   `NOT_FOUND`, or leaves the claim's Lease out of its answer to
   `ListLeases`, then the Claim Controller SHALL set the claim's phase to
   `Expired` and its condition `Bound` false with the reason `LeaseExpired`.
-- **CL-013** When battery's `Events` stream reports the deletion of the
-  MicroVM of a Bound claim that is not being deleted, the Claim Controller
-  SHALL set the claim's phase to `Expired` and its condition `Bound` false
-  with the reason `LeaseExpired`.
+- **CL-013** When battery's `Events` stream has reported the deletion of the
+  MicroVM of a Bound claim that is not being deleted, whether before or
+  after the claim became Bound, the Claim Controller SHALL set the claim's
+  phase to `Expired` and its condition `Bound` false with the reason
+  `LeaseExpired`.
 - **CL-014** When battery lists the Lease of a Bound claim that is not being
   deleted in its answer to `ListLeases` with an expiry time that has
   passed, and the claim has no pending renewal, the Claim Controller SHALL
@@ -132,6 +133,19 @@ by the Quint model of the claim lifecycle). The Claim Controller learns of
 the expiry from battery's `Events` stream (CL-013), and from the expiry time
 battery itself lists when the stream has missed it (CL-014, CL-016). Both
 compare against battery's own time, so neither breaks CL-011.
+
+The Claim Controller remembers each MicroVM deletion the stream reports,
+because a claim's binding can be written after the event arrived. The
+controller can hold battery's answer to `ClaimVM` for a claim while battery
+expires the new Lease and deletes its MicroVM, and write the binding only
+after the event (#135). The event then finds no Bound claim to expire.
+CL-013 therefore covers both orders: the claim's next reconcile once it is
+Bound expires it, without a call to battery. battery never reuses a
+MicroVM's uid, so a remembered deletion never expires the wrong claim. The
+memory is in the Operator's process only, and keeps each deletion for an
+hour. A deletion it forgets, for example in a restart of the Operator, is
+the same as an event the stream missed, and CL-014 and CL-016 expire the
+claim.
 
 A `Heartbeat` that fails in transit may or may not have renewed the Lease.
 CL-015 keeps the claim as it was rather than expire it on a network blip,

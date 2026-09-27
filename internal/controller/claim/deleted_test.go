@@ -30,15 +30,18 @@ import (
 
 //= docs/requirements/02-claims.md#renewal
 //= type=test
-//# When battery's `Events` stream reports the deletion of the
-//# MicroVM of a Bound claim that is not being deleted, the Claim Controller
-//# SHALL set the claim's phase to `Expired` and its condition `Bound` false
-//# with the reason `LeaseExpired`.
+//# When battery's `Events` stream has reported the deletion of the
+//# MicroVM of a Bound claim that is not being deleted, whether before or
+//# after the claim became Bound, the Claim Controller SHALL set the claim's
+//# phase to `Expired` and its condition `Bound` false with the reason
+//# `LeaseExpired`.
 
 // TestExpireDeletedExpiresTheClaimOfADeletedMicroVM covers CL-013: once
 // the event watcher has recorded the claim's MicroVM as deleted, the claim
 // goes Expired without a call to battery, even with a renewal pending,
-// since battery deleted the Lease first.
+// since battery deleted the Lease first. The set does not record when the
+// claim became Bound, so this covers an event that came before the binding
+// as well as one that came after it.
 func TestExpireDeletedExpiresTheClaimOfADeletedMicroVM(t *testing.T) {
 	deleted := &DeletedVMs{Clock: clock.NewFake(start)}
 	deleted.Add(testVM)

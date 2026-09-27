@@ -98,10 +98,11 @@ func claimOn(name, uid string) *batteryv1alpha1.MicroVMClaim {
 
 //= docs/requirements/02-claims.md#renewal
 //= type=test
-//# When battery's `Events` stream reports the deletion of the
-//# MicroVM of a Bound claim that is not being deleted, the Claim Controller
-//# SHALL set the claim's phase to `Expired` and its condition `Bound` false
-//# with the reason `LeaseExpired`.
+//# When battery's `Events` stream has reported the deletion of the
+//# MicroVM of a Bound claim that is not being deleted, whether before or
+//# after the claim became Bound, the Claim Controller SHALL set the claim's
+//# phase to `Expired` and its condition `Bound` false with the reason
+//# `LeaseExpired`.
 
 // TestClaimEventsSendsTheClaimOfADeletedMicroVM covers CL-013 from the
 // watcher's side: it subscribes for every Pool, records a deleted MicroVM
