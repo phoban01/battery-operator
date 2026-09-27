@@ -1,0 +1,85 @@
+# The demo (examples/demo/README.md): a namespace, a Holder with what the
+# Client Library needs, and a Pool of two warm MicroVMs.
+#
+# The kernel and root filesystem images are the ones the real hosts trial
+# (hack/real-hosts) pushes to each Host's registry on 127.0.0.1:5000. On
+# other Hosts, name images that flintlockd there can pull.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: demo
+---
+# The Holder: the identity a Consumer claims as. The Client Library creates
+# the claim and its Secret, reads the Pool, and requests the Holder's tokens.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: demo-holder
+  namespace: demo
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: demo-holder
+  namespace: demo
+rules:
+  - apiGroups: ["battery.liquidmetal-x.dev"]
+    resources: ["microvmclaims"]
+    verbs: ["create", "get", "patch", "delete"]
+  - apiGroups: ["battery.liquidmetal-x.dev"]
+    resources: ["pools"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["serviceaccounts/token"]
+    verbs: ["create"]
+    resourceNames: ["demo-holder"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: demo-holder
+  namespace: demo
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: demo-holder
+subjects:
+  - kind: ServiceAccount
+    name: demo-holder
+    namespace: demo
+---
+# Two warm MicroVMs on the Hosts the selector matches. Each claim takes one,
+# and battery starts a new one in its place (ImmediateOnLease).
+apiVersion: battery.liquidmetal-x.dev/v1alpha1
+kind: Pool
+metadata:
+  name: demo
+  namespace: demo
+spec:
+  size: 2
+  template:
+    vcpu: 1
+    memoryInMb: 1024
+    kernel:
+      image: 127.0.0.1:5000/bo-trial/kernel:6.1
+      filename: boot/vmlinux
+    rootVolume:
+      containerSource: 127.0.0.1:5000/bo-trial/rootfs:24.04
+    interfaces:
+      - deviceId: eth1
+        type: Tap
+  placement:
+    nodeSelector:
+      battery.liquidmetal-x.dev/host: "true"
+  replenishment:
+    type: ImmediateOnLease
+  hooks:
+    # Runs in each new MicroVM, through its guest agent, before it is warm.
+    create: ["uname -r"]
+    failurePolicy: DeleteAndReplace
+  lease:
+    heartbeatInterval: 10s
+    expiryThreshold: 30s

@@ -1,0 +1,8 @@
+# The docs site on GitHub Pages (.github/workflows/pages.yml).
+title: battery-operator
+description: Warm pools of Firecracker MicroVMs, declared and claimed as Kubernetes resources.
+theme: jekyll-theme-primer
+repository: phoban01/battery-operator
+baseurl: /battery-operator
+exclude:
+  - README.md
