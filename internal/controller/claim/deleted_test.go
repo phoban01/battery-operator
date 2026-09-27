@@ -25,7 +25,7 @@ import (
 
 	"github.com/phoban01/battery-operator/internal/battery"
 	"github.com/phoban01/battery-operator/internal/clock"
-	"github.com/phoban01/battery-operator/internal/controller/claimscope"
+	"github.com/phoban01/battery-operator/internal/reconcile"
 )
 
 //= docs/requirements/02-claims.md#renewal
@@ -70,10 +70,10 @@ func TestExpireDeletedLeavesOtherClaims(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			s, _ := newScope(t, boundClaim(), nil)
 			res, err := sub.Reconcile(context.Background(), s)
-			if err != nil || res != (claimscope.Result{}) {
+			if err != nil || res != (reconcile.Result{}) {
 				t.Errorf("Reconcile = %+v, %v, want the chain to go on", res, err)
 			}
-			wantBound(t, s.Claim)
+			wantBound(t, s.Object)
 		})
 	}
 }

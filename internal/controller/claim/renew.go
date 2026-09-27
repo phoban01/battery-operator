@@ -28,6 +28,7 @@ import (
 	batteryv1alpha1 "github.com/phoban01/battery-operator/api/v1alpha1"
 	"github.com/phoban01/battery-operator/internal/battery"
 	"github.com/phoban01/battery-operator/internal/controller/claimscope"
+	"github.com/phoban01/battery-operator/internal/reconcile"
 )
 
 // holdsLease reports whether c is a Bound claim with a Lease that is not
@@ -50,14 +51,14 @@ func pendingRenewal(c *batteryv1alpha1.MicroVMClaim) bool {
 // id stays, so that the release of a deleted claim can still name it, and
 // observedRenewTime stays as it was.
 func expire(s *claimscope.Scope, why string) {
-	st := &s.Claim.Status
+	st := &s.Object.Status
 	st.Phase = batteryv1alpha1.MicroVMClaimExpired
 	meta.SetStatusCondition(&st.Conditions, metav1.Condition{
 		Type:               batteryv1alpha1.ConditionBound,
 		Status:             metav1.ConditionFalse,
 		Reason:             batteryv1alpha1.ReasonLeaseExpired,
 		Message:            why,
-		ObservedGeneration: s.Claim.Generation,
+		ObservedGeneration: s.Object.Generation,
 		LastTransitionTime: metav1.NewTime(s.Clock.Now()),
 	})
 	s.Log.Info("Expired MicroVMClaim", "lease", st.LeaseID, "why", why)
@@ -71,7 +72,7 @@ func expire(s *claimscope.Scope, why string) {
 func retryAfter(s *claimscope.Scope, b Backoff) time.Duration {
 	now := s.Clock.Now()
 	since := now
-	if c := meta.FindStatusCondition(s.Claim.Status.Conditions, batteryv1alpha1.ConditionSynced); c != nil &&
+	if c := meta.FindStatusCondition(s.Object.Status.Conditions, batteryv1alpha1.ConditionSynced); c != nil &&
 		c.Status == metav1.ConditionFalse {
 		since = c.LastTransitionTime.Time
 	}
@@ -106,13 +107,13 @@ type Renew struct {
 	Backoff Backoff
 }
 
-var _ claimscope.Subreconciler = Renew{}
+var _ reconcile.SubReconciler[*claimscope.Scope] = Renew{}
 
-// Reconcile implements claimscope.Subreconciler.
-func (r Renew) Reconcile(ctx context.Context, s *claimscope.Scope) (claimscope.Result, error) {
-	c := s.Claim
+// Reconcile implements reconcile.SubReconciler[*claimscope.Scope].
+func (r Renew) Reconcile(ctx context.Context, s *claimscope.Scope) (reconcile.Result, error) {
+	c := s.Object
 	if !holdsLease(c) || !pendingRenewal(c) {
-		return claimscope.Result{}, nil
+		return reconcile.Result{}, nil
 	}
 	// The renewTime relayed is the one this reconcile read: a later patch
 	// by the Holder leaves the claim with a pending renewal again.
@@ -141,7 +142,7 @@ func (r Renew) Reconcile(ctx context.Context, s *claimscope.Scope) (claimscope.R
 		// (BA-010), so NOT_FOUND means the sweep or a release has ended
 		// it, and it will never be held again.
 		expire(s, fmt.Sprintf("battery no longer holds Lease %s", c.Status.LeaseID))
-		return claimscope.Result{Stop: true}, nil
+		return reconcile.Result{Stop: true}, nil
 	//= docs/requirements/02-claims.md#renewal
 	//# If battery's `Heartbeat` for a Bound claim fails in transit,
 	//# then the Claim Controller SHALL keep the claim `Bound` with the Lease
@@ -153,11 +154,11 @@ func (r Renew) Reconcile(ctx context.Context, s *claimscope.Scope) (claimscope.R
 		// no expiry check runs until a Heartbeat is answered.
 		after := retryAfter(s, r.Backoff)
 		s.Log.V(1).Info("Kept MicroVMClaim Bound after Heartbeat failed in transit", "retryAfter", after)
-		return claimscope.Result{RequeueAfter: after}, nil
+		return reconcile.Result{RequeueAfter: after}, nil
 	case err != nil:
 		// CL-041: Synced records it, and the controller's rate limiter
 		// retries it with backoff.
-		return claimscope.Result{Stop: true}, fmt.Errorf("renewing Lease %s: %w", c.Status.LeaseID, err)
+		return reconcile.Result{Stop: true}, fmt.Errorf("renewing Lease %s: %w", c.Status.LeaseID, err)
 	}
 
 	//= docs/requirements/02-claims.md#renewal
@@ -172,7 +173,7 @@ func (r Renew) Reconcile(ctx context.Context, s *claimscope.Scope) (claimscope.R
 	//# While a claim is `Bound` and the Lease expiry time in its
 	//# status has not passed, the Claim Controller SHALL reconcile the claim
 	//# again once that time has passed.
-	return claimscope.Result{RequeueAfter: until(s, expiresAt)}, nil
+	return reconcile.Result{RequeueAfter: until(s, expiresAt)}, nil
 }
 
 // until is how long from now until t, at least a second, for a requeue

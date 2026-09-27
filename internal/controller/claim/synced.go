@@ -26,6 +26,7 @@ import (
 	batteryv1alpha1 "github.com/phoban01/battery-operator/api/v1alpha1"
 	"github.com/phoban01/battery-operator/internal/battery"
 	"github.com/phoban01/battery-operator/internal/controller/claimscope"
+	"github.com/phoban01/battery-operator/internal/reconcile"
 )
 
 // The Client methods, as a claimscope.BatteryCall names them.
@@ -60,18 +61,18 @@ func answered(err error) bool {
 // condition as it was.
 type Synced struct{}
 
-var _ claimscope.Subreconciler = Synced{}
+var _ reconcile.SubReconciler[*claimscope.Scope] = Synced{}
 
-// Reconcile implements claimscope.Subreconciler.
-func (Synced) Reconcile(_ context.Context, s *claimscope.Scope) (claimscope.Result, error) {
+// Reconcile implements reconcile.SubReconciler[*claimscope.Scope].
+func (Synced) Reconcile(_ context.Context, s *claimscope.Scope) (reconcile.Result, error) {
 	call := s.BatteryCall
 	if call == nil {
-		return claimscope.Result{}, nil
+		return reconcile.Result{}, nil
 	}
 
 	cond := metav1.Condition{
 		Type:               batteryv1alpha1.ConditionSynced,
-		ObservedGeneration: s.Claim.Generation,
+		ObservedGeneration: s.Object.Generation,
 		LastTransitionTime: metav1.NewTime(s.Clock.Now()),
 	}
 	switch {
@@ -102,6 +103,6 @@ func (Synced) Reconcile(_ context.Context, s *claimscope.Scope) (claimscope.Resu
 		cond.Reason = batteryv1alpha1.ReasonBatteryError
 		cond.Message = call.Method + " failed: " + call.Err.Error()
 	}
-	meta.SetStatusCondition(&s.Claim.Status.Conditions, cond)
-	return claimscope.Result{}, nil
+	meta.SetStatusCondition(&s.Object.Status.Conditions, cond)
+	return reconcile.Result{}, nil
 }

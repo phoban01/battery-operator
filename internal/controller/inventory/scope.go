@@ -27,12 +27,13 @@ import (
 
 	"github.com/phoban01/battery-operator/internal/batterysidecar"
 	"github.com/phoban01/battery-operator/internal/clock"
+	"github.com/phoban01/battery-operator/internal/reconcile"
 )
 
-// The Inventory Controller's scope, subreconciler and chain are local, in
-// the shape of the shared Scope[T], SubReconciler[T] and chain that #58
-// brings (CLAUDE.md, "Controller structure"). Its "object" is battery's
-// configuration: the controller builds the scope from the Nodes, the
+// The Inventory Controller runs the shared chain of internal/reconcile
+// (CLAUDE.md, "Controller structure") over a scope of its own. Its
+// "object" is battery's configuration, not a Kubernetes object, so its
+// scope embeds no reconcile.Scope: the controller builds the scope from the Nodes, the
 // configuration as stored and battery's client certificate, and the
 // subreconcilers decide what battery's Hosts should be and whether battery
 // needs a restart. Writing that configuration and restarting battery is
@@ -79,9 +80,6 @@ type Scope struct {
 	Restarter Restarter
 	Log       logr.Logger
 	Clock     clock.Clock
-
-	// Result is the chain's result so far.
-	Result Result
 }
 
 // State is what the Inventory Controller remembers between reconciles.
@@ -113,51 +111,6 @@ func NewState() *State { return &State{seen: map[string]seen{}} }
 // open.
 func (st *State) WindowOpened() (time.Time, bool) {
 	return st.windowOpened, !st.windowOpened.IsZero()
-}
-
-// Result is what a subreconciler asks of the chain.
-type Result struct {
-	// Stop ends the chain after this subreconciler.
-	Stop bool
-	// RequeueAfter, when positive, asks for another reconcile after this
-	// long.
-	RequeueAfter time.Duration
-}
-
-// merge folds o into the result so far: the chain stops if either asks it
-// to, and the shortest positive RequeueAfter wins.
-func (r Result) merge(o Result) Result {
-	out := Result{Stop: r.Stop || o.Stop, RequeueAfter: r.RequeueAfter}
-	if o.RequeueAfter > 0 && (out.RequeueAfter <= 0 || o.RequeueAfter < out.RequeueAfter) {
-		out.RequeueAfter = o.RequeueAfter
-	}
-	return out
-}
-
-// Subreconciler is one concern of the Inventory Controller.
-type Subreconciler interface {
-	// Reconcile changes the scope and says whether the chain continues,
-	// requeues or stops. An error stops the chain.
-	Reconcile(ctx context.Context, s *Scope) (Result, error)
-}
-
-// Chain is the Inventory Controller's subreconcilers, in order.
-type Chain []Subreconciler
-
-// Run runs the chain until a subreconciler stops it or fails, and folds
-// each one's result into s.Result.
-func (c Chain) Run(ctx context.Context, s *Scope) error {
-	for _, sub := range c {
-		r, err := sub.Reconcile(ctx, s)
-		s.Result = s.Result.merge(r)
-		if err != nil {
-			return err
-		}
-		if r.Stop {
-			return nil
-		}
-	}
-	return nil
 }
 
 // Options are the Inventory Controller's timings.
@@ -208,8 +161,8 @@ func (o Options) Validate() error {
 }
 
 // NewChain is the Inventory Controller's chain, in order.
-func NewChain(o Options) Chain {
-	return Chain{
+func NewChain(o Options) reconcile.Chain[*Scope] {
+	return reconcile.Steps[*Scope](
 		Restore{},
 		Resume{},
 		Admit{},
@@ -218,5 +171,5 @@ func NewChain(o Options) Chain {
 		Window{Length: o.RestartWindow},
 		Drain{Timeout: o.DrainTimeout},
 		Apply{},
-	}
+	)
 }

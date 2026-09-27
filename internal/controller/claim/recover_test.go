@@ -26,7 +26,7 @@ import (
 
 	batteryv1alpha1 "github.com/phoban01/battery-operator/api/v1alpha1"
 	"github.com/phoban01/battery-operator/internal/battery"
-	"github.com/phoban01/battery-operator/internal/controller/claimscope"
+	"github.com/phoban01/battery-operator/internal/reconcile"
 )
 
 // recovered is a RecoveredLeases in which the recovery saw lease-1 recorded
@@ -154,20 +154,20 @@ func TestRecoverLeavesAClaimTheRecoveryDidNotSee(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			s, _ := newScope(t, tc.claim, &leaseStub{})
-			before := s.Claim.Status.DeepCopy()
+			before := s.Object.Status.DeepCopy()
 
 			res, err := Recover{Leases: tc.leases}.Reconcile(context.Background(), s)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if res != (claimscope.Result{}) {
+			if res != (reconcile.Result{}) {
 				t.Errorf("result = %+v, want the chain to go on untouched", res)
 			}
 			if s.BatteryCall != nil {
 				t.Errorf("BatteryCall = %+v, want none", s.BatteryCall)
 			}
-			if !apiequality.Semantic.DeepEqual(before, &s.Claim.Status) {
-				t.Errorf("status changed to %+v", s.Claim.Status)
+			if !apiequality.Semantic.DeepEqual(before, &s.Object.Status) {
+				t.Errorf("status changed to %+v", s.Object.Status)
 			}
 		})
 	}

@@ -39,9 +39,9 @@ import (
 
 // PoolReconciler is the Pool Controller (docs/requirements/03-pools.md): it
 // declares each Pool to battery and mirrors battery's view of it into the
-// Pool's status. It is a thin layer: it builds a poolScope,
-// runs poolChain and patches the Pool once. The logic, and its
-// requirement citations, are in the subreconcilers.
+// Pool's status. It is a thin layer: it builds a poolScope, runs poolChain
+// and patches the Pool once. The logic, and its requirement citations, are
+// in the subreconcilers.
 type PoolReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
@@ -93,9 +93,9 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	}
 	s := newPoolScope(pool, r.Client, r.Battery, r.Hosts, logf.FromContext(ctx), clk)
 	s.Reseeds = r.reseeds
-	chainErr := runPoolChain(ctx, s, poolChain())
-	patchErr := s.patch(ctx)
-	return s.Result, errors.Join(chainErr, patchErr)
+	res, chainErr := poolChain().Run(ctx, s)
+	patchErr := s.Patch(ctx)
+	return res.Ctrl(), errors.Join(chainErr, patchErr)
 }
 
 // SetupWithManager sets up the controller with the Manager. Besides the

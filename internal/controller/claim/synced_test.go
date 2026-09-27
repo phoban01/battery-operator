@@ -40,7 +40,7 @@ func syncedAfter(t *testing.T, phase batteryv1alpha1.MicroVMClaimPhase, err erro
 	if _, rerr := (Synced{}).Reconcile(context.Background(), s); rerr != nil {
 		t.Fatal(rerr)
 	}
-	return meta.FindStatusCondition(s.Claim.Status.Conditions, batteryv1alpha1.ConditionSynced), s.Claim.Status.Phase
+	return meta.FindStatusCondition(s.Object.Status.Conditions, batteryv1alpha1.ConditionSynced), s.Object.Status.Phase
 }
 
 //= docs/requirements/02-claims.md#failed-calls
@@ -113,7 +113,7 @@ func TestSyncedTrueWhenBatteryAnswers(t *testing.T) {
 	if _, err := (Synced{}).Reconcile(context.Background(), s); err != nil {
 		t.Fatal(err)
 	}
-	if !meta.IsStatusConditionTrue(s.Claim.Status.Conditions, batteryv1alpha1.ConditionSynced) {
+	if !meta.IsStatusConditionTrue(s.Object.Status.Conditions, batteryv1alpha1.ConditionSynced) {
 		t.Error("Synced stayed false after battery answered")
 	}
 }
@@ -125,7 +125,7 @@ func TestSyncedUnchangedWithoutACall(t *testing.T) {
 	if _, err := (Synced{}).Reconcile(context.Background(), s); err != nil {
 		t.Fatal(err)
 	}
-	if len(s.Claim.Status.Conditions) != 0 {
-		t.Errorf("conditions = %+v, want none", s.Claim.Status.Conditions)
+	if len(s.Object.Status.Conditions) != 0 {
+		t.Errorf("conditions = %+v, want none", s.Object.Status.Conditions)
 	}
 }

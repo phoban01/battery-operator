@@ -33,6 +33,7 @@ import (
 	"github.com/phoban01/battery-operator/internal/battery"
 	"github.com/phoban01/battery-operator/internal/batterysidecar"
 	"github.com/phoban01/battery-operator/internal/clock"
+	"github.com/phoban01/battery-operator/internal/reconcile"
 )
 
 // The timings of these tests: different, so that a controller that
@@ -193,15 +194,13 @@ func (h *harness) scope() *Scope {
 }
 
 // reconcile runs the whole chain once.
-func (h *harness) reconcile() (Result, error) {
+func (h *harness) reconcile() (reconcile.Result, error) {
 	h.t.Helper()
-	s := h.scope()
-	err := NewChain(h.options).Run(context.Background(), s)
-	return s.Result, err
+	return NewChain(h.options).Run(context.Background(), h.scope())
 }
 
 // mustReconcile runs the chain and fails the test on an error.
-func (h *harness) mustReconcile() Result {
+func (h *harness) mustReconcile() reconcile.Result {
 	h.t.Helper()
 	r, err := h.reconcile()
 	if err != nil {
@@ -211,7 +210,7 @@ func (h *harness) mustReconcile() Result {
 }
 
 // advance moves the clock on by d and reconciles, as the requeue would.
-func (h *harness) advance(d time.Duration) Result {
+func (h *harness) advance(d time.Duration) reconcile.Result {
 	h.t.Helper()
 	h.clock.Advance(d)
 	return h.mustReconcile()

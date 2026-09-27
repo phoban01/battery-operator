@@ -31,6 +31,7 @@ import (
 	"github.com/phoban01/battery-operator/internal/controller/claimscope"
 	"github.com/phoban01/battery-operator/internal/fakebattery"
 	"github.com/phoban01/battery-operator/internal/fakeflintlock"
+	"github.com/phoban01/battery-operator/internal/reconcile"
 )
 
 // lifecycleTimeout bounds each wait of the lifecycle test.
@@ -126,32 +127,32 @@ func TestRenewalAndExpiryAgainstTheFakeBattery(t *testing.T) {
 	})
 
 	c := newFakeClient(t, aClaim(batteryv1alpha1.ReleaseFinalizer))
-	chain := claimscope.Chain{
-		Steps: []claimscope.Subreconciler{
+	chain := reconcile.Chain[*claimscope.Scope]{
+		Steps: []reconcile.SubReconciler[*claimscope.Scope]{
 			Bind{},
 			ExpireDeleted{},
 			Renew{Backoff: boundBackoff},
 			CheckExpiry{Backoff: boundBackoff},
 		},
-		Finally: []claimscope.Subreconciler{Synced{}},
+		Finally: []reconcile.SubReconciler[*claimscope.Scope]{Synced{}},
 	}
-	reconcile := func() *batteryv1alpha1.MicroVMClaim {
+	reconcileOnce := func() *batteryv1alpha1.MicroVMClaim {
 		t.Helper()
 		s := scopeFor(t, c, claimKey, conn)
 		s.Clock = clock.Real{}
-		if err := chain.Run(ctx, s); err != nil {
+		if _, err := chain.Run(ctx, s); err != nil {
 			t.Fatalf("chain: %v", err)
 		}
 		return patched(t, s, c)
 	}
 
 	// Bound, then battery's expiry read with ListLeases.
-	got := reconcile()
+	got := reconcileOnce()
 	wantBound(t, got)
 	if got.Status.LeaseExpiresAt != nil {
 		t.Fatalf("leaseExpiresAt = %v right after binding, want none", got.Status.LeaseExpiresAt)
 	}
-	got = reconcile()
+	got = reconcileOnce()
 	wantBound(t, got)
 	if got.Status.LeaseExpiresAt == nil {
 		t.Fatal("no leaseExpiresAt after CheckExpiry")
@@ -171,7 +172,7 @@ func TestRenewalAndExpiryAgainstTheFakeBattery(t *testing.T) {
 	if err := c.Update(ctx, got); err != nil {
 		t.Fatal(err)
 	}
-	got = reconcile()
+	got = reconcileOnce()
 	wantBound(t, got)
 	if !got.Status.LeaseExpiresAt.After(first) {
 		t.Fatalf("leaseExpiresAt = %v after renewing, want later than %v", got.Status.LeaseExpiresAt, first)
@@ -184,7 +185,7 @@ func TestRenewalAndExpiryAgainstTheFakeBattery(t *testing.T) {
 	// expiry passes, and then goes Expired.
 	renewedExpiry := got.Status.LeaseExpiresAt.Time
 	eventually(t, "the claim to go Expired", func() bool {
-		got = reconcile()
+		got = reconcileOnce()
 		return got.Status.Phase == batteryv1alpha1.MicroVMClaimExpired
 	})
 	if time.Now().Before(renewedExpiry) {

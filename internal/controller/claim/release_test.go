@@ -33,6 +33,7 @@ import (
 	"github.com/phoban01/battery-operator/internal/battery"
 	"github.com/phoban01/battery-operator/internal/clock"
 	"github.com/phoban01/battery-operator/internal/controller/claimscope"
+	"github.com/phoban01/battery-operator/internal/reconcile"
 )
 
 // testLease is the Lease the deleted claims in these tests are Bound on.
@@ -59,15 +60,15 @@ func (b *releaseStub) ReleaseVM(_ context.Context, leaseID string) error {
 
 // releaseChain is the controller's chain, as the claims in these tests
 // see it.
-func releaseChain() claimscope.Chain {
-	return claimscope.Chain{
-		Steps: []claimscope.Subreconciler{
+func releaseChain() reconcile.Chain[*claimscope.Scope] {
+	return reconcile.Chain[*claimscope.Scope]{
+		Steps: []reconcile.SubReconciler[*claimscope.Scope]{
 			Release{Backoff: testBackoff},
 			EnsureFinalizer{},
 			Bind{},
 			Pending{Backoff: testBackoff},
 		},
-		Finally: []claimscope.Subreconciler{Synced{}},
+		Finally: []reconcile.SubReconciler[*claimscope.Scope]{Synced{}},
 	}
 }
 
@@ -95,23 +96,23 @@ func aDeletedClaim(leaseID string, finalizers ...string) *batteryv1alpha1.MicroV
 // reconcileDeletedAt runs releaseChain on a fresh scope for the claim in c
 // at now and patches it. It returns the chain's result, the claim as
 // stored, or nil once it is gone, and the chain's error.
-func reconcileDeletedAt(t *testing.T, c client.Client, b battery.Client, now time.Time) (claimscope.Result, *batteryv1alpha1.MicroVMClaim, error) {
+func reconcileDeletedAt(t *testing.T, c client.Client, b battery.Client, now time.Time) (reconcile.Result, *batteryv1alpha1.MicroVMClaim, error) {
 	t.Helper()
 	ctx := context.Background()
 	s := scopeFor(t, c, claimKey, b)
 	s.Clock = clock.NewFake(now)
-	runErr := releaseChain().Run(ctx, s)
+	res, runErr := releaseChain().Run(ctx, s)
 	if err := s.Patch(ctx); err != nil {
 		t.Fatalf("Patch: %v", err)
 	}
 	got := &batteryv1alpha1.MicroVMClaim{}
 	if err := c.Get(ctx, claimKey, got); err != nil {
 		if apierrors.IsNotFound(err) {
-			return s.Result, nil, runErr
+			return res, nil, runErr
 		}
 		t.Fatal(err)
 	}
-	return s.Result, got, runErr
+	return res, got, runErr
 }
 
 //= docs/requirements/02-claims.md#release
@@ -315,7 +316,7 @@ func TestReleaseContinuesForALiveClaim(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res != (claimscope.Result{}) || s.BatteryCall != nil {
+	if res != (reconcile.Result{}) || s.BatteryCall != nil {
 		t.Errorf("result = %+v, call = %+v; want the chain to continue with no call", res, s.BatteryCall)
 	}
 }

@@ -27,6 +27,7 @@ import (
 
 	"github.com/phoban01/battery-operator/internal/batterysidecar"
 	"github.com/phoban01/battery-operator/internal/execagent"
+	"github.com/phoban01/battery-operator/internal/reconcile"
 )
 
 // TestAnnotationsAreTheExecAgents checks that the Node report the
@@ -97,7 +98,7 @@ func with(n *corev1.Node, change func(*corev1.Node)) *corev1.Node {
 func TestSettleWaitsForTheSettleTime(t *testing.T) {
 	h := newHarness(t)
 	sub := Settle{Time: settle}
-	run := func(observed Hosts) (*Scope, Result) {
+	run := func(observed Hosts) (*Scope, reconcile.Result) {
 		t.Helper()
 		s := h.scope()
 		s.Observed = observed

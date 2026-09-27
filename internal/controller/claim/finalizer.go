@@ -19,10 +19,9 @@ package claim
 import (
 	"context"
 
-	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
-
 	batteryv1alpha1 "github.com/phoban01/battery-operator/api/v1alpha1"
 	"github.com/phoban01/battery-operator/internal/controller/claimscope"
+	"github.com/phoban01/battery-operator/internal/reconcile"
 )
 
 // EnsureFinalizer puts the release finalizer on a claim.
@@ -35,15 +34,22 @@ import (
 //
 // A claim that is being deleted also stops the chain: releasing its Lease
 // is Release's (CL-020, CL-021), and no deleted claim may
-// be bound.
+// be bound. That guard is the claim's own; adding the finalizer is the
+// shared reconcile.EnsureFinalizer.
 type EnsureFinalizer struct{}
 
-var _ claimscope.Subreconciler = EnsureFinalizer{}
+var _ reconcile.SubReconciler[*claimscope.Scope] = EnsureFinalizer{}
 
-// Reconcile implements claimscope.Subreconciler.
-func (EnsureFinalizer) Reconcile(_ context.Context, s *claimscope.Scope) (claimscope.Result, error) {
-	if !s.Claim.DeletionTimestamp.IsZero() {
-		return claimscope.Result{Stop: true}, nil
+// releaseFinalizer adds the release finalizer, and stops the chain when it
+// does.
+var releaseFinalizer = reconcile.EnsureFinalizer[*claimscope.Scope, *batteryv1alpha1.MicroVMClaim]{
+	Name: batteryv1alpha1.ReleaseFinalizer,
+}
+
+// Reconcile implements reconcile.SubReconciler[*claimscope.Scope].
+func (EnsureFinalizer) Reconcile(ctx context.Context, s *claimscope.Scope) (reconcile.Result, error) {
+	if !s.Object.DeletionTimestamp.IsZero() {
+		return reconcile.Result{Stop: true}, nil
 	}
 
 	//= docs/requirements/02-claims.md#binding
@@ -51,9 +57,5 @@ func (EnsureFinalizer) Reconcile(_ context.Context, s *claimscope.Scope) (claims
 	//# reconciled, the Claim Controller SHALL add the finalizer
 	//# `battery.liquidmetal-x.dev/release` to the claim before it calls battery's
 	//# `ClaimVM` for the claim's Pool.
-	if controllerutil.AddFinalizer(s.Claim, batteryv1alpha1.ReleaseFinalizer) {
-		s.Log.V(1).Info("Added the release finalizer to MicroVMClaim")
-		return claimscope.Result{Stop: true}, nil
-	}
-	return claimscope.Result{}, nil
+	return releaseFinalizer.Reconcile(ctx, s)
 }

@@ -38,6 +38,7 @@ import (
 	"github.com/phoban01/battery-operator/internal/clock"
 	"github.com/phoban01/battery-operator/internal/fakebattery"
 	"github.com/phoban01/battery-operator/internal/fakeflintlock"
+	"github.com/phoban01/battery-operator/internal/reconcile"
 )
 
 // heldDeletedPool is deletedPool, with pre-lease hooks and the quarantine
@@ -52,15 +53,15 @@ func heldDeletedPool(b *stubBattery, st battery.PoolStatus) (*batteryv1alpha1.Po
 	return pool, ref
 }
 
-// runDeletion runs the chain for a deleted Pool and returns its error.
-func runDeletion(t *testing.T, s *poolScope) error {
+// runDeletion runs the chain for a deleted Pool and returns its result and error.
+func runDeletion(t *testing.T, s *poolScope) (reconcile.Result, error) {
 	t.Helper()
-	return runPoolChain(context.Background(), s, poolChain())
+	return poolChain().Run(context.Background(), s)
 }
 
 func wantReady(t *testing.T, s *poolScope, reason string) *metav1.Condition {
 	t.Helper()
-	ready := readyCondition(s.Pool)
+	ready := readyCondition(s.Object)
 	if ready == nil || ready.Status != metav1.ConditionFalse || ready.Reason != reason {
 		t.Fatalf("Ready = %+v, want False/%s", ready, reason)
 	}
@@ -98,7 +99,7 @@ func TestDeletedPoolIsDrainedThenDeleted(t *testing.T) {
 	pool, ref := heldDeletedPool(b, battery.PoolStatus{Available: 2})
 	s := newTestPoolScope(pool, b)
 
-	if err := runDeletion(t, s); err != nil {
+	if _, err := runDeletion(t, s); err != nil {
 		t.Fatalf("chain: %v", err)
 	}
 	wantCalls(t, b,
@@ -106,7 +107,7 @@ func TestDeletedPoolIsDrainedThenDeleted(t *testing.T) {
 		"ClaimVM ci/runners", "ReleaseVM lease-1",
 		"ClaimVM ci/runners", "ReleaseVM lease-2",
 		"DeletePool ci/runners")
-	if controllerutil.ContainsFinalizer(s.Pool, PoolFinalizer) {
+	if controllerutil.ContainsFinalizer(s.Object, PoolFinalizer) {
 		t.Error("the finalizer is still on the Pool battery deleted")
 	}
 	if _, ok := b.spec(ref); ok {
@@ -118,7 +119,7 @@ func TestDeletedPoolIsDrainedThenDeleted(t *testing.T) {
 	pool2, _ := heldDeletedPool(b2, battery.PoolStatus{Available: 1, Leased: 1})
 	before := b2.pools[ref]
 	s2 := newTestPoolScope(pool2, b2)
-	_ = runDeletion(t, s2)
+	_, _ = runDeletion(t, s2)
 	got, _ := b2.spec(ref)
 	if got.Size != 0 ||
 		got.Replenishment.Type != poolmgrv1.ReplenishmentStrategyType_MIN_SIZE_THRESHOLD ||
@@ -141,7 +142,7 @@ func TestADrainedPoolIsNotUpdatedAgain(t *testing.T) {
 	pool, ref := heldDeletedPool(b, battery.PoolStatus{Available: 1})
 	b.pools[ref] = drainedSpec(b.pools[ref])
 	s := newTestPoolScope(pool, b)
-	if err := runDeletion(t, s); err != nil {
+	if _, err := runDeletion(t, s); err != nil {
 		t.Fatalf("chain: %v", err)
 	}
 	wantCalls(t, b, "DeletePool ci/runners", "GetPool ci/runners",
@@ -156,18 +157,19 @@ func TestADeletedPoolIsNotDrainedWhileProvisioning(t *testing.T) {
 	b := newStubBattery()
 	pool, _ := heldDeletedPool(b, battery.PoolStatus{Available: 1, Provisioning: 1})
 	s := newTestPoolScope(pool, b)
-	if err := runDeletion(t, s); err != nil {
+	res, err := runDeletion(t, s)
+	if err != nil {
 		t.Fatalf("chain: %v", err)
 	}
 	wantCalls(t, b, "DeletePool ci/runners", "GetPool ci/runners")
 	wantReady(t, s, PoolReasonDraining)
-	if s.Result.RequeueAfter != poolDrainRequeue {
-		t.Errorf("RequeueAfter = %v, want %v", s.Result.RequeueAfter, poolDrainRequeue)
+	if res.RequeueAfter != poolDrainRequeue {
+		t.Errorf("RequeueAfter = %v, want %v", res.RequeueAfter, poolDrainRequeue)
 	}
-	if !controllerutil.ContainsFinalizer(s.Pool, PoolFinalizer) {
+	if !controllerutil.ContainsFinalizer(s.Object, PoolFinalizer) {
 		t.Error("the finalizer went while battery still holds the Pool")
 	}
-	if st := s.Pool.Status; st.Available != 1 || st.Provisioning != 1 {
+	if st := s.Object.Status; st.Available != 1 || st.Provisioning != 1 {
 		t.Errorf("status counts = %+v, want battery's", st)
 	}
 }
@@ -194,7 +196,7 @@ func TestADeletedPoolWaitsForItsClaims(t *testing.T) {
 	b.leases["claim-a"], b.leases["claim-b"] = ref, ref
 	s := newTestPoolScope(pool, b)
 
-	err := runDeletion(t, s)
+	_, err := runDeletion(t, s)
 	if !errors.Is(err, battery.ErrFailedPrecondition) {
 		t.Fatalf("chain error = %v, want the refusal, for the workqueue's backoff", err)
 	}
@@ -210,26 +212,26 @@ func TestADeletedPoolWaitsForItsClaims(t *testing.T) {
 	if !strings.Contains(ready.Message, "2 leased and 1 quarantined") {
 		t.Errorf("Ready message = %q, want the leased and quarantined counts", ready.Message)
 	}
-	if !controllerutil.ContainsFinalizer(s.Pool, PoolFinalizer) {
+	if !controllerutil.ContainsFinalizer(s.Object, PoolFinalizer) {
 		t.Error("the finalizer went while battery still holds the Pool")
 	}
-	if st := s.Pool.Status; st.Available != 0 || st.Leased != 2 || st.Quarantined != 1 {
+	if st := s.Object.Status; st.Available != 0 || st.Leased != 2 || st.Quarantined != 1 {
 		t.Errorf("status counts = %+v, want battery's after the drain", st)
 	}
 
 	// The claims end; the next reconcile deletes the Pool.
 	b.status[ref] = battery.PoolStatus{Quarantined: 1}
-	s = newTestPoolScope(s.Pool, b)
-	if err := runDeletion(t, s); !errors.Is(err, battery.ErrFailedPrecondition) {
+	s = newTestPoolScope(s.Object, b)
+	if _, err := runDeletion(t, s); !errors.Is(err, battery.ErrFailedPrecondition) {
 		t.Fatalf("chain error with a quarantined MicroVM = %v, want the refusal", err)
 	}
 	wantReady(t, s, PoolReasonDeletionBlocked)
 	b.status[ref] = battery.PoolStatus{}
-	s = newTestPoolScope(s.Pool, b)
-	if err := runDeletion(t, s); err != nil {
+	s = newTestPoolScope(s.Object, b)
+	if _, err := runDeletion(t, s); err != nil {
 		t.Fatalf("chain: %v", err)
 	}
-	if controllerutil.ContainsFinalizer(s.Pool, PoolFinalizer) {
+	if controllerutil.ContainsFinalizer(s.Object, PoolFinalizer) {
 		t.Error("the finalizer is still on the Pool battery deleted")
 	}
 }
@@ -249,12 +251,13 @@ func TestADeletedPoolDrainingSaysSo(t *testing.T) {
 		pool, ref := heldDeletedPool(b, battery.PoolStatus{})
 		b.hidden[ref] = 1
 		s := newTestPoolScope(pool, b)
-		if err := runDeletion(t, s); err != nil {
+		res, err := runDeletion(t, s)
+		if err != nil {
 			t.Fatalf("chain: %v", err)
 		}
 		wantReady(t, s, PoolReasonDraining)
-		if s.Result.RequeueAfter != poolDrainRequeue {
-			t.Errorf("RequeueAfter = %v, want %v", s.Result.RequeueAfter, poolDrainRequeue)
+		if res.RequeueAfter != poolDrainRequeue {
+			t.Errorf("RequeueAfter = %v, want %v", res.RequeueAfter, poolDrainRequeue)
 		}
 	})
 
@@ -263,11 +266,11 @@ func TestADeletedPoolDrainingSaysSo(t *testing.T) {
 		pool, _ := heldDeletedPool(b, battery.PoolStatus{Available: 1})
 		b.claimErr = battery.ErrUnavailable
 		s := newTestPoolScope(pool, b)
-		if err := runDeletion(t, s); !errors.Is(err, battery.ErrUnavailable) {
+		if _, err := runDeletion(t, s); !errors.Is(err, battery.ErrUnavailable) {
 			t.Fatalf("chain error = %v, want the failed claim", err)
 		}
 		wantReady(t, s, PoolReasonDraining)
-		if !controllerutil.ContainsFinalizer(s.Pool, PoolFinalizer) {
+		if !controllerutil.ContainsFinalizer(s.Object, PoolFinalizer) {
 			t.Error("the finalizer went while battery still holds the Pool")
 		}
 	})
@@ -280,11 +283,11 @@ func TestADeletedPoolBatteryLosesIsLetGo(t *testing.T) {
 	pool := deletedPool()
 	b.deleteErr = battery.ErrFailedPrecondition
 	s := newTestPoolScope(pool, b)
-	if err := runDeletion(t, s); err != nil {
+	if _, err := runDeletion(t, s); err != nil {
 		t.Fatalf("chain: %v", err)
 	}
 	wantCalls(t, b, "DeletePool ci/runners", "GetPool ci/runners")
-	if controllerutil.ContainsFinalizer(s.Pool, PoolFinalizer) {
+	if controllerutil.ContainsFinalizer(s.Object, PoolFinalizer) {
 		t.Error("the finalizer is still on a Pool battery does not know")
 	}
 }
@@ -313,7 +316,7 @@ func TestPoolDeletionAgainstTheFakeBattery(t *testing.T) {
 	r := &PoolReconciler{Client: k8s, Battery: bc, Hosts: newStubHosts(testHostA), Clock: clock.NewFake(poolTestEpoch)}
 	key := client.ObjectKeyFromObject(pool)
 	ref := poolRef(pool)
-	reconcile := func() { _, _ = r.Reconcile(ctx, ctrl.Request{NamespacedName: key}) }
+	reconcileOnce := func() { _, _ = r.Reconcile(ctx, ctrl.Request{NamespacedName: key}) }
 	available := func(n int32) func() (bool, string) {
 		return func() (bool, string) {
 			held, err := bc.GetPool(ctx, ref)
@@ -326,7 +329,7 @@ func TestPoolDeletionAgainstTheFakeBattery(t *testing.T) {
 
 	// Declare the Pool, let battery fill it, and have a claim hold one of
 	// its MicroVMs; IMMEDIATE_ON_LEASE replaces it.
-	reconcile()
+	reconcileOnce()
 	eventually(t, "the Pool filled", available(3))
 	claim, err := bc.ClaimVM(ctx, ref)
 	if err != nil {
@@ -338,7 +341,7 @@ func TestPoolDeletionAgainstTheFakeBattery(t *testing.T) {
 		t.Fatalf("Delete Pool: %v", err)
 	}
 	eventually(t, "the Pool drained, blocked by the claim", func() (bool, string) {
-		reconcile()
+		reconcileOnce()
 		got := &batteryv1alpha1.Pool{}
 		if err := k8s.Get(ctx, key, got); err != nil {
 			return false, err.Error()
@@ -356,7 +359,7 @@ func TestPoolDeletionAgainstTheFakeBattery(t *testing.T) {
 		t.Fatalf("ReleaseVM: %v", err)
 	}
 	eventually(t, "the Pool deleted", func() (bool, string) {
-		reconcile()
+		reconcileOnce()
 		err := k8s.Get(ctx, key, &batteryv1alpha1.Pool{})
 		return apierrors.IsNotFound(err), fmt.Sprintf("Get Pool: %v", err)
 	})

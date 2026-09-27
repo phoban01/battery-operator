@@ -37,6 +37,7 @@ import (
 	"github.com/phoban01/battery-operator/internal/clock"
 	"github.com/phoban01/battery-operator/internal/controller/claim"
 	"github.com/phoban01/battery-operator/internal/controller/claimscope"
+	"github.com/phoban01/battery-operator/internal/reconcile"
 )
 
 // MicroVMClaimReconciler is the Claim Controller
@@ -97,7 +98,7 @@ func (r *MicroVMClaimReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	}
 
 	s := r.scope(ctx, c)
-	err := r.chain().Run(ctx, s)
+	res, err := r.chain().Run(ctx, s)
 	// The patch runs even when the chain failed, so that what the chain
 	// did before the failure is not lost.
 	if perr := s.Patch(ctx); perr != nil {
@@ -106,7 +107,7 @@ func (r *MicroVMClaimReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	return ctrl.Result{RequeueAfter: s.Result.RequeueAfter}, nil
+	return res.Ctrl(), nil
 }
 
 // scope builds the scope of one reconcile of c.
@@ -124,13 +125,13 @@ func (r *MicroVMClaimReconciler) scope(ctx context.Context, c *batteryv1alpha1.M
 }
 
 // chain is the Claim Controller's subreconcilers, in the order they run.
-func (r *MicroVMClaimReconciler) chain() claimscope.Chain {
+func (r *MicroVMClaimReconciler) chain() reconcile.Chain[*claimscope.Scope] {
 	backoff := r.Backoff
 	if backoff == (claim.Backoff{}) {
 		backoff = claim.DefaultBackoff
 	}
-	return claimscope.Chain{
-		Steps: []claimscope.Subreconciler{
+	return reconcile.Chain[*claimscope.Scope]{
+		Steps: []reconcile.SubReconciler[*claimscope.Scope]{
 			claim.Release{Backoff: backoff},
 			claim.EnsureFinalizer{},
 			claim.Bind{Slots: r.slots},
@@ -148,7 +149,7 @@ func (r *MicroVMClaimReconciler) chain() claimscope.Chain {
 			// renewal (CL-018).
 			claim.AgentAddress{},
 		},
-		Finally: []claimscope.Subreconciler{
+		Finally: []reconcile.SubReconciler[*claimscope.Scope]{
 			claim.Synced{},
 		},
 	}

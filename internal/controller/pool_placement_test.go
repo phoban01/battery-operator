@@ -173,12 +173,12 @@ func TestPoolWaitsForTheHostsToBePublished(t *testing.T) {
 	b := newStubBattery()
 	s := newTestPoolScope(finalizedPool(), b)
 	s.Hosts = unsyncedStubHosts()
-	if err := runPoolChain(context.Background(), s, poolChain()); err != nil {
+	if _, err := poolChain().Run(context.Background(), s); err != nil {
 		t.Fatalf("chain: %v", err)
 	}
 	wantCalls(t, b)
-	if len(s.Pool.Status.Conditions) != 0 {
-		t.Errorf("conditions = %+v, want none", s.Pool.Status.Conditions)
+	if len(s.Object.Status.Conditions) != 0 {
+		t.Errorf("conditions = %+v, want none", s.Object.Status.Conditions)
 	}
 }
 
@@ -220,7 +220,7 @@ func TestPoolWhoseHostsAreUnchangedIsNotUpdated(t *testing.T) {
 	pool := declaredPool()
 	holdPool(b, pool, []string{testHostB, testHostA}, battery.PoolStatus{})
 	s := newTestPoolScope(pool, b, testHostA, testHostB)
-	if err := runPoolChain(context.Background(), s, poolChain()); err != nil {
+	if _, err := poolChain().Run(context.Background(), s); err != nil {
 		t.Fatalf("chain: %v", err)
 	}
 	wantCalls(t, b, "GetPool ci/runners")
@@ -327,6 +327,6 @@ func TestPoolWhoseSelectorMatchesNoHostSaysSo(t *testing.T) {
 		if _, err := (poolReadiness{}).Reconcile(context.Background(), s); err != nil {
 			t.Fatal(err)
 		}
-		wantCondition(t, s.Pool, batteryv1alpha1.PoolConditionReady, metav1.ConditionFalse, PoolReasonNoEligibleHost)
+		wantCondition(t, s.Object, batteryv1alpha1.PoolConditionReady, metav1.ConditionFalse, PoolReasonNoEligibleHost)
 	})
 }

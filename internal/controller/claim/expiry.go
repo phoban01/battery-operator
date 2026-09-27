@@ -25,6 +25,7 @@ import (
 
 	"github.com/phoban01/battery-operator/internal/battery"
 	"github.com/phoban01/battery-operator/internal/controller/claimscope"
+	"github.com/phoban01/battery-operator/internal/reconcile"
 )
 
 // CheckExpiry asks battery about a Bound claim's Lease once the expiry in
@@ -49,13 +50,13 @@ type CheckExpiry struct {
 	Backoff Backoff
 }
 
-var _ claimscope.Subreconciler = CheckExpiry{}
+var _ reconcile.SubReconciler[*claimscope.Scope] = CheckExpiry{}
 
-// Reconcile implements claimscope.Subreconciler.
-func (e CheckExpiry) Reconcile(ctx context.Context, s *claimscope.Scope) (claimscope.Result, error) {
-	c := s.Claim
+// Reconcile implements reconcile.SubReconciler[*claimscope.Scope].
+func (e CheckExpiry) Reconcile(ctx context.Context, s *claimscope.Scope) (reconcile.Result, error) {
+	c := s.Object
 	if !holdsLease(c) || pendingRenewal(c) {
-		return claimscope.Result{}, nil
+		return reconcile.Result{}, nil
 	}
 	now := s.Clock.Now()
 	if exp := c.Status.LeaseExpiresAt; exp != nil && exp.After(now) {
@@ -63,7 +64,7 @@ func (e CheckExpiry) Reconcile(ctx context.Context, s *claimscope.Scope) (claims
 		//# While a claim is `Bound` and the Lease expiry time in its
 		//# status has not passed, the Claim Controller SHALL reconcile the claim
 		//# again once that time has passed.
-		return claimscope.Result{RequeueAfter: until(s, exp.Time)}, nil
+		return reconcile.Result{RequeueAfter: until(s, exp.Time)}, nil
 	}
 
 	//= docs/requirements/02-claims.md#renewal
@@ -85,11 +86,11 @@ func (e CheckExpiry) Reconcile(ctx context.Context, s *claimscope.Scope) (claims
 		// either, so nothing is lost by waiting.
 		after := retryAfter(s, e.Backoff)
 		s.Log.V(1).Info("Kept MicroVMClaim Bound after ListLeases failed in transit", "retryAfter", after)
-		return claimscope.Result{RequeueAfter: after}, nil
+		return reconcile.Result{RequeueAfter: after}, nil
 	case err != nil:
 		// CL-041: Synced records it, and the controller's rate limiter
 		// retries it with backoff.
-		return claimscope.Result{Stop: true}, fmt.Errorf("listing the Leases of Pool %s: %w", pool, err)
+		return reconcile.Result{Stop: true}, fmt.Errorf("listing the Leases of Pool %s: %w", pool, err)
 	}
 
 	var rec *battery.LeaseRecord
@@ -109,7 +110,7 @@ func (e CheckExpiry) Reconcile(ctx context.Context, s *claimscope.Scope) (claims
 		// A Lease battery does not list has been swept or released, and
 		// will never be held again (BA-040, BA-003).
 		expire(s, fmt.Sprintf("battery no longer holds Lease %s", c.Status.LeaseID))
-		return claimscope.Result{Stop: true}, nil
+		return reconcile.Result{Stop: true}, nil
 	//= docs/requirements/02-claims.md#renewal
 	//# When battery lists the Lease of a Bound claim that is not being
 	//# deleted in its answer to
@@ -121,7 +122,7 @@ func (e CheckExpiry) Reconcile(ctx context.Context, s *claimscope.Scope) (claims
 		// deleted it: battery's own expiry has passed and no renewal is
 		// waiting to be relayed (02-claims.md, Renewal).
 		expire(s, fmt.Sprintf("Lease %s expired at %s", c.Status.LeaseID, rec.ExpiresAt.UTC().Format(time.RFC3339)))
-		return claimscope.Result{Stop: true}, nil
+		return reconcile.Result{Stop: true}, nil
 	}
 
 	//= docs/requirements/02-claims.md#renewal
@@ -130,5 +131,5 @@ func (e CheckExpiry) Reconcile(ctx context.Context, s *claimscope.Scope) (claims
 	//# compute it.
 	c.Status.LeaseExpiresAt = &metav1.Time{Time: rec.ExpiresAt}
 	s.Log.V(1).Info("Read the Lease expiry of MicroVMClaim from battery", "lease", rec.LeaseID, "expiresAt", rec.ExpiresAt)
-	return claimscope.Result{RequeueAfter: until(s, rec.ExpiresAt)}, nil
+	return reconcile.Result{RequeueAfter: until(s, rec.ExpiresAt)}, nil
 }

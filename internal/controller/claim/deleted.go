@@ -28,6 +28,7 @@ import (
 	"github.com/phoban01/battery-operator/internal/battery"
 	"github.com/phoban01/battery-operator/internal/clock"
 	"github.com/phoban01/battery-operator/internal/controller/claimscope"
+	"github.com/phoban01/battery-operator/internal/reconcile"
 )
 
 // ReportsDeletion reports whether battery's event e says that a leased
@@ -103,13 +104,13 @@ type ExpireDeleted struct {
 	Deleted *DeletedVMs
 }
 
-var _ claimscope.Subreconciler = ExpireDeleted{}
+var _ reconcile.SubReconciler[*claimscope.Scope] = ExpireDeleted{}
 
-// Reconcile implements claimscope.Subreconciler.
-func (e ExpireDeleted) Reconcile(_ context.Context, s *claimscope.Scope) (claimscope.Result, error) {
-	c := s.Claim
+// Reconcile implements reconcile.SubReconciler[*claimscope.Scope].
+func (e ExpireDeleted) Reconcile(_ context.Context, s *claimscope.Scope) (reconcile.Result, error) {
+	c := s.Object
 	if e.Deleted == nil || !holdsLease(c) || c.Status.MicroVM == nil {
-		return claimscope.Result{}, nil
+		return reconcile.Result{}, nil
 	}
 	uid := c.Status.MicroVM.UID
 	//= docs/requirements/02-claims.md#renewal
@@ -118,10 +119,10 @@ func (e ExpireDeleted) Reconcile(_ context.Context, s *claimscope.Scope) (claims
 	//# SHALL set the claim's phase to `Expired` and its condition `Bound` false
 	//# with the reason `LeaseExpired`.
 	if !e.Deleted.Has(uid) {
-		return claimscope.Result{}, nil
+		return reconcile.Result{}, nil
 	}
 	expire(s, fmt.Sprintf("battery deleted MicroVM %s", uid))
-	return claimscope.Result{Stop: true}, nil
+	return reconcile.Result{Stop: true}, nil
 }
 
 // MicroVMUIDIndex is the field index of MicroVMClaims by

@@ -34,9 +34,10 @@ import (
 // for the next reconcile. An object that already has the finalizer goes
 // on.
 //
-// This is the step the Claim and Pool Controllers each have their own of
-// (claim.EnsureFinalizer, poolFinalizer). It leaves an object that is being
-// deleted to the chain's deletion step, which comes before it.
+// The Pool Controller uses it as it is (poolFinalizer), and the Claim
+// Controller behind a guard that stops the chain for a deleted claim
+// (claim.EnsureFinalizer). It leaves an object that is being deleted to
+// the chain's deletion step, which comes before it.
 type EnsureFinalizer[S Scoped[T], T client.Object] struct {
 	// Name is the finalizer.
 	Name string

@@ -66,11 +66,12 @@ func (h *reseedHarness) reconcile() ctrl.Result {
 	s := newTestPoolScope(h.pool.DeepCopy(), h.b, testHostA)
 	s.Clock = h.clk
 	s.Reseeds = h.reseeds
-	if err := runPoolChain(context.Background(), s, poolChain()); err != nil {
+	res, err := poolChain().Run(context.Background(), s)
+	if err != nil {
 		h.t.Fatalf("chain: %v", err)
 	}
-	h.pool = s.Pool
-	return s.Result
+	h.pool = s.Object
+	return res.Ctrl()
 }
 
 // setStatus sets the counts battery reports for the Pool.
@@ -263,12 +264,13 @@ func TestAPoolThatIsNotStalledIsLeftAlone(t *testing.T) {
 				s := newTestPoolScope(h.pool.DeepCopy(), h.b, tc.hosts...)
 				s.Clock = h.clk
 				s.Reseeds = h.reseeds
-				if err := runPoolChain(context.Background(), s, poolChain()); err != nil {
+				res, err := poolChain().Run(context.Background(), s)
+				if err != nil {
 					t.Fatalf("chain: %v", err)
 				}
-				h.pool = s.Pool
-				if s.Result.RequeueAfter != tc.requeue {
-					t.Fatalf("RequeueAfter = %s, want %s", s.Result.RequeueAfter, tc.requeue)
+				h.pool = s.Object
+				if res.RequeueAfter != tc.requeue {
+					t.Fatalf("RequeueAfter = %s, want %s", res.RequeueAfter, tc.requeue)
 				}
 				h.clk.Advance(time.Hour)
 			}

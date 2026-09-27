@@ -47,7 +47,7 @@ func holdPool(b *stubBattery, pool *batteryv1alpha1.Pool, hosts []string, st bat
 func runStatusChain(t *testing.T, pool *batteryv1alpha1.Pool, b *stubBattery, hosts ...string) *poolScope {
 	t.Helper()
 	s := newTestPoolScope(pool, b, hosts...)
-	if err := runPoolChain(context.Background(), s, poolChain()); err != nil {
+	if _, err := poolChain().Run(context.Background(), s); err != nil {
 		t.Fatalf("chain: %v", err)
 	}
 	return s
@@ -77,7 +77,7 @@ func TestPoolCountsComeFromBattery(t *testing.T) {
 		holdPool(b, pool, []string{testHostA}, battery.PoolStatus{Available: 2, Leased: 1, Provisioning: 3, Quarantined: 4})
 
 		s := runStatusChain(t, pool, b, testHostA)
-		st := s.Pool.Status
+		st := s.Object.Status
 		if st.Available != 2 || st.Leased != 1 || st.Provisioning != 3 || st.Quarantined != 4 {
 			t.Errorf("counts = %d available, %d leased, %d provisioning, %d quarantined; want 2, 1, 3, 4",
 				st.Available, st.Leased, st.Provisioning, st.Quarantined)
@@ -91,7 +91,7 @@ func TestPoolCountsComeFromBattery(t *testing.T) {
 		pool.Status.Available, pool.Status.Leased = 5, 1
 
 		s := runStatusChain(t, pool, b)
-		st := s.Pool.Status
+		st := s.Object.Status
 		if st.Available != 0 || st.Leased != 0 || st.Provisioning != 0 || st.Quarantined != 0 {
 			t.Errorf("counts = %+v, want zero while battery holds no Pool", st)
 		}
@@ -103,11 +103,11 @@ func TestPoolCountsComeFromBattery(t *testing.T) {
 		b.status[poolRef(pool)] = battery.PoolStatus{Available: 1}
 
 		s := newTestPoolScope(pool, b)
-		if err := runPoolChain(context.Background(), s, poolChain()); err != nil {
+		if _, err := poolChain().Run(context.Background(), s); err != nil {
 			t.Fatalf("chain: %v", err)
 		}
-		if s.Pool.Status.Available != 1 {
-			t.Errorf("available = %d, want 1 from GetPool", s.Pool.Status.Available)
+		if s.Object.Status.Available != 1 {
+			t.Errorf("available = %d, want 1 from GetPool", s.Object.Status.Available)
 		}
 		wantCalls(t, b.stubBattery, "GetPool ci/runners", "CreatePool ci/runners", "GetPool ci/runners")
 	})
@@ -154,7 +154,7 @@ func TestPoolExhaustedFollowsAvailable(t *testing.T) {
 			holdPool(b, pool, []string{testHostA}, battery.PoolStatus{Available: tc.available, Leased: 3})
 
 			s := runStatusChain(t, pool, b, testHostA)
-			wantCondition(t, s.Pool, batteryv1alpha1.PoolConditionExhausted, tc.wantStatus, tc.wantReason)
+			wantCondition(t, s.Object, batteryv1alpha1.PoolConditionExhausted, tc.wantStatus, tc.wantReason)
 		})
 	}
 }
@@ -190,7 +190,7 @@ func TestPoolReadyNeedsBatteryAHostAndItsSize(t *testing.T) {
 			holdPool(b, pool, tc.hosts, tc.counts)
 
 			s := runStatusChain(t, pool, b, tc.hosts...)
-			wantCondition(t, s.Pool, batteryv1alpha1.PoolConditionReady, tc.wantStatus, tc.wantReason)
+			wantCondition(t, s.Object, batteryv1alpha1.PoolConditionReady, tc.wantStatus, tc.wantReason)
 		})
 	}
 
@@ -200,14 +200,14 @@ func TestPoolReadyNeedsBatteryAHostAndItsSize(t *testing.T) {
 		if _, err := (poolReadiness{}).Reconcile(context.Background(), s); err != nil {
 			t.Fatal(err)
 		}
-		wantCondition(t, s.Pool, batteryv1alpha1.PoolConditionReady, metav1.ConditionFalse, PoolReasonNotInBattery)
+		wantCondition(t, s.Object, batteryv1alpha1.PoolConditionReady, metav1.ConditionFalse, PoolReasonNotInBattery)
 	})
 
 	t.Run("battery's refusal stands", func(t *testing.T) {
 		b := newStubBattery()
 		b.createErr = fmt.Errorf("%w: spec.size must not be negative", battery.ErrInvalid)
 		s := runStatusChain(t, finalizedPool(), b)
-		wantCondition(t, s.Pool, batteryv1alpha1.PoolConditionReady, metav1.ConditionFalse, PoolReasonRejected)
+		wantCondition(t, s.Object, batteryv1alpha1.PoolConditionReady, metav1.ConditionFalse, PoolReasonRejected)
 	})
 }
 
@@ -234,8 +234,8 @@ func TestRejectedStandsOverNoEligibleHost(t *testing.T) {
 			t.Fatalf("hosts = %v, want none", s.hosts)
 		}
 		wantCalls(t, b, "GetPool ci/runners", "CreatePool ci/runners")
-		wantCondition(t, s.Pool, batteryv1alpha1.PoolConditionReady, metav1.ConditionFalse, PoolReasonRejected)
-		if ready := readyCondition(s.Pool); ready != nil && ready.Message != msg {
+		wantCondition(t, s.Object, batteryv1alpha1.PoolConditionReady, metav1.ConditionFalse, PoolReasonRejected)
+		if ready := readyCondition(s.Object); ready != nil && ready.Message != msg {
 			t.Errorf("Ready message = %q, want battery's %q", ready.Message, msg)
 		}
 	})
@@ -253,15 +253,15 @@ func TestRejectedStandsOverNoEligibleHost(t *testing.T) {
 			t.Fatalf("hosts = %v, want none: the selector matches no Host", s.hosts)
 		}
 		wantCalls(t, b, "GetPool ci/runners", "UpdatePool ci/runners")
-		wantCondition(t, s.Pool, batteryv1alpha1.PoolConditionReady, metav1.ConditionFalse, PoolReasonRejected)
+		wantCondition(t, s.Object, batteryv1alpha1.PoolConditionReady, metav1.ConditionFalse, PoolReasonRejected)
 		if spec, _ := b.spec(poolRef(pool)); len(spec.FlintlockHosts) != 1 || spec.FlintlockHosts[0] != testHostA {
 			t.Errorf("battery's flintlock_hosts = %v, want the accepted spec's [%s]", spec.FlintlockHosts, testHostA)
 		}
-		if s.Pool.Status.Available != 2 || s.Pool.Status.Leased != 1 {
-			t.Errorf("counts = %d available, %d leased; want battery's 2 and 1", s.Pool.Status.Available, s.Pool.Status.Leased)
+		if s.Object.Status.Available != 2 || s.Object.Status.Leased != 1 {
+			t.Errorf("counts = %d available, %d leased; want battery's 2 and 1", s.Object.Status.Available, s.Object.Status.Leased)
 		}
-		if s.Pool.Status.ObservedGeneration != 1 {
-			t.Errorf("observedGeneration = %d, want 1: battery did not accept generation 2", s.Pool.Status.ObservedGeneration)
+		if s.Object.Status.ObservedGeneration != 1 {
+			t.Errorf("observedGeneration = %d, want 1: battery did not accept generation 2", s.Object.Status.ObservedGeneration)
 		}
 	})
 }

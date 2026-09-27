@@ -28,6 +28,7 @@ import (
 	batteryv1alpha1 "github.com/phoban01/battery-operator/api/v1alpha1"
 	"github.com/phoban01/battery-operator/internal/battery"
 	"github.com/phoban01/battery-operator/internal/controller/claimscope"
+	"github.com/phoban01/battery-operator/internal/reconcile"
 )
 
 // Backoff is how long a Pending claim waits before the next ClaimVM.
@@ -59,15 +60,15 @@ type Pending struct {
 	Backoff Backoff
 }
 
-var _ claimscope.Subreconciler = Pending{}
+var _ reconcile.SubReconciler[*claimscope.Scope] = Pending{}
 
-// Reconcile implements claimscope.Subreconciler.
-func (p Pending) Reconcile(_ context.Context, s *claimscope.Scope) (claimscope.Result, error) {
+// Reconcile implements reconcile.SubReconciler[*claimscope.Scope].
+func (p Pending) Reconcile(_ context.Context, s *claimscope.Scope) (reconcile.Result, error) {
 	call := s.BatteryCall
 	if call == nil || call.Method != methodClaimVM || call.Err == nil {
-		return claimscope.Result{}, nil
+		return reconcile.Result{}, nil
 	}
-	pool := s.Claim.Spec.PoolRef.Name
+	pool := s.Object.Spec.PoolRef.Name
 	var reason, message string
 	switch err := call.Err; {
 	//= docs/requirements/02-claims.md#binding
@@ -99,11 +100,11 @@ func (p Pending) Reconcile(_ context.Context, s *claimscope.Scope) (claimscope.R
 		reason = batteryv1alpha1.ReasonBatteryUnavailable
 		message = fmt.Sprintf("ClaimVM on Pool %s got no answer from battery", pool)
 	default:
-		return claimscope.Result{}, nil
+		return reconcile.Result{}, nil
 	}
 
 	now := s.Clock.Now()
-	st := &s.Claim.Status
+	st := &s.Object.Status
 	st.Phase = batteryv1alpha1.MicroVMClaimPending
 	// The lastTransitionTime is kept while the condition stays false, so
 	// it is when the claim started waiting.
@@ -112,11 +113,11 @@ func (p Pending) Reconcile(_ context.Context, s *claimscope.Scope) (claimscope.R
 		Status:             metav1.ConditionFalse,
 		Reason:             reason,
 		Message:            message,
-		ObservedGeneration: s.Claim.Generation,
+		ObservedGeneration: s.Object.Generation,
 		LastTransitionTime: metav1.NewTime(now),
 	})
 	since := meta.FindStatusCondition(st.Conditions, batteryv1alpha1.ConditionBound).LastTransitionTime.Time
 	after := p.Backoff.after(now.Sub(since))
 	s.Log.V(1).Info("Left MicroVMClaim Pending", "reason", reason, "retryAfter", after)
-	return claimscope.Result{RequeueAfter: after}, nil
+	return reconcile.Result{RequeueAfter: after}, nil
 }

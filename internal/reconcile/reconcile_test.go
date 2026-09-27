@@ -133,6 +133,52 @@ func TestChainStopsAtAnErrorAndStillRunsFinally(t *testing.T) {
 	}
 }
 
+// TestChainFoldsEveryResult is the Claim Controller's test of its local
+// chain, which this one replaced (#129): every step's result is folded in
+// up to the stop, and a Finally subreconciler runs but cannot stop the
+// chain or shorten its requeue with a longer one.
+func TestChainFoldsEveryResult(t *testing.T) {
+	s := newScope(t, testPod())
+	res, err := Chain[*scope]{
+		Steps: []SubReconciler[*scope]{
+			step("a", Result{RequeueAfter: 5 * time.Second}, nil),
+			step("b", Result{RequeueAfter: 2 * time.Second}, nil),
+			step("c", Result{}, nil),
+			step("d", Result{Stop: true, RequeueAfter: 3 * time.Second}, nil),
+			step("never", Result{}, nil),
+		},
+		Finally: []SubReconciler[*scope]{step("finally", Result{Stop: true, RequeueAfter: time.Minute}, nil)},
+	}.Run(context.Background(), s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"a", "b", "c", "d", "finally"}; !slices.Equal(s.ran, want) {
+		t.Errorf("ran %v, want %v", s.ran, want)
+	}
+	if want := (Result{Stop: true, RequeueAfter: 2 * time.Second}); res != want {
+		t.Errorf("result %+v, want %+v", res, want)
+	}
+}
+
+// TestChainRunsEveryFinallyAfterAnError is the Claim Controller's test of
+// its local chain, which this one replaced (#129): a step's error stops
+// the steps, every Finally subreconciler still runs, and the chain returns
+// all their errors.
+func TestChainRunsEveryFinallyAfterAnError(t *testing.T) {
+	s := newScope(t, testPod())
+	boom, bang := errors.New("boom"), errors.New("bang")
+	_, err := Chain[*scope]{
+		Steps:   []SubReconciler[*scope]{step("a", Result{}, boom), step("never", Result{}, nil)},
+		Finally: []SubReconciler[*scope]{step("f", Result{}, bang), step("f", Result{}, bang)},
+	}.Run(context.Background(), s)
+	if !errors.Is(err, boom) || !errors.Is(err, bang) {
+		t.Errorf("err = %v, want boom and bang", err)
+	}
+	if want := []string{"a", "f", "f"}; !slices.Equal(s.ran, want) {
+		t.Errorf("ran %v, want %v", s.ran, want)
+	}
+}
+
 func TestStepsAndChainAsAStep(t *testing.T) {
 	s := newScope(t, testPod())
 	inner := Steps(step("i1", Result{Stop: true}, nil), step("i2", Result{}, nil))

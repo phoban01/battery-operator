@@ -31,6 +31,7 @@ import (
 	"github.com/phoban01/battery-operator/internal/battery"
 	"github.com/phoban01/battery-operator/internal/clock"
 	"github.com/phoban01/battery-operator/internal/controller/claimscope"
+	"github.com/phoban01/battery-operator/internal/reconcile"
 )
 
 // boundBackoff is the Backoff of the renewal and expiry tests.
@@ -125,7 +126,7 @@ func patched(t *testing.T, s *claimscope.Scope, c client.Client) *batteryv1alpha
 		t.Fatalf("Patch: %v", err)
 	}
 	got := &batteryv1alpha1.MicroVMClaim{}
-	if err := c.Get(ctx, client.ObjectKeyFromObject(s.Claim), got); err != nil {
+	if err := c.Get(ctx, client.ObjectKeyFromObject(s.Object), got); err != nil {
 		t.Fatal(err)
 	}
 	return got
@@ -234,7 +235,7 @@ func TestRenewLeavesAClaimWithNoPendingRenewal(t *testing.T) {
 			b := heartbeatAnswers(start, nil)
 			s, _ := newScope(t, cl, b)
 			res, err := Renew{Backoff: boundBackoff}.Reconcile(context.Background(), s)
-			if err != nil || res != (claimscope.Result{}) {
+			if err != nil || res != (reconcile.Result{}) {
 				t.Errorf("Reconcile = %+v, %v, want the chain to go on", res, err)
 			}
 			if n, _ := b.calls(); n != 0 {
