@@ -29,6 +29,7 @@ import (
 	batteryv1alpha1 "github.com/phoban01/battery-operator/api/v1alpha1"
 	"github.com/phoban01/battery-operator/internal/battery"
 	"github.com/phoban01/battery-operator/internal/controller/claimscope"
+	"github.com/phoban01/battery-operator/internal/reconcile"
 )
 
 // leased is battery's answer to a successful ClaimVM in these tests.
@@ -55,14 +56,15 @@ func TestBindWritesTheLease(t *testing.T) {
 	s, c := newScope(t, aClaim(batteryv1alpha1.ReleaseFinalizer), b)
 
 	// The subreconciler after Bind must not run: it would be another call.
-	after := claimscope.Func(func(context.Context, *claimscope.Scope) (claimscope.Result, error) {
+	after := reconcile.Func[*claimscope.Scope](func(context.Context, *claimscope.Scope) (reconcile.Result, error) {
 		t.Error("the chain went on after Bind")
-		return claimscope.Result{}, nil
+		return reconcile.Result{}, nil
 	})
-	if err := (claimscope.Chain{Steps: []claimscope.Subreconciler{Bind{}, after}}).Run(ctx, s); err != nil {
+	res, err := reconcile.Steps[*claimscope.Scope](Bind{}, after).Run(ctx, s)
+	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if !s.Result.Stop {
+	if !res.Stop {
 		t.Error("Bind did not stop the chain")
 	}
 	if calls := b.claimCalls(); len(calls) != 1 || calls[0] != (battery.PoolRef{Name: testPool, Namespace: "ci"}) {
@@ -73,7 +75,7 @@ func TestBindWritesTheLease(t *testing.T) {
 	}
 
 	got := &batteryv1alpha1.MicroVMClaim{}
-	if err := c.Get(ctx, client.ObjectKeyFromObject(s.Claim), got); err != nil {
+	if err := c.Get(ctx, client.ObjectKeyFromObject(s.Object), got); err != nil {
 		t.Fatal(err)
 	}
 	st := got.Status
@@ -115,7 +117,7 @@ func TestBindSkipsABoundClaim(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res != (claimscope.Result{}) {
+	if res != (reconcile.Result{}) {
 		t.Errorf("result = %+v, want the chain to continue", res)
 	}
 	if n := len(b.claimCalls()); n != 0 {
@@ -131,7 +133,7 @@ func TestBindTrustsTheAPIServerOverTheCache(t *testing.T) {
 	b := answers(leased, nil)
 	s, _ := newScope(t, cl, b)
 	// The scope's copy is the stale cache's.
-	s.Claim.Status.LeaseID = ""
+	s.Object.Status.LeaseID = ""
 	s.Original.Status.LeaseID = ""
 
 	res, err := Bind{}.Reconcile(context.Background(), s)
@@ -159,7 +161,7 @@ func TestBindTrustsTheAPIServerOverTheCache(t *testing.T) {
 func TestBindWaitsForTheFinalizerToBeWritten(t *testing.T) {
 	b := answers(leased, nil)
 	s, _ := newScope(t, aClaim(), b)
-	s.Claim.Finalizers = []string{batteryv1alpha1.ReleaseFinalizer}
+	s.Object.Finalizers = []string{batteryv1alpha1.ReleaseFinalizer}
 
 	res, err := Bind{}.Reconcile(context.Background(), s)
 	if err != nil {
@@ -185,14 +187,14 @@ func TestBindLeavesPendingFailuresToPending(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if res != (claimscope.Result{}) {
+			if res != (reconcile.Result{}) {
 				t.Errorf("result = %+v, want the chain to continue", res)
 			}
 			if call := s.BatteryCall; call == nil || call.Method != methodClaimVM || !errors.Is(call.Err, want) {
 				t.Errorf("BatteryCall = %+v, want ClaimVM failing with %v", call, want)
 			}
-			if s.Claim.Status.LeaseID != "" || s.Claim.Status.Phase != "" {
-				t.Errorf("status = %+v, want it untouched", s.Claim.Status)
+			if s.Object.Status.LeaseID != "" || s.Object.Status.Phase != "" {
+				t.Errorf("status = %+v, want it untouched", s.Object.Status)
 			}
 		})
 	}
@@ -221,8 +223,8 @@ func TestBindReturnsOtherFailures(t *testing.T) {
 	if call := s.BatteryCall; call == nil || !errors.Is(call.Err, battery.ErrInvalid) {
 		t.Errorf("BatteryCall = %+v, want ClaimVM failing with ErrInvalid", call)
 	}
-	if s.Claim.Status.Phase != batteryv1alpha1.MicroVMClaimPending {
-		t.Errorf("phase = %q, want it left Pending", s.Claim.Status.Phase)
+	if s.Object.Status.Phase != batteryv1alpha1.MicroVMClaimPending {
+		t.Errorf("phase = %q, want it left Pending", s.Object.Status.Phase)
 	}
 }
 
@@ -253,17 +255,17 @@ func TestBindWritesOnlyTheLeaseItsClaimVMReturned(t *testing.T) {
 
 	for range 2 {
 		s := scopeFor(t, c, key, b)
-		if err := pendingChain().Run(ctx, s); err != nil {
+		if _, err := pendingChain().Run(ctx, s); err != nil {
 			t.Fatal(err)
 		}
 		if err := s.Patch(ctx); err != nil {
 			t.Fatal(err)
 		}
-		if s.Claim.Status.LeaseID != "" && s.Claim.Status.LeaseID != second.LeaseID {
-			t.Fatalf("leaseID = %q, want only lease-2, from ClaimVM's own answer", s.Claim.Status.LeaseID)
+		if s.Object.Status.LeaseID != "" && s.Object.Status.LeaseID != second.LeaseID {
+			t.Fatalf("leaseID = %q, want only lease-2, from ClaimVM's own answer", s.Object.Status.LeaseID)
 		}
-		if len(b.claimCalls()) == 1 && s.Claim.Status.LeaseID != "" {
-			t.Fatalf("leaseID = %q after a ClaimVM that failed in transit, want none", s.Claim.Status.LeaseID)
+		if len(b.claimCalls()) == 1 && s.Object.Status.LeaseID != "" {
+			t.Fatalf("leaseID = %q after a ClaimVM that failed in transit, want none", s.Object.Status.LeaseID)
 		}
 	}
 	got := &batteryv1alpha1.MicroVMClaim{}

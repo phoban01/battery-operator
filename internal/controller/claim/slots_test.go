@@ -24,6 +24,7 @@ import (
 	batteryv1alpha1 "github.com/phoban01/battery-operator/api/v1alpha1"
 	"github.com/phoban01/battery-operator/internal/battery"
 	"github.com/phoban01/battery-operator/internal/controller/claimscope"
+	"github.com/phoban01/battery-operator/internal/reconcile"
 )
 
 //= docs/requirements/02-claims.md#renewal
@@ -108,8 +109,8 @@ func TestRenewalDoesNotWaitBehindAClaimVM(t *testing.T) {
 	if n := len(other.claimCalls()); n != 1 {
 		t.Errorf("ClaimVM calls once the slot was free = %d, want 1", n)
 	}
-	if third.Claim.Status.Phase != batteryv1alpha1.MicroVMClaimBound {
-		t.Errorf("phase = %q, want Bound", third.Claim.Status.Phase)
+	if third.Object.Status.Phase != batteryv1alpha1.MicroVMClaimBound {
+		t.Errorf("phase = %q, want Bound", third.Object.Status.Phase)
 	}
 }
 
@@ -127,7 +128,7 @@ func TestBindRecordsTheRenewTimeAsRelayed(t *testing.T) {
 	cl := aClaim(batteryv1alpha1.ReleaseFinalizer)
 	cl.Spec.RenewTime = micro(start.Add(-time.Minute))
 	s, c := newScope(t, cl, answers(leased, nil))
-	if err := (claimscope.Chain{Steps: []claimscope.Subreconciler{Bind{}}}).Run(context.Background(), s); err != nil {
+	if _, err := reconcile.Steps[*claimscope.Scope](Bind{}).Run(context.Background(), s); err != nil {
 		t.Fatal(err)
 	}
 	got := patched(t, s, c)

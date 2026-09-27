@@ -85,6 +85,7 @@ import (
 	"github.com/phoban01/battery-operator/internal/clock"
 	"github.com/phoban01/battery-operator/internal/controller/claim"
 	"github.com/phoban01/battery-operator/internal/controller/claimscope"
+	"github.com/phoban01/battery-operator/internal/reconcile"
 )
 
 // modelClaims is claims.qnt's CLAIMS.
@@ -290,7 +291,7 @@ func (r *claimReplay) get(name string) (*batteryv1alpha1.MicroVMClaim, error) {
 // reconcile runs one reconcile of claim name with chain: the scope, the
 // chain, and the patch unless hold names what the controller keeps in
 // memory instead. The chain must make exactly the calls calls.
-func (r *claimReplay) reconcile(name string, chain claimscope.Chain, mode callMode, vm string, calls []string, hold string) error {
+func (r *claimReplay) reconcile(name string, chain reconcile.Chain[*claimscope.Scope], mode callMode, vm string, calls []string, hold string) error {
 	if h, ok := r.inflight[name]; ok {
 		return fmt.Errorf("claim %s is reconciled while the controller holds %s for it", name, h.kind)
 	}
@@ -304,7 +305,7 @@ func (r *claimReplay) reconcile(name string, chain claimscope.Chain, mode callMo
 	s := r.r.scope(r.ctx, c)
 	s.Log = logr.Discard()
 	r.bat.begin(mode, vm)
-	runErr := chain.Run(r.ctx, s)
+	_, runErr := chain.Run(r.ctx, s)
 	if !slices.Equal(r.bat.calls, calls) {
 		return fmt.Errorf("claim %s: the chain called battery's %v, the model's step calls %v", name, r.bat.calls, calls)
 	}
@@ -727,7 +728,7 @@ func goMemView(h held, ok bool) string {
 	if !ok {
 		return idle
 	}
-	st := h.scope.Claim.Status
+	st := h.scope.Object.Status
 	switch h.kind {
 	case heartbeatAnswered:
 		var exp int64
@@ -736,7 +737,7 @@ func goMemView(h held, ok bool) string {
 		}
 		return fmt.Sprintf("%s(%d, expires %d, renewTime %d)", h.kind, leaseNum(st.LeaseID), exp, renewCount(st.ObservedRenewTime))
 	case releaseAnswered:
-		if controllerutil.ContainsFinalizer(h.scope.Claim, batteryv1alpha1.ReleaseFinalizer) {
+		if controllerutil.ContainsFinalizer(h.scope.Object, batteryv1alpha1.ReleaseFinalizer) {
 			return h.kind + " with the finalizer kept"
 		}
 	}

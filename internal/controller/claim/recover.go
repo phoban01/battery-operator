@@ -26,6 +26,7 @@ import (
 	batteryv1alpha1 "github.com/phoban01/battery-operator/api/v1alpha1"
 	"github.com/phoban01/battery-operator/internal/battery"
 	"github.com/phoban01/battery-operator/internal/controller/claimscope"
+	"github.com/phoban01/battery-operator/internal/reconcile"
 )
 
 // HoldsLease reports whether c is a Bound claim that records a Lease and
@@ -111,17 +112,17 @@ type Recover struct {
 	Leases *RecoveredLeases
 }
 
-var _ claimscope.Subreconciler = Recover{}
+var _ reconcile.SubReconciler[*claimscope.Scope] = Recover{}
 
-// Reconcile implements claimscope.Subreconciler.
-func (r Recover) Reconcile(_ context.Context, s *claimscope.Scope) (claimscope.Result, error) {
-	c := s.Claim
+// Reconcile implements reconcile.SubReconciler[*claimscope.Scope].
+func (r Recover) Reconcile(_ context.Context, s *claimscope.Scope) (reconcile.Result, error) {
+	c := s.Object
 	if r.Leases == nil || !holdsLease(c) {
-		return claimscope.Result{}, nil
+		return reconcile.Result{}, nil
 	}
 	rec, known := r.Leases.lookup(c.Status.LeaseID)
 	if !known {
-		return claimscope.Result{}, nil
+		return reconcile.Result{}, nil
 	}
 	//= docs/requirements/02-claims.md#recovery
 	//# When the Claim Controller starts, and when its connection to
@@ -136,7 +137,7 @@ func (r Recover) Reconcile(_ context.Context, s *claimscope.Scope) (claimscope.R
 	//# `Expired` and its condition `Bound` false with the reason `LeaseExpired`.
 	if rec == nil {
 		expire(s, fmt.Sprintf("battery no longer held Lease %s when the Claim Controller recovered", c.Status.LeaseID))
-		return claimscope.Result{Stop: true}, nil
+		return reconcile.Result{Stop: true}, nil
 	}
 
 	//= docs/requirements/02-claims.md#renewal
@@ -147,5 +148,5 @@ func (r Recover) Reconcile(_ context.Context, s *claimscope.Scope) (claimscope.R
 		c.Status.LeaseExpiresAt = &metav1.Time{Time: rec.ExpiresAt}
 		s.Log.V(1).Info("Recovered the Lease expiry of MicroVMClaim from battery", "lease", rec.LeaseID, "expiresAt", rec.ExpiresAt)
 	}
-	return claimscope.Result{}, nil
+	return reconcile.Result{}, nil
 }

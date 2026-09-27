@@ -14,23 +14,16 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Package claimscope holds the Claim Controller's per-reconcile scope, the
-// subreconciler interface and the chain that runs them, as CLAUDE.md's
-// "Controller structure" describes.
-//
-// These are local stand-ins for the shared Scope[T], subreconciler and
-// chain that #58 brings. They have the same shape, specialised to
-// MicroVMClaim, so that moving the Claim Controller onto the shared types
-// changes no logic: Scope becomes Scope[*MicroVMClaim] plus the claim's own
-// field (BatteryCall), and Subreconciler, Func, Result and Chain keep their
-// meaning.
+// Package claimscope holds the Claim Controller's per-reconcile scope, as
+// CLAUDE.md's "Controller structure" describes. The scope embeds the
+// shared reconcile.Scope[*MicroVMClaim] and adds the claim's own fields;
+// the subreconcilers and their chain are internal/reconcile's
+// SubReconciler, Func, Result and Chain over *Scope.
 package claimscope
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"time"
 
 	"github.com/go-logr/logr"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -38,31 +31,19 @@ import (
 
 	batteryv1alpha1 "github.com/phoban01/battery-operator/api/v1alpha1"
 	"github.com/phoban01/battery-operator/internal/battery"
-	"github.com/phoban01/battery-operator/internal/clock"
+	"github.com/phoban01/battery-operator/internal/reconcile"
 )
 
-// Scope is one reconcile of one MicroVMClaim. Subreconcilers change Claim
-// and Result and never write to the API server; the controller calls Patch
-// once, after the chain, to write what they changed.
+// Scope is one reconcile of one MicroVMClaim. Subreconcilers change Object
+// and never write to the API server; the controller calls Patch once,
+// after the chain, to write what they changed.
 type Scope struct {
-	// Claim is the working copy the subreconcilers change.
-	Claim *batteryv1alpha1.MicroVMClaim
-	// Original is the claim as it was fetched. Patch diffs Claim against it.
-	Original *batteryv1alpha1.MicroVMClaim
+	*reconcile.Scope[*batteryv1alpha1.MicroVMClaim]
 
-	// Client is the Kubernetes client, reading from the manager's cache.
-	Client client.Client
 	// APIReader reads from the API server directly, bypassing the cache.
 	APIReader client.Reader
 	// Battery is the Operator's battery client.
 	Battery battery.Client
-	// Log is the reconcile's logger, with the claim's key on it.
-	Log logr.Logger
-	// Clock is the time source for every time the subreconcilers write.
-	Clock clock.Clock
-
-	// Result is the chain's result so far.
-	Result Result
 
 	// BatteryCall is the last call to battery the chain made for the claim
 	// in this reconcile, or nil if it made none.
@@ -82,83 +63,16 @@ func (s *Scope) Called(method string, err error) {
 	s.BatteryCall = &BatteryCall{Method: method, Err: err}
 }
 
-// New builds a scope for claim, keeping a copy of it as fetched.
+// New builds a scope for claim, keeping a copy of it as fetched. The
+// caller sets the clients, the logger and the clock; the clock is the
+// wall clock until it does.
 func New(claim *batteryv1alpha1.MicroVMClaim) *Scope {
-	return &Scope{Claim: claim, Original: claim.DeepCopy()}
-}
-
-// Result is what a subreconciler asks of the chain.
-type Result struct {
-	// Stop ends the chain's Steps after this subreconciler. Its Finally
-	// subreconcilers still run, and the scope is still patched.
-	Stop bool
-	// RequeueAfter, when positive, asks for another reconcile after this
-	// long.
-	RequeueAfter time.Duration
-}
-
-// merge folds r into the result so far: the chain stops if either asks it
-// to, and the shortest positive RequeueAfter wins.
-func (r Result) merge(o Result) Result {
-	out := Result{Stop: r.Stop || o.Stop, RequeueAfter: r.RequeueAfter}
-	if o.RequeueAfter > 0 && (out.RequeueAfter <= 0 || o.RequeueAfter < out.RequeueAfter) {
-		out.RequeueAfter = o.RequeueAfter
-	}
-	return out
-}
-
-// Subreconciler is one concern of the Claim Controller.
-type Subreconciler interface {
-	// Reconcile changes the scope and says whether the chain continues,
-	// requeues or stops. An error stops the chain.
-	Reconcile(ctx context.Context, s *Scope) (Result, error)
-}
-
-// Func adapts a function to Subreconciler.
-type Func func(ctx context.Context, s *Scope) (Result, error)
-
-// Reconcile implements Subreconciler.
-func (f Func) Reconcile(ctx context.Context, s *Scope) (Result, error) { return f(ctx, s) }
-
-// Chain is a controller's subreconcilers.
-type Chain struct {
-	// Steps run in order until one stops the chain or fails.
-	Steps []Subreconciler
-	// Finally run after Steps however they ended, and all of them run:
-	// they report on what the Steps did, such as a condition that
-	// summarises it.
-	Finally []Subreconciler
-}
-
-// Run runs the chain on s, folding each result into s.Result, and returns
-// the errors of the step that failed and of any Finally subreconciler.
-func (c Chain) Run(ctx context.Context, s *Scope) error {
-	var errs []error
-	for _, sub := range c.Steps {
-		res, err := sub.Reconcile(ctx, s)
-		s.Result = s.Result.merge(res)
-		if err != nil {
-			errs = append(errs, err)
-			break
-		}
-		if res.Stop {
-			break
-		}
-	}
-	for _, sub := range c.Finally {
-		res, err := sub.Reconcile(ctx, s)
-		// A Finally subreconciler cannot stop what has already run.
-		res.Stop = false
-		s.Result = s.Result.merge(res)
-		if err != nil {
-			errs = append(errs, err)
-		}
-	}
-	return errors.Join(errs...)
+	return &Scope{Scope: reconcile.NewScope(claim, nil, logr.Discard(), nil)}
 }
 
 // Patch writes what the chain changed: the claim's metadata, then its
-// status, each only if it changed.
+// status, each only if it changed. It is the Claim Controller's own write,
+// in place of reconcile.Scope's Patch.
 //
 // The metadata patch carries an optimistic lock, because a merge patch
 // replaces the whole finalizer list and a stale copy would drop another
@@ -167,46 +81,46 @@ func (c Chain) Run(ctx context.Context, s *Scope) error {
 // fail: only the Claim Controller writes status, and a status that records
 // a Lease must not be lost to a conflict.
 func (s *Scope) Patch(ctx context.Context) error {
-	desired := s.Claim.Status.DeepCopy()
+	desired := s.Object.Status.DeepCopy()
 
 	// The metadata patch leaves status out: the status subresource is
 	// written on its own below.
-	s.Claim.Status = *s.Original.Status.DeepCopy()
-	changed, err := changes(client.MergeFrom(s.Original), s.Claim)
+	s.Object.Status = *s.Original.Status.DeepCopy()
+	changed, err := changes(client.MergeFrom(s.Original), s.Object)
 	if err != nil {
-		s.Claim.Status = *desired
+		s.Object.Status = *desired
 		return err
 	}
 	if changed {
 		// A deleted claim whose last finalizer this patch removes is gone
 		// once it is written, and has no status left to write.
-		gone := !s.Claim.DeletionTimestamp.IsZero() && len(s.Claim.Finalizers) == 0
+		gone := !s.Object.DeletionTimestamp.IsZero() && len(s.Object.Finalizers) == 0
 		// The API server's answer overwrites the claim, so the status the
 		// chain wants is put back afterwards.
 		meta := client.MergeFromWithOptions(s.Original, client.MergeFromWithOptimisticLock{})
-		if err := s.Client.Patch(ctx, s.Claim, meta); err != nil {
-			s.Claim.Status = *desired
+		if err := s.Client.Patch(ctx, s.Object, meta); err != nil {
+			s.Object.Status = *desired
 			if gone && apierrors.IsNotFound(err) {
 				return nil
 			}
-			return fmt.Errorf("patching MicroVMClaim %s: %w", client.ObjectKeyFromObject(s.Claim), err)
+			return fmt.Errorf("patching MicroVMClaim %s: %w", client.ObjectKeyFromObject(s.Object), err)
 		}
 		if gone {
-			s.Claim.Status = *desired
+			s.Object.Status = *desired
 			return nil
 		}
 	}
 
-	base := s.Claim.DeepCopy()
-	s.Claim.Status = *desired
+	base := s.Object.DeepCopy()
+	s.Object.Status = *desired
 	st := client.MergeFrom(base)
-	changed, err = changes(st, s.Claim)
+	changed, err = changes(st, s.Object)
 	if err != nil {
 		return err
 	}
 	if changed {
-		if err := s.Client.Status().Patch(ctx, s.Claim, st); err != nil {
-			return fmt.Errorf("patching the status of MicroVMClaim %s: %w", client.ObjectKeyFromObject(s.Claim), err)
+		if err := s.Client.Status().Patch(ctx, s.Object, st); err != nil {
+			return fmt.Errorf("patching the status of MicroVMClaim %s: %w", client.ObjectKeyFromObject(s.Object), err)
 		}
 	}
 	return nil

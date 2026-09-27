@@ -29,28 +29,30 @@ import (
 	"github.com/phoban01/battery-operator/internal/battery"
 	"github.com/phoban01/battery-operator/internal/clock"
 	"github.com/phoban01/battery-operator/internal/controller/claimscope"
+	"github.com/phoban01/battery-operator/internal/reconcile"
 )
 
 var testBackoff = Backoff{Min: time.Second, Max: 8 * time.Second}
 
 // pendingChain is binding without the finalizer step, which the claims in
 // these tests do not need: they already carry the finalizer.
-func pendingChain() claimscope.Chain {
-	return claimscope.Chain{
-		Steps:   []claimscope.Subreconciler{Bind{}, Pending{Backoff: testBackoff}},
-		Finally: []claimscope.Subreconciler{Synced{}},
+func pendingChain() reconcile.Chain[*claimscope.Scope] {
+	return reconcile.Chain[*claimscope.Scope]{
+		Steps:   []reconcile.SubReconciler[*claimscope.Scope]{Bind{}, Pending{Backoff: testBackoff}},
+		Finally: []reconcile.SubReconciler[*claimscope.Scope]{Synced{}},
 	}
 }
 
 // reconcileAt runs the chain on a fresh scope for the claim in c at time
 // now, patches it, and returns the chain's result and the claim as stored.
-func reconcileAt(t *testing.T, c client.Client, b battery.Client, now time.Time) (claimscope.Result, *batteryv1alpha1.MicroVMClaim) {
+func reconcileAt(t *testing.T, c client.Client, b battery.Client, now time.Time) (reconcile.Result, *batteryv1alpha1.MicroVMClaim) {
 	t.Helper()
 	ctx := context.Background()
 	key := claimKey
 	s := scopeFor(t, c, key, b)
 	s.Clock = clock.NewFake(now)
-	if err := pendingChain().Run(ctx, s); err != nil {
+	res, err := pendingChain().Run(ctx, s)
+	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if err := s.Patch(ctx); err != nil {
@@ -60,7 +62,7 @@ func reconcileAt(t *testing.T, c client.Client, b battery.Client, now time.Time)
 	if err := c.Get(ctx, key, got); err != nil {
 		t.Fatal(err)
 	}
-	return s.Result, got
+	return res, got
 }
 
 // assertPending checks that the claim is Pending with Bound false for
@@ -163,8 +165,8 @@ func TestPendingIgnoresASuccessfulOrAbsentClaimVM(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res != (claimscope.Result{}) || s.Claim.Status.Phase != "" {
-		t.Errorf("result = %+v, status = %+v, want neither changed", res, s.Claim.Status)
+	if res != (reconcile.Result{}) || s.Object.Status.Phase != "" {
+		t.Errorf("result = %+v, status = %+v, want neither changed", res, s.Object.Status)
 	}
 }
 

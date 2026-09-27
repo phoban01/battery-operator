@@ -31,9 +31,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	"github.com/phoban01/battery-operator/internal/battery"
-	"github.com/phoban01/battery-operator/internal/reconcile"
 	"github.com/phoban01/battery-operator/internal/batterysidecar"
 	"github.com/phoban01/battery-operator/internal/clock"
+	"github.com/phoban01/battery-operator/internal/reconcile"
 )
 
 // The timings of these tests: different, so that a controller that

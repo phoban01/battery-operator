@@ -21,8 +21,10 @@ limitations under the License.
 // generic subreconcilers and helpers that serve any controller.
 //
 // They are extracted from the local types the Claim, Pool and Inventory
-// Controllers were written with (claimscope, poolScope, inventory.Scope),
-// which keep theirs for now.
+// Controllers were written with, and those controllers now run on them.
+// The Inventory Controller's object is battery's configuration, not a
+// client.Object, so its scope (inventory.Scope) embeds no Scope, and runs
+// on Result, SubReconciler and Chain alone.
 //
 // A controller fetches its object, builds its scope (usually a struct that
 // embeds *Scope[T] and adds the controller's own fields), runs its Chain

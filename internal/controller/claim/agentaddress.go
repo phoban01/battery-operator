@@ -29,6 +29,7 @@ import (
 	batteryv1alpha1 "github.com/phoban01/battery-operator/api/v1alpha1"
 	"github.com/phoban01/battery-operator/internal/controller/claimscope"
 	"github.com/phoban01/battery-operator/internal/execagent"
+	"github.com/phoban01/battery-operator/internal/reconcile"
 )
 
 // AgentAddress copies the Exec Agent's address from the Node report of a
@@ -48,13 +49,13 @@ import (
 // report reaches every claim bound on the Host.
 type AgentAddress struct{}
 
-var _ claimscope.Subreconciler = AgentAddress{}
+var _ reconcile.SubReconciler[*claimscope.Scope] = AgentAddress{}
 
-// Reconcile implements claimscope.Subreconciler.
-func (AgentAddress) Reconcile(ctx context.Context, s *claimscope.Scope) (claimscope.Result, error) {
-	st := &s.Claim.Status
+// Reconcile implements reconcile.SubReconciler[*claimscope.Scope].
+func (AgentAddress) Reconcile(ctx context.Context, s *claimscope.Scope) (reconcile.Result, error) {
+	st := &s.Object.Status
 	if st.Phase != batteryv1alpha1.MicroVMClaimBound || st.Host == nil || st.Host.NodeName == "" {
-		return claimscope.Result{}, nil
+		return reconcile.Result{}, nil
 	}
 
 	nodeName := st.Host.NodeName
@@ -64,14 +65,14 @@ func (AgentAddress) Reconcile(ctx context.Context, s *claimscope.Scope) (claimsc
 	case apierrors.IsNotFound(err):
 		// A Host with no Node has no Node report, and so no address.
 	case err != nil:
-		return claimscope.Result{}, fmt.Errorf("reading Node %s for the Exec Agent's address: %w", nodeName, err)
+		return reconcile.Result{}, fmt.Errorf("reading Node %s for the Exec Agent's address: %w", nodeName, err)
 	default:
 		address = node.Annotations[execagent.AnnotationAddress]
 	}
 
 	cond := metav1.Condition{
 		Type:               batteryv1alpha1.ConditionAgentAvailable,
-		ObservedGeneration: s.Claim.Generation,
+		ObservedGeneration: s.Object.Generation,
 		LastTransitionTime: metav1.NewTime(s.Clock.Now()),
 	}
 	if address == "" {
@@ -87,7 +88,7 @@ func (AgentAddress) Reconcile(ctx context.Context, s *claimscope.Scope) (claimsc
 			s.Log.Info("Found no Exec Agent address for MicroVMClaim", "node", nodeName)
 		}
 		meta.SetStatusCondition(&st.Conditions, cond)
-		return claimscope.Result{}, nil
+		return reconcile.Result{}, nil
 	}
 
 	//= docs/requirements/02-claims.md#binding
@@ -101,5 +102,5 @@ func (AgentAddress) Reconcile(ctx context.Context, s *claimscope.Scope) (claimsc
 	cond.Reason = batteryv1alpha1.ReasonAgentAddressPublished
 	cond.Message = fmt.Sprintf("Node %s reports the Exec Agent at %s", nodeName, address)
 	meta.SetStatusCondition(&st.Conditions, cond)
-	return claimscope.Result{}, nil
+	return reconcile.Result{}, nil
 }

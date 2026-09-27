@@ -27,11 +27,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/event"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	ctrlreconcile "sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	batteryv1alpha1 "github.com/phoban01/battery-operator/api/v1alpha1"
 	"github.com/phoban01/battery-operator/internal/controller/claimscope"
 	"github.com/phoban01/battery-operator/internal/execagent"
+	"github.com/phoban01/battery-operator/internal/reconcile"
 )
 
 const (
@@ -88,7 +89,7 @@ func reconcileAgentAddress(t *testing.T, c client.Client) *claimscope.Scope {
 	if err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
-	if res != (claimscope.Result{}) {
+	if res != (reconcile.Result{}) {
 		t.Errorf("result = %+v, want the chain to go on", res)
 	}
 	return s
@@ -102,7 +103,7 @@ func TestAgentAddressComesFromTheNodeReport(t *testing.T) {
 	c := newFakeClient(t, aBoundClaim(claimKey.Name, nodeA, ""), aNode(agentAddr))
 	s := reconcileAgentAddress(t, c)
 
-	st := s.Claim.Status
+	st := s.Object.Status
 	if st.Host.AgentAddress != agentAddr {
 		t.Errorf("host.agentAddress = %q, want the Node report's 10.0.0.7:7443", st.Host.AgentAddress)
 	}
@@ -133,7 +134,7 @@ func TestAgentAddressComesFromTheNodeReport(t *testing.T) {
 func TestAgentAddressFollowsAChangedNodeReport(t *testing.T) {
 	c := newFakeClient(t, aBoundClaim(claimKey.Name, nodeA, agentAddr), aNode("10.0.0.8:7443"))
 	s := reconcileAgentAddress(t, c)
-	if got := s.Claim.Status.Host.AgentAddress; got != "10.0.0.8:7443" {
+	if got := s.Object.Status.Host.AgentAddress; got != "10.0.0.8:7443" {
 		t.Errorf("host.agentAddress = %q, want the Node report's new 10.0.0.8:7443", got)
 	}
 }
@@ -196,10 +197,10 @@ func TestAgentAddressMissingKeepsTheClaimBound(t *testing.T) {
 func TestAgentAddressLeavesAnUnboundClaimAlone(t *testing.T) {
 	c := newFakeClient(t, aClaim(batteryv1alpha1.ReleaseFinalizer), aNode(agentAddr))
 	s := reconcileAgentAddress(t, c)
-	if s.Claim.Status.Host != nil {
-		t.Errorf("host = %+v, want none on an unbound claim", s.Claim.Status.Host)
+	if s.Object.Status.Host != nil {
+		t.Errorf("host = %+v, want none on an unbound claim", s.Object.Status.Host)
 	}
-	if cond := meta.FindStatusCondition(s.Claim.Status.Conditions, batteryv1alpha1.ConditionAgentAvailable); cond != nil {
+	if cond := meta.FindStatusCondition(s.Object.Status.Conditions, batteryv1alpha1.ConditionAgentAvailable); cond != nil {
 		t.Errorf("AgentAvailable = %+v, want no condition on an unbound claim", cond)
 	}
 }
@@ -219,7 +220,7 @@ func TestAgentAddressReturnsAFailedNodeRead(t *testing.T) {
 	if _, err := (AgentAddress{}).Reconcile(context.Background(), s); !errors.Is(err, boom) {
 		t.Fatalf("Reconcile error = %v, want the Node read's", err)
 	}
-	if got := s.Claim.Status.Host.AgentAddress; got != agentAddr {
+	if got := s.Object.Status.Host.AgentAddress; got != agentAddr {
 		t.Errorf("host.agentAddress = %q, want it left as it was", got)
 	}
 }
@@ -232,7 +233,7 @@ func TestClaimsOnNodeMapsANodeToTheClaimsBoundOnIt(t *testing.T) {
 		aClaim(), // runner-1, not bound
 	)
 	got := ClaimsOnNode(c)(context.Background(), aNode(agentAddr))
-	want := map[reconcile.Request]bool{
+	want := map[ctrlreconcile.Request]bool{
 		{NamespacedName: client.ObjectKey{Namespace: "ci", Name: "bound-1"}}: true,
 		{NamespacedName: client.ObjectKey{Namespace: "ci", Name: "bound-2"}}: true,
 	}

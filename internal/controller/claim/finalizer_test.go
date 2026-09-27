@@ -26,6 +26,7 @@ import (
 
 	batteryv1alpha1 "github.com/phoban01/battery-operator/api/v1alpha1"
 	"github.com/phoban01/battery-operator/internal/controller/claimscope"
+	"github.com/phoban01/battery-operator/internal/reconcile"
 )
 
 //= docs/requirements/02-claims.md#binding
@@ -42,10 +43,11 @@ func TestEnsureFinalizerAddsItAndStops(t *testing.T) {
 	b := answers(nil, nil)
 	s, c := newScope(t, aClaim(), b)
 
-	if err := (claimscope.Chain{Steps: []claimscope.Subreconciler{EnsureFinalizer{}, Bind{}}}).Run(ctx, s); err != nil {
+	res, err := reconcile.Steps[*claimscope.Scope](EnsureFinalizer{}, Bind{}).Run(ctx, s)
+	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if !s.Result.Stop {
+	if !res.Stop {
 		t.Error("the chain did not stop after the finalizer was added")
 	}
 	if n := len(b.claimCalls()); n != 0 {
@@ -55,7 +57,7 @@ func TestEnsureFinalizerAddsItAndStops(t *testing.T) {
 		t.Fatalf("Patch: %v", err)
 	}
 	got := &batteryv1alpha1.MicroVMClaim{}
-	if err := c.Get(ctx, client.ObjectKeyFromObject(s.Claim), got); err != nil {
+	if err := c.Get(ctx, client.ObjectKeyFromObject(s.Object), got); err != nil {
 		t.Fatal(err)
 	}
 	if !controllerutil.ContainsFinalizer(got, batteryv1alpha1.ReleaseFinalizer) {
@@ -71,7 +73,7 @@ func TestEnsureFinalizerContinuesWhenPresent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res != (claimscope.Result{}) {
+	if res != (reconcile.Result{}) {
 		t.Errorf("result = %+v, want the chain to continue", res)
 	}
 }
@@ -91,7 +93,7 @@ func TestEnsureFinalizerStopsForADeletedClaim(t *testing.T) {
 	if !res.Stop {
 		t.Error("the chain did not stop for a deleted claim")
 	}
-	if controllerutil.ContainsFinalizer(s.Claim, batteryv1alpha1.ReleaseFinalizer) {
+	if controllerutil.ContainsFinalizer(s.Object, batteryv1alpha1.ReleaseFinalizer) {
 		t.Error("a deleted claim got the release finalizer")
 	}
 }

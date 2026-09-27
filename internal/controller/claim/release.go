@@ -29,6 +29,7 @@ import (
 	batteryv1alpha1 "github.com/phoban01/battery-operator/api/v1alpha1"
 	"github.com/phoban01/battery-operator/internal/battery"
 	"github.com/phoban01/battery-operator/internal/controller/claimscope"
+	"github.com/phoban01/battery-operator/internal/reconcile"
 )
 
 // methodReleaseVM names ReleaseVM in a claimscope.BatteryCall.
@@ -53,18 +54,18 @@ type Release struct {
 	Backoff Backoff
 }
 
-var _ claimscope.Subreconciler = Release{}
+var _ reconcile.SubReconciler[*claimscope.Scope] = Release{}
 
-// Reconcile implements claimscope.Subreconciler.
-func (r Release) Reconcile(ctx context.Context, s *claimscope.Scope) (claimscope.Result, error) {
-	if s.Claim.DeletionTimestamp.IsZero() {
-		return claimscope.Result{}, nil
+// Reconcile implements reconcile.SubReconciler[*claimscope.Scope].
+func (r Release) Reconcile(ctx context.Context, s *claimscope.Scope) (reconcile.Result, error) {
+	if s.Object.DeletionTimestamp.IsZero() {
+		return reconcile.Result{}, nil
 	}
-	stop := claimscope.Result{Stop: true}
-	if !controllerutil.ContainsFinalizer(s.Claim, batteryv1alpha1.ReleaseFinalizer) {
+	stop := reconcile.Result{Stop: true}
+	if !controllerutil.ContainsFinalizer(s.Object, batteryv1alpha1.ReleaseFinalizer) {
 		return stop, nil
 	}
-	leaseID := s.Claim.Status.LeaseID
+	leaseID := s.Object.Status.LeaseID
 
 	//= docs/requirements/02-claims.md#release
 	//# When a claim that has no lease id is deleted, the Claim
@@ -73,7 +74,7 @@ func (r Release) Reconcile(ctx context.Context, s *claimscope.Scope) (claimscope
 		// A claim that never bound holds no Lease. A ClaimVM whose answer
 		// was lost may have leased one, but no claim records it, so it is
 		// an orphan that battery expires (CL-008, CL-031).
-		controllerutil.RemoveFinalizer(s.Claim, batteryv1alpha1.ReleaseFinalizer)
+		controllerutil.RemoveFinalizer(s.Object, batteryv1alpha1.ReleaseFinalizer)
 		s.Log.Info("Removed the release finalizer from an unbound MicroVMClaim")
 		return stop, nil
 	}
@@ -90,7 +91,7 @@ func (r Release) Reconcile(ctx context.Context, s *claimscope.Scope) (claimscope
 		// NOT_FOUND is a Lease that has already ended: an earlier release
 		// whose answer was lost, a crash before the finalizer was removed,
 		// or a Lease battery expired (BA-032).
-		controllerutil.RemoveFinalizer(s.Claim, batteryv1alpha1.ReleaseFinalizer)
+		controllerutil.RemoveFinalizer(s.Object, batteryv1alpha1.ReleaseFinalizer)
 		s.Log.Info("Released the Lease of MicroVMClaim", "lease", leaseID, "unknown", err != nil)
 		return stop, nil
 
@@ -105,7 +106,7 @@ func (r Release) Reconcile(ctx context.Context, s *claimscope.Scope) (claimscope
 		// release whose answer was lost finds the Lease unknown.
 		after := r.Backoff.after(s.Clock.Now().Sub(unavailableSince(s)))
 		s.Log.V(1).Info("Kept the release finalizer of MicroVMClaim", "lease", leaseID, "retryAfter", after, "error", err.Error())
-		return claimscope.Result{Stop: true, RequeueAfter: after}, nil
+		return reconcile.Result{Stop: true, RequeueAfter: after}, nil
 
 	default:
 		// CL-041: the controller's rate limiter retries it with backoff;
@@ -120,7 +121,7 @@ func (r Release) Reconcile(ctx context.Context, s *claimscope.Scope) (claimscope
 // ReleaseVM is as long as that has lasted, so the waits double as the
 // failures go on, as Pending's do, without an attempt count in memory.
 func unavailableSince(s *claimscope.Scope) time.Time {
-	c := meta.FindStatusCondition(s.Claim.Status.Conditions, batteryv1alpha1.ConditionSynced)
+	c := meta.FindStatusCondition(s.Object.Status.Conditions, batteryv1alpha1.ConditionSynced)
 	if c == nil || c.Status != metav1.ConditionFalse || c.Reason != batteryv1alpha1.ReasonBatteryUnavailable {
 		return s.Clock.Now()
 	}

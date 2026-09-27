@@ -27,7 +27,7 @@ import (
 	batteryv1alpha1 "github.com/phoban01/battery-operator/api/v1alpha1"
 	"github.com/phoban01/battery-operator/internal/battery"
 	"github.com/phoban01/battery-operator/internal/clock"
-	"github.com/phoban01/battery-operator/internal/controller/claimscope"
+	"github.com/phoban01/battery-operator/internal/reconcile"
 )
 
 // record is battery's record of lease-1, expiring at expires.
@@ -198,14 +198,14 @@ func TestCheckExpiryWaitsForAPendingRenewal(t *testing.T) {
 	s, _ := newScope(t, cl, b)
 
 	res, err := CheckExpiry{Backoff: boundBackoff}.Reconcile(context.Background(), s)
-	if err != nil || res != (claimscope.Result{}) {
+	if err != nil || res != (reconcile.Result{}) {
 		t.Errorf("Reconcile = %+v, %v, want nothing done", res, err)
 	}
 	if _, n := b.calls(); n != 0 {
 		t.Errorf("ListLeases called %d times, want none", n)
 	}
-	if s.Claim.Status.Phase != batteryv1alpha1.MicroVMClaimBound {
-		t.Errorf("phase = %q, want Bound", s.Claim.Status.Phase)
+	if s.Object.Status.Phase != batteryv1alpha1.MicroVMClaimBound {
+		t.Errorf("phase = %q, want Bound", s.Object.Status.Phase)
 	}
 }
 

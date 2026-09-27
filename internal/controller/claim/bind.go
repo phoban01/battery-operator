@@ -31,6 +31,7 @@ import (
 	batteryv1alpha1 "github.com/phoban01/battery-operator/api/v1alpha1"
 	"github.com/phoban01/battery-operator/internal/battery"
 	"github.com/phoban01/battery-operator/internal/controller/claimscope"
+	"github.com/phoban01/battery-operator/internal/reconcile"
 )
 
 // Bind leases a MicroVM for a claim that has no Lease, with battery's
@@ -64,30 +65,30 @@ type Bind struct {
 	SlotWait time.Duration
 }
 
-var _ claimscope.Subreconciler = Bind{}
+var _ reconcile.SubReconciler[*claimscope.Scope] = Bind{}
 
-// Reconcile implements claimscope.Subreconciler.
-func (b Bind) Reconcile(ctx context.Context, s *claimscope.Scope) (claimscope.Result, error) {
-	if s.Claim.Status.LeaseID != "" {
-		return claimscope.Result{}, nil
+// Reconcile implements reconcile.SubReconciler[*claimscope.Scope].
+func (b Bind) Reconcile(ctx context.Context, s *claimscope.Scope) (reconcile.Result, error) {
+	if s.Object.Status.LeaseID != "" {
+		return reconcile.Result{}, nil
 	}
 
-	key := client.ObjectKeyFromObject(s.Claim)
+	key := client.ObjectKeyFromObject(s.Object)
 	fresh := &batteryv1alpha1.MicroVMClaim{}
 	if err := s.APIReader.Get(ctx, key, fresh); err != nil {
 		if apierrors.IsNotFound(err) {
-			return claimscope.Result{Stop: true}, nil
+			return reconcile.Result{Stop: true}, nil
 		}
-		return claimscope.Result{}, fmt.Errorf("reading MicroVMClaim %s before claiming a MicroVM: %w", key, err)
+		return reconcile.Result{}, fmt.Errorf("reading MicroVMClaim %s before claiming a MicroVM: %w", key, err)
 	}
 	switch {
 	case fresh.Status.LeaseID != "":
 		// The cache is behind an earlier bind; its update will reconcile
 		// the claim again.
 		s.Log.V(1).Info("Skipped ClaimVM for a MicroVMClaim the cache shows unbound", "lease", fresh.Status.LeaseID)
-		return claimscope.Result{Stop: true}, nil
+		return reconcile.Result{Stop: true}, nil
 	case !fresh.DeletionTimestamp.IsZero():
-		return claimscope.Result{Stop: true}, nil
+		return reconcile.Result{Stop: true}, nil
 	//= docs/requirements/02-claims.md#binding
 	//# When a claim that has no lease id in its status is
 	//# reconciled, the Claim Controller SHALL add the finalizer
@@ -95,7 +96,7 @@ func (b Bind) Reconcile(ctx context.Context, s *claimscope.Scope) (claimscope.Re
 	//# `ClaimVM` for the claim's Pool.
 	case !controllerutil.ContainsFinalizer(fresh, batteryv1alpha1.ReleaseFinalizer):
 		// EnsureFinalizer added it, but it is not written yet.
-		return claimscope.Result{Stop: true}, nil
+		return reconcile.Result{Stop: true}, nil
 	}
 
 	//= docs/requirements/02-claims.md#renewal
@@ -109,7 +110,7 @@ func (b Bind) Reconcile(ctx context.Context, s *claimscope.Scope) (claimscope.Re
 				wait = DefaultSlotWait
 			}
 			s.Log.V(1).Info("Deferred ClaimVM for MicroVMClaim while other ClaimVM calls are in flight", "retryAfter", wait)
-			return claimscope.Result{Stop: true, RequeueAfter: wait}, nil
+			return reconcile.Result{Stop: true, RequeueAfter: wait}, nil
 		}
 		defer b.Slots.release()
 	}
@@ -117,13 +118,13 @@ func (b Bind) Reconcile(ctx context.Context, s *claimscope.Scope) (claimscope.Re
 	// The renewTime the claim has now is recorded as relayed: the new
 	// Lease runs from later than any renewal before it (02-claims.md,
 	// Renewal).
-	renewTime := s.Claim.Spec.RenewTime.DeepCopy()
-	pool := battery.PoolRef{Name: s.Claim.Spec.PoolRef.Name, Namespace: s.Claim.Namespace}
+	renewTime := s.Object.Spec.RenewTime.DeepCopy()
+	pool := battery.PoolRef{Name: s.Object.Spec.PoolRef.Name, Namespace: s.Object.Namespace}
 	claimed, err := s.Battery.ClaimVM(ctx, pool)
 	s.Called(methodClaimVM, err)
 	switch {
 	case errors.Is(err, battery.ErrExhausted), errors.Is(err, battery.ErrNotFound), failedInTransit(err):
-		return claimscope.Result{}, nil
+		return reconcile.Result{}, nil
 	//= docs/requirements/02-claims.md#failed-calls
 	//# If a call to battery for a claim fails with an error that no
 	//# other requirement in this document names, then the Claim Controller SHALL
@@ -133,7 +134,7 @@ func (b Bind) Reconcile(ctx context.Context, s *claimscope.Scope) (claimscope.Re
 	case err != nil:
 		// The controller's rate limiter retries it with backoff; Synced
 		// records the failure.
-		return claimscope.Result{}, fmt.Errorf("claiming a MicroVM from Pool %s: %w", pool, err)
+		return reconcile.Result{}, fmt.Errorf("claiming a MicroVM from Pool %s: %w", pool, err)
 	}
 
 	// The orphan window (ADR 0001, consequence 2). battery now holds a
@@ -161,7 +162,7 @@ func (b Bind) Reconcile(ctx context.Context, s *claimscope.Scope) (claimscope.Re
 	//# to `Bound` and set the condition `Bound` true, before it makes any other
 	//# call to battery for that claim.
 	now := metav1.NewTime(s.Clock.Now())
-	st := &s.Claim.Status
+	st := &s.Object.Status
 	st.LeaseID = claimed.LeaseID
 	st.MicroVM = &batteryv1alpha1.MicroVMReference{UID: claimed.VMUID}
 	// The Exec Agent's address is not battery's to give (CL-005).
@@ -177,9 +178,9 @@ func (b Bind) Reconcile(ctx context.Context, s *claimscope.Scope) (claimscope.Re
 		Status:             metav1.ConditionTrue,
 		Reason:             batteryv1alpha1.ReasonBound,
 		Message:            fmt.Sprintf("Leased MicroVM %s on Node %s", claimed.VMUID, claimed.Host.Name),
-		ObservedGeneration: s.Claim.Generation,
+		ObservedGeneration: s.Object.Generation,
 		LastTransitionTime: now,
 	})
 	s.Log.Info("Bound MicroVMClaim", "lease", claimed.LeaseID, "microVM", claimed.VMUID, "node", claimed.Host.Name)
-	return claimscope.Result{Stop: true}, nil
+	return reconcile.Result{Stop: true}, nil
 }

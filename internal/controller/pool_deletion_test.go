@@ -316,7 +316,7 @@ func TestPoolDeletionAgainstTheFakeBattery(t *testing.T) {
 	r := &PoolReconciler{Client: k8s, Battery: bc, Hosts: newStubHosts(testHostA), Clock: clock.NewFake(poolTestEpoch)}
 	key := client.ObjectKeyFromObject(pool)
 	ref := poolRef(pool)
-	reconcile := func() { _, _ = r.Reconcile(ctx, ctrl.Request{NamespacedName: key}) }
+	reconcileOnce := func() { _, _ = r.Reconcile(ctx, ctrl.Request{NamespacedName: key}) }
 	available := func(n int32) func() (bool, string) {
 		return func() (bool, string) {
 			held, err := bc.GetPool(ctx, ref)
@@ -329,7 +329,7 @@ func TestPoolDeletionAgainstTheFakeBattery(t *testing.T) {
 
 	// Declare the Pool, let battery fill it, and have a claim hold one of
 	// its MicroVMs; IMMEDIATE_ON_LEASE replaces it.
-	reconcile()
+	reconcileOnce()
 	eventually(t, "the Pool filled", available(3))
 	claim, err := bc.ClaimVM(ctx, ref)
 	if err != nil {
@@ -341,7 +341,7 @@ func TestPoolDeletionAgainstTheFakeBattery(t *testing.T) {
 		t.Fatalf("Delete Pool: %v", err)
 	}
 	eventually(t, "the Pool drained, blocked by the claim", func() (bool, string) {
-		reconcile()
+		reconcileOnce()
 		got := &batteryv1alpha1.Pool{}
 		if err := k8s.Get(ctx, key, got); err != nil {
 			return false, err.Error()
@@ -359,7 +359,7 @@ func TestPoolDeletionAgainstTheFakeBattery(t *testing.T) {
 		t.Fatalf("ReleaseVM: %v", err)
 	}
 	eventually(t, "the Pool deleted", func() (bool, string) {
-		reconcile()
+		reconcileOnce()
 		err := k8s.Get(ctx, key, &batteryv1alpha1.Pool{})
 		return apierrors.IsNotFound(err), fmt.Sprintf("Get Pool: %v", err)
 	})
