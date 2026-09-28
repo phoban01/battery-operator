@@ -482,8 +482,47 @@ func claimFeature(claimNS string) features.Feature {
 			wantInvalid(t, c.Status().Patch(ctx, got, client.MergeFrom(before), client.DryRunAll), "status.phase")
 			return ctx
 		}).
+		Assess("kubectl get prints a claim's Lease expiry as a timestamp", expiresColumn).
 		Teardown(deleteNamespace(claimNS)).
 		Feature()
+}
+
+// expiresColumn: the MicroVMClaim CRD's Expires column prints
+// status.leaseExpiresAt as a timestamp. kubectl prints a date column as an
+// age, and a Lease that has not expired has no age, so kubectl printed
+// <invalid> for a Bound claim (#161). A string column prints the RFC 3339
+// time itself.
+func expiresColumn(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+	crd := &unstructured.Unstructured{}
+	crd.SetGroupVersionKind(schema.GroupVersionKind{
+		Group: "apiextensions.k8s.io", Version: "v1", Kind: "CustomResourceDefinition",
+	})
+	key := client.ObjectKey{Name: "microvmclaims.battery.liquidmetal-x.dev"}
+	if err := mustClient(t, cfg).Get(ctx, key, crd); err != nil {
+		t.Fatalf("getting the MicroVMClaim CRD: %v", err)
+	}
+	versions, _, err := unstructured.NestedSlice(crd.Object, "spec", "versions")
+	if err != nil || len(versions) != 1 {
+		t.Fatalf("the MicroVMClaim CRD's spec.versions = %v (%v), want one version", versions, err)
+	}
+	version, _ := versions[0].(map[string]any)
+	columns, _, _ := unstructured.NestedSlice(version, "additionalPrinterColumns")
+	var expires map[string]any
+	for _, col := range columns {
+		if m, ok := col.(map[string]any); ok && m["name"] == "Expires" {
+			expires = m
+		}
+	}
+	if expires == nil {
+		t.Fatalf("the MicroVMClaim CRD has no Expires column in %v", columns)
+	}
+	if expires["type"] != "string" || expires["jsonPath"] != ".status.leaseExpiresAt" {
+		t.Errorf("the Expires column = %v, want type string from .status.leaseExpiresAt", expires)
+	}
+	if p, ok := expires["priority"]; ok && p != int64(0) {
+		t.Errorf("the Expires column has priority %v, want 0, so kubectl get shows it", p)
+	}
+	return ctx
 }
 
 // deviceID is the network interface the Pools in these tests name.
