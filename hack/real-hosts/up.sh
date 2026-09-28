@@ -65,6 +65,7 @@ step_host() {
 	done
 	host_put "${HERE}/host/thin-pool.sh" /usr/local/libexec/bo-trial/thin-pool 0755
 	host_put "${HERE}/host/flintlockd-run.sh" /usr/local/libexec/bo-trial/flintlockd-run 0755
+	host_put "${HERE}/host/guest-nat.sh" /usr/local/libexec/bo-trial/guest-nat 0755
 	host_put "${HERE}/host/containerd-config.toml" /etc/containerd/config.toml
 	# flintlockd serves on the Host's address (flintlockd-run.sh reads the
 	# interface from here).
@@ -76,6 +77,7 @@ step_host() {
 		FIRECRACKER_VERSION="${FIRECRACKER_VERSION}" \
 		FLINTLOCK_VERSION="${FLINTLOCK_VERSION}" \
 		REGISTRY_VERSION="${REGISTRY_VERSION}" \
+		DNSMASQ_VERSION="${DNSMASQ_VERSION}" \
 		bash -s <"${HERE}/host/provision.sh"
 }
 

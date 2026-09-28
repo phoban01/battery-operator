@@ -68,7 +68,7 @@ export HOST_DRIVER=ssh HOST_SSH=ubuntu@203.0.113.10
 
 ```sh
 hack/real-hosts/up.sh      # everything, idempotent; or: up.sh machine host k3s images deploy
-hack/real-hosts/smoke.sh   # or: smoke.sh pool claim restart delete
+hack/real-hosts/smoke.sh   # or: smoke.sh pool claim network restart delete
 export KUBECONFIG=hack/real-hosts/.state/kubeconfig
 hack/real-hosts/demo.sh    # the docs site's demo; demo.sh --record records it to site/demo.cast
 hack/real-hosts/down.sh    # lima: deletes bo-host-1, and nothing else; ssh: leaves the machine
@@ -82,9 +82,9 @@ that commit instead of `latest`.
 | Step | What it does | What it proves |
 |---|---|---|
 | `machine` | `lima`: creates and starts `bo-host-1`, Lima `vz`, `--nested-virt`, 4 CPUs, 6 GiB, 40 GiB, Ubuntu 24.04, on Lima's default network, with no mounts. `ssh`: checks the machine answers and has sudo. | The Host has `/dev/kvm` and an address. |
-| `host` | Runs `host/provision.sh`: the thin pool `flintlock-thinpool` on loop devices (`bo-thin-pool.service`), containerd v1.7.22 with the devmapper snapshotter for `flintlockd` only, Firecracker v1.12.1, `flintlockd` v0.15.2 (checksum-verified), the bridge `flbr0`, a registry on `127.0.0.1:5000`, and `/etc/battery/flintlockd` owned by 65532. | The Host prerequisites of `docs/host-prerequisites.md`, but for `flintlockd`'s certificates, which come in `deploy`. |
+| `host` | Runs `host/provision.sh`: the thin pool `flintlock-thinpool` on loop devices (`bo-thin-pool.service`), containerd v1.7.22 with the devmapper snapshotter for `flintlockd` only, Firecracker v1.12.1, `flintlockd` v0.15.2 (checksum-verified), the bridge `flbr0` with a network for the MicroVMs on it (dnsmasq 2.90-2ubuntu0.4 for DHCP and DNS, IP forwarding and NAT), a registry on `127.0.0.1:5000`, and `/etc/battery/flintlockd` owned by 65532. | The Host prerequisites of `docs/host-prerequisites.md`, but for `flintlockd`'s certificates, which come in `deploy`. |
 | `k3s` | k3s v1.35.8 server, on the Host's address, with the Node named `bo-host-1` (`NODE_NAME`) and labelled `battery.liquidmetal-x.dev/host=true`. Writes `.state/kubeconfig`. | A Ready, schedulable Node whose InternalIP is where `flintlockd` and the Exec Agent serve. |
-| `images` | Builds the MicroVM kernel (Firecracker's CI 6.1 kernel) and root filesystem (Ubuntu 24.04, systemd, flintlock's guest-agent v0.4.0) for the Host's architecture, and pushes both to the Host's registry. | Images `flintlockd` can pull on the Host. |
+| `images` | Builds the MicroVM kernel (Firecracker's CI 6.1 kernel) and root filesystem (Ubuntu 24.04, systemd, flintlock's guest-agent v0.4.0, DHCP on the Pool's interfaces with systemd-networkd, DNS with systemd-resolved, and curl) for the Host's architecture, and pushes both to the Host's registry. | Images `flintlockd` can pull on the Host. |
 | `deploy` | cert-manager v1.20.2, then `config/default` and `config/exec-agent` as they ship, at `IMAGE_TAG` (`manifests/`). Waits for the Host's Node report. | The Exec Agent gets its certificates through CSRs the Operator signs, writes `flintlockd`'s, `flintlockd.path` starts `flintlockd` with them, and the agent reports its Host ready: KVM, thin pool, and `ServerInfo` over mutual TLS with exec enabled. |
 
 ### `smoke.sh`
@@ -93,6 +93,7 @@ that commit instead of `latest`.
 |---|---|---|
 | `pool` | Applies `smoke/trial.yaml`: a namespace, a Holder, and a Pool of 2 MicroVMs (1 vCPU, 1024 MiB, one tap interface on `flbr0`) with a create hook. | The Inventory Controller gave the Host to battery; battery created the MicroVMs through `flintlockd` over mutual TLS, reached their guest-agents, ran the create hook, and the Pool is Ready with 2 Firecracker processes on the Host. |
 | `claim` | Builds `smoke/main.go` (build tag `realhosts`) for the Host's architecture and runs it on the Host: it claims a MicroVM with `pkg/claimclient` as the Holder, runs `uname -a` in it through the Exec Agent, prints the output, and releases the claim. | The Client Library's whole path on a real Host: bind, the claim token, the Exec Agent's TLS and authorization, the relay to `flintlockd`'s exec API and the guest-agent, release. |
+| `network` | Claims a MicroVM and runs `curl -sSI https://github.com \| head -1` in it through the Exec Agent (`NETWORK_URL` changes the address). | A guest reaches the outside: it has an address, a default route and DNS by DHCP from dnsmasq on `flbr0`, the Host forwards and masquerades its traffic, and the image's CA certificates check the server's. |
 | `restart` | Restarts `flintlockd` under a running MicroVM, then claims again. | Whether a MicroVM survives a restart of its Host's `flintlockd`, and whether the Pool still serves claims afterwards. |
 | `delete` | Deletes the Pool. | The Pool goes, and every Firecracker process with it. |
 
@@ -122,6 +123,21 @@ can, with what battery-operator's ADR 0002 and ADR 0003 change:
   boot; the Host Image has a volume group. The name, `flintlock-thinpool`,
   is the same.
 - There is no firewall on `flintlockd`'s port (ADR 0002, consequence 2).
+- The MicroVMs have a network on `flbr0`, `10.220.0.0/24`, with the bridge
+  at `10.220.0.1`. `bo-dnsmasq.service` runs dnsmasq on `flbr0` alone: it
+  gives out `10.220.0.10` to `10.220.0.250` for an hour, with the bridge as
+  gateway and DNS server, and forwards DNS to the Host's resolvers.
+  `bo-guest-nat.service` (`host/guest-nat.sh`) turns on IP forwarding and
+  masquerades the subnet out through the Host, with iptables rules marked
+  `bo-trial`. k3s keeps its rules in its own chains, so flannel and the
+  pods' network are not changed.
+- In the guest, flintlock's `eth0` is for its metadata service, and the
+  Pool's interfaces start at `eth1`. systemd-networkd leaves `eth0` alone
+  and configures the others by DHCP (`images/rootfs/network/`). Boot does
+  not wait for the network: the guest-agent starts after `network.target`
+  only, and a wait for `network-online.target` ends after 10 seconds. Each
+  guest makes its own machine ID at boot, since udev derives the
+  interface's MAC address from it.
 
 ## What the first runs found
 

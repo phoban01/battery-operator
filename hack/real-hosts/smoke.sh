@@ -6,13 +6,16 @@
 #      run on the Host.
 #   2. The Client Library claims one, runs `uname -a` in it through the Exec
 #      Agent on the Host, and releases it (smoke/main.go, run on the Host).
-#   3. A MicroVM survives a restart of the Host's flintlockd, and the Pool
+#   3. A claimed MicroVM reaches the outside: it has an address by DHCP on
+#      flbr0, a route out through the Host's NAT and DNS, and gets an HTTP
+#      answer from https://github.com.
+#   4. A MicroVM survives a restart of the Host's flintlockd, and the Pool
 #      stays Ready and serves a claim afterwards.
-#   4. Deleting the Pool deletes its MicroVMs: the Pool goes, and no
+#   5. Deleting the Pool deletes its MicroVMs: the Pool goes, and no
 #      Firecracker process is left.
 #
 #   smoke.sh           every step
-#   smoke.sh <step>... only those: pool claim restart delete
+#   smoke.sh <step>... only those: pool claim network restart delete
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 NS=bo-trial
@@ -58,9 +61,10 @@ build_smoke() {
 
 # claim_once runs the Consumer on the Host, where the Exec Agent's address
 # is reachable, with k3s's admin kubeconfig to request the Holder's tokens.
+# It runs uname -a in the MicroVM, or the command given.
 claim_once() {
 	host_root /usr/local/bin/bo-trial-smoke -kubeconfig /etc/rancher/k3s/k3s.yaml \
-		-namespace "${NS}" -pool "${POOL}" -holder trial-holder -command "uname -a"
+		-namespace "${NS}" -pool "${POOL}" -holder trial-holder -command "${1:-uname -a}"
 }
 
 step_claim() {
@@ -71,6 +75,26 @@ step_claim() {
 	left="$(kubectl_ -n "${NS}" get microvmclaims --no-headers 2>/dev/null | wc -l)"
 	[[ "${left}" -eq 0 ]] || die "${left} claims left after the release"
 	log "PASS: claimed, ran uname -a through the Exec Agent, released"
+	wait_pool_ready 600s
+}
+
+# NETWORK_URL is what the network step fetches from a MicroVM.
+NETWORK_URL="${NETWORK_URL:-https://github.com}"
+
+step_network() {
+	[[ -x "${STATE_DIR}/smoke" ]] || build_smoke
+	log "Claiming a MicroVM and fetching ${NETWORK_URL} from it"
+	# The status line of a HEAD request. curl retries for a guest whose DHCP
+	# lease is still on its way; its CA certificates check github.com's.
+	local out
+	if ! out="$(claim_once "curl -sSI --max-time 20 --retry 3 --retry-all-errors ${NETWORK_URL} | head -1")"; then
+		printf '%s\n' "${out}" >&2
+		die "the Consumer failed"
+	fi
+	printf '%s\n' "${out}" >&2
+	grep -Eq '^HTTP/[0-9.]+ [23][0-9][0-9]' <<<"${out}" ||
+		die "the MicroVM got no HTTP answer from ${NETWORK_URL}"
+	log "PASS: the MicroVM reached ${NETWORK_URL} through DHCP, DNS and NAT on the Host"
 	wait_pool_ready 600s
 }
 
@@ -127,12 +151,12 @@ step_delete() {
 
 main() {
 	local steps=("$@")
-	[[ ${#steps[@]} -gt 0 ]] || steps=(pool claim restart delete)
+	[[ ${#steps[@]} -gt 0 ]] || steps=(pool claim network restart delete)
 	local s
 	for s in "${steps[@]}"; do
 		case "${s}" in
-		pool | claim | restart | delete) "step_${s}" ;;
-		*) die "unknown step ${s}: pool claim restart delete" ;;
+		pool | claim | network | restart | delete) "step_${s}" ;;
+		*) die "unknown step ${s}: pool claim network restart delete" ;;
 		esac
 	done
 }

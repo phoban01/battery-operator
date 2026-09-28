@@ -1,0 +1,16 @@
+# DHCP and DNS for the MicroVMs on flbr0: dnsmasq with
+# /etc/bo-trial/dnsmasq.conf (provision.sh writes it). It serves flbr0
+# only, so it does not touch the Host's own network or k3s's.
+[Unit]
+Description=DHCP and DNS for the MicroVMs on flbr0
+After=network.target bo-bridge.service
+Requires=bo-bridge.service
+Before=flintlockd.service
+
+[Service]
+ExecStart=/usr/sbin/dnsmasq --keep-in-foreground --conf-file=/etc/bo-trial/dnsmasq.conf
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
