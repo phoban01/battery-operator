@@ -1,0 +1,7 @@
+# eth0 is flintlock's interface for Firecracker's metadata service (MMDS),
+# which the trial does not use. systemd-networkd leaves it alone.
+[Match]
+Name=eth0
+
+[Link]
+Unmanaged=yes

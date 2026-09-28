@@ -67,8 +67,9 @@ spec:
     rootVolume:
       containerSource: 127.0.0.1:5000/bo-trial/rootfs:24.04
     # flintlock v0.15.2 refuses a MicroVM with no network interface
-    # (MicroVMSpec.NetworkInterfaces). A tap on flbr0, with no address: exec
-    # reaches the guest over vsock, and the image waits for no network.
+    # (MicroVMSpec.NetworkInterfaces). A tap on flbr0, eth1 in the guest,
+    # which takes an address by DHCP from dnsmasq on the bridge. Exec still
+    # reaches the guest over vsock.
     interfaces:
       - deviceId: eth1
         type: Tap

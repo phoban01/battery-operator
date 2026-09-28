@@ -1,6 +1,8 @@
 # The bridge flbr0: flintlockd refuses to start without --bridge-name or
-# --parent-iface. The trial's MicroVMs need no network (exec reaches them
-# over vsock), so the bridge has an address for the Host and no uplink.
+# --parent-iface, and puts each MicroVM's tap device on it. The bridge has
+# the Host's address on the guests' subnet, 10.220.0.1/24, and no uplink:
+# bo-dnsmasq.service gives the guests their addresses, and
+# bo-guest-nat.service routes them out through the Host.
 [Unit]
 Description=Bridge flbr0 for flintlockd's tap devices
 After=network.target

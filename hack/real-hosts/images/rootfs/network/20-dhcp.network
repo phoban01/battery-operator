@@ -1,0 +1,13 @@
+# The Pool's interfaces, eth1 and after: an address, a default route and DNS
+# servers by DHCP. IPv4 only: the trial's bridge serves no IPv6.
+[Match]
+Type=ether
+Name=eth*
+
+[Network]
+DHCP=ipv4
+LinkLocalAddressing=no
+IPv6AcceptRA=no
+
+[DHCPv4]
+ClientIdentifier=mac

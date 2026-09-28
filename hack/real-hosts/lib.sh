@@ -57,6 +57,10 @@ CONTAINERD_VERSION="${CONTAINERD_VERSION:-1.7.22}"
 FIRECRACKER_VERSION="${FIRECRACKER_VERSION:-v1.12.1}"
 FLINTLOCK_VERSION="${FLINTLOCK_VERSION:-v0.15.2}"
 REGISTRY_VERSION="${REGISTRY_VERSION:-3.1.2}"
+# Ubuntu 24.04's dnsmasq-base, from noble-security, for the guests' DHCP and
+# DNS on flbr0. An apt version: when Ubuntu replaces it with a newer
+# security update, set the new one here.
+DNSMASQ_VERSION="${DNSMASQ_VERSION:-2.90-2ubuntu0.4}"
 GUEST_AGENT_VERSION="${GUEST_AGENT_VERSION:-0.4.0}"
 CERT_MANAGER_VERSION="${CERT_MANAGER_VERSION:-v1.20.2}"
 

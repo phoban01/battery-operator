@@ -6,27 +6,53 @@
 # flintlockd unpacks this image onto containerd's devmapper snapshotter,
 # which gives the MicroVM an ext4 root block device, and Firecracker boots
 # the kernel with root=/dev/vda.
+#
+# The network: flintlock gives the guest eth0 for its metadata service
+# (MMDS), and the Pool's interfaces after it, from eth1. systemd-networkd
+# leaves eth0 alone and configures every other Ethernet interface by DHCP;
+# on the trial's Host, dnsmasq on flbr0 answers. systemd-resolved takes the
+# DNS servers from the lease. Boot does not wait for the network: the guest
+# agent needs only network.target, and systemd-networkd-wait-online gives
+# up after 10 seconds for anything that waits for network-online.target.
 FROM ubuntu:24.04
 ARG GUEST_AGENT_VERSION=0.4.0
 # From the release's checksums.txt.
 ARG GUEST_AGENT_SHA256_ARM64=c3c8bd3650d4725806f543fb8fe117ce75c42aa523441f426d71c42104e2f025
 ARG GUEST_AGENT_SHA256_AMD64=07bd0a393dc3416518154e8069705de247df642583f13a1f2983bf89b19ee933
 ARG TARGETARCH
+COPY network/ /etc/systemd/network/
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-        systemd systemd-sysv udev iproute2 ca-certificates curl kmod procps && \
+        systemd systemd-sysv systemd-resolved udev iproute2 ca-certificates curl kmod procps && \
     curl -fsSL -o /tmp/guest-agent.deb \
         "https://github.com/liquidmetal-dev/guest-agent/releases/download/v${GUEST_AGENT_VERSION}/guest-agent_${GUEST_AGENT_VERSION}_linux_${TARGETARCH}.deb" && \
     case "${TARGETARCH}" in arm64) sum="${GUEST_AGENT_SHA256_ARM64}" ;; amd64) sum="${GUEST_AGENT_SHA256_AMD64}" ;; *) exit 1 ;; esac && \
     echo "${sum}  /tmp/guest-agent.deb" | sha256sum -c - && \
     dpkg -i /tmp/guest-agent.deb && rm /tmp/guest-agent.deb && \
-    systemctl enable guest-agent.service && \
-    # Nothing waits for a network the MicroVM does not have.
-    systemctl mask systemd-networkd-wait-online.service systemd-timesyncd.service && \
+    systemctl enable guest-agent.service systemd-networkd.service systemd-resolved.service && \
+    # A wait for the network ends when one interface has an IPv4 address,
+    # or after 10 seconds.
+    mkdir -p /etc/systemd/system/systemd-networkd-wait-online.service.d && \
+    printf '[Service]\nExecStart=\nExecStart=/usr/lib/systemd/systemd-networkd-wait-online --any --ipv4 --timeout=10\n' \
+        >/etc/systemd/system/systemd-networkd-wait-online.service.d/timeout.conf && \
+    # The build owns /etc/resolv.conf, so the link to resolved's stub is made
+    # at boot.
+    printf 'L+ /etc/resolv.conf - - - - ../run/systemd/resolve/stub-resolv.conf\n' \
+        >/etc/tmpfiles.d/resolv.conf && \
+    # timesyncd stays off: the guest has its clock from the Host, through
+    # Firecracker.
+    systemctl mask systemd-timesyncd.service && \
     # A console on the serial port, logged in as root, for debugging.
     mkdir -p /etc/systemd/system/serial-getty@ttyS0.service.d && \
     printf '[Service]\nExecStart=\nExecStart=-/sbin/agetty --autologin root --noclear %%I 115200 linux\n' \
         >/etc/systemd/system/serial-getty@ttyS0.service.d/autologin.conf && \
     echo 'bo-trial' >/etc/hostname && \
+    # No machine ID in the image: each MicroVM makes its own at boot. With
+    # one ID for all, udev gives every guest the same MAC address (its
+    # MACAddressPolicy=persistent derives it from the ID), and DHCP the same
+    # address. An empty file is not a first boot, so systemd-firstboot does
+    # not run.
+    : >/etc/machine-id && \
+    ln -sf /etc/machine-id /var/lib/dbus/machine-id && \
     : >/etc/fstab && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
