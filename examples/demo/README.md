@@ -29,6 +29,27 @@ limactl shell bo-host-1 sudo bo-trial-smoke -kubeconfig /etc/rancher/k3s/k3s.yam
   -namespace demo -pool demo -holder demo-holder -command 'uname -a'
 ```
 
+A claim is also an ordinary resource. `claim.yaml` claims a MicroVM by hand,
+for the Holder `demo-holder`:
+
+```sh
+kubectl apply -f examples/demo/claim.yaml
+kubectl -n demo get microvmclaims
+kubectl -n demo get microvmclaim build-1 -o jsonpath='{.status}' | jq .
+```
+
+The claim's Lease lasts the Pool's `lease.expiryThreshold`, 30s here. Renew
+it by setting `spec.renewTime` to the current time:
+
+```sh
+kubectl -n demo patch microvmclaim build-1 --type merge \
+  -p '{"spec":{"renewTime":"'$(date -u +%Y-%m-%dT%H:%M:%S.000000Z)'"}}'
+```
+
+Unrenewed, the claim goes `Expired` and battery deletes its MicroVM.
+Deleting the claim releases the MicroVM at once. A Consumer normally lets
+the Client Library create, renew and delete its claims.
+
 `hack/real-hosts/demo.sh` runs all of this as the recorded demo.
 
 ## On other Hosts

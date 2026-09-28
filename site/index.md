@@ -23,7 +23,9 @@ the way you use anything else in a cluster:
 This recording is one Kubernetes Node with KVM. A Pool fills with two
 Firecracker MicroVMs. A Consumer claims one with the Client Library, and
 runs a command in it through the Exec Agent. The Pool starts a new MicroVM
-in place of the one claimed. Deleting the Pool deletes its MicroVMs.
+in place of the one claimed. Then a claim made with `kubectl` binds, is
+renewed, and goes Expired when nobody renews it. Deleting the Pool deletes
+its MicroVMs.
 
 <div id="demo"></div>
 <script src="https://cdn.jsdelivr.net/npm/asciinema-player@3.10.0/dist/bundle/asciinema-player.min.js"></script>
