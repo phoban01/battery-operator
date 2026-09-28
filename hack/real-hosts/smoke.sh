@@ -85,9 +85,11 @@ step_network() {
 	[[ -x "${STATE_DIR}/smoke" ]] || build_smoke
 	log "Claiming a MicroVM and fetching ${NETWORK_URL} from it"
 	# The status line of a HEAD request. curl retries for a guest whose DHCP
-	# lease is still on its way; its CA certificates check github.com's.
+	# lease is still on its way; its CA certificates check github.com's. sed,
+	# not head: head closes the pipe early, and curl takes the failed write
+	# as an error to retry.
 	local out
-	if ! out="$(claim_once "curl -sSI --max-time 20 --retry 3 --retry-all-errors ${NETWORK_URL} | head -1")"; then
+	if ! out="$(claim_once "curl -sSI --max-time 20 --retry 3 --retry-all-errors ${NETWORK_URL} | sed -n 1p")"; then
 		printf '%s\n' "${out}" >&2
 		die "the Consumer failed"
 	fi
