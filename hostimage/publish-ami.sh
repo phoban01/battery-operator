@@ -83,7 +83,10 @@ if [ "$dry_run" = 1 ]; then
 else
   command -v podman >/dev/null || { echo "podman is required" >&2; exit 1; }
   command -v aws >/dev/null || { echo "the aws command line is required to tag the AMI" >&2; exit 1; }
-  sudo podman image exists "$image" || sudo podman pull "$image"
+  # The AMI is x86_64 (--target-arch amd64 below), and a published Host
+  # Image holds both architectures, so the pull asks for x86_64 on any
+  # machine.
+  sudo podman image exists "$image" || sudo podman pull --arch amd64 "$image"
   digest=${IMAGE_DIGEST:-$(sudo podman image inspect --format '{{ .Digest }}' "$image")}
   kubernetes=$(sudo podman image inspect --format '{{ index .Labels "dev.liquidmetal-x.battery.version.kubernetes" }}' "$image")
 fi

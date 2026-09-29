@@ -24,7 +24,8 @@ requirement takes the next free number above HI-080.
 
 - **HI-001** The Host Image SHALL be defined by one Containerfile whose base
   is a bootc base image pinned by digest.
-- **HI-002** The Host Image SHALL be built for the `x86_64` architecture.
+- **HI-002** The Host Image SHALL be built for the `x86_64` and `aarch64`
+  architectures.
 - **HI-003** The Host Image SHALL contain containerd, Firecracker with its
   jailer, Cloud Hypervisor, `flintlockd`, the kubelet, `kubeadm` and
   cloud-init at the versions pinned in one versions file that the
@@ -48,7 +49,14 @@ requirement takes the next free number above HI-080.
   version.
 
 The Dagger module builds the image from its Containerfile, as ADR 0005 and
-ADR 0007 say, and CI publishes it on a version tag. The Kubernetes version
+ADR 0007 say, and CI publishes it on a version tag. Both architectures of
+HI-002 come from the one Containerfile of HI-001, and every download has a
+checksum for each architecture (HI-004). A version tag publishes one
+multi-architecture image, so a Host of either architecture boots from the
+same reference. ADR 0007 built for `x86_64` only and left `aarch64` open.
+The local proof of the image on an Apple silicon Mac (#169) needs
+`aarch64`, because a VM there runs only its own architecture with nested
+KVM, which Firecracker needs. The Kubernetes version
 is part of the image because the kubelet is, so a Host boots from an image
 whose Kubernetes version the cluster it joins supports. Turning the
 container image into a machine image for a cloud is a separate step that

@@ -95,17 +95,27 @@ jobs:
           call: capi-check
 
   # The Host Image (hostimage/, docs/requirements/11-host-image.md, ADR 0007):
-  # lint its sources, then build it for linux/amd64 from its Containerfile,
-  # which runs its check stage, run the checks again in the built image and
-  # compare its labels with hostimage/versions.env. The runner has no
-  # /dev/kvm and no cloud credentials (HI-007). The build is large and slow,
-  # so it runs only when the image, the Dagger module or this workflow
-  # changed, and always for a version tag, which publishes the image. Not a
-  # required check; the maintainer makes it one when ready.
+  # lint its sources, then build it from its Containerfile for linux/amd64
+  # and for linux/arm64 (HI-002), which runs its check stage, run the checks
+  # again in the built image and compare its labels with
+  # hostimage/versions.env. Each platform builds on a runner of its own
+  # architecture, without emulation. The runners have no /dev/kvm and no
+  # cloud credentials (HI-007). The build is large and slow, so it runs only
+  # when the image, the Dagger module or this workflow changed, and always
+  # for a version tag, which publishes the image. Not a required check; the
+  # maintainer makes it one when ready.
   host-image:
-    name: host-image
-    runs-on: ubuntu-latest
+    name: host-image ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -148,12 +158,15 @@ jobs:
         uses: ./.github/actions/setup-dagger
         with:
           version: ${{ env.DAGGER_VERSION }}
+      # The sources are the same for both platforms, so one job lints them.
       - name: lint the image sources
-        if: steps.changed.outputs.build == 'true'
+        if: steps.changed.outputs.build == 'true' && matrix.arch == 'amd64'
         run: dagger --progress=plain call host-image-lint
       - name: build the image, check stage included, and check it again
         if: steps.changed.outputs.build == 'true'
-        run: dagger --progress=plain call host-image-check
+        env:
+          PLATFORM: linux/${{ matrix.arch }}
+        run: dagger --progress=plain call host-image-check --platform="$PLATFORM"
 
   # The Quint models (specs/quint). Not a required check; the maintainer
   # makes it one in the branch protection when ready.
@@ -319,16 +332,25 @@ jobs:
           echo "publishing at: $tags"
           dagger --progress=plain call publish --tags="$tags" --username="$ACTOR" --password=env://GITHUB_TOKEN
 
-  # Publishes the Host Image, for linux/amd64, once every check and its own
-  # build have passed on a push of a version tag, and never from a pull
-  # request or main. It goes to ghcr.io/phoban01/battery-operator/host-image,
-  # tagged with the commit SHA and the version.
+  # Publishes the Host Image once every check and its own builds have passed
+  # on a push of a version tag, and never from a pull request or main. Each
+  # platform is built on a runner of its own architecture and pushed alone,
+  # tagged <commit SHA>-<arch>; host-image-index then joins them into one
+  # multi-architecture image. It goes to
+  # ghcr.io/phoban01/battery-operator/host-image.
   host-image-publish:
-    name: host-image-publish
+    name: host-image-publish ${{ matrix.arch }}
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     needs: [lint, test, build, check-generated, requirements, host-image]
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
     permissions:
       contents: read
       packages: write
@@ -346,7 +368,36 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ACTOR: ${{ github.actor }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          echo "publishing the Host Image for linux/$ARCH at: $GITHUB_SHA-$ARCH"
+          dagger --progress=plain call host-image-publish --tags="$GITHUB_SHA-$ARCH" --platforms="linux/$ARCH" \
+            --username="$ACTOR" --password=env://GITHUB_TOKEN
+
+  # Joins the Host Image of each platform, which host-image-publish pushed,
+  # into one multi-architecture image, tagged with the commit SHA and the
+  # version (HI-002).
+  host-image-index:
+    name: host-image-index
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: [host-image-publish]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - name: install dagger
+        uses: ./.github/actions/setup-dagger
+        with:
+          version: ${{ env.DAGGER_VERSION }}
+      - name: publish the index
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
         run: |
           tags="$GITHUB_SHA,$GITHUB_REF_NAME"
-          echo "publishing the Host Image at: $tags"
-          dagger --progress=plain call host-image-publish --tags="$tags" --username="$ACTOR" --password=env://GITHUB_TOKEN
+          echo "publishing the Host Image's index at: $tags"
+          dagger --progress=plain call host-image-index --tags="$tags" --from="$GITHUB_SHA" \
+            --username="$ACTOR" --password=env://GITHUB_TOKEN

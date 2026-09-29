@@ -69,14 +69,32 @@ expect "the image has the ostree layout of a bootc image" test -d /sysroot/ostre
 
 #= docs/requirements/11-host-image.md#image-build
 #= type=test
-#/ The Host Image SHALL be built for the `x86_64` architecture.
-for b in containerd runc firecracker jailer cloud-hypervisor-static flintlockd kubelet kubeadm; do
-  if file -L "/usr/bin/$b" 2>/dev/null | grep -q 'x86-64'; then
-    ok "$b is an x86-64 binary"
-  elif ! command -v file >/dev/null 2>&1 && [ "$(od -An -tx1 -j18 -N2 "/usr/bin/$b" | tr -d ' ')" = 3e00 ]; then
-    ok "$b is an x86-64 binary (ELF machine 0x3e)"
+#/ The Host Image SHALL be built for the `x86_64` and `aarch64`
+#/ architectures.
+# The image's architecture is that of the base image's own bash, which the
+# builder chose from the base's multi-architecture index. It has to be one
+# of the two, and every pinned binary has to be built for it: a download for
+# the wrong architecture fails here. The ELF machine field is read from the
+# file, so no emulation layer can answer for it.
+elf_machine() {
+  case "$(od -An -tx1 -j18 -N2 "$(readlink -f "$1")" 2>/dev/null | tr -d ' \n')" in
+  3e00) echo x86_64 ;;
+  b700) echo aarch64 ;;
+  '') echo "not a file" ;;
+  *) echo other ;;
+  esac
+}
+arch=$(elf_machine /usr/bin/bash)
+case "$arch" in
+x86_64 | aarch64) ok "the image is built for $arch" ;;
+*) fail "the image's /usr/bin/bash is $arch, neither x86_64 nor aarch64" ;;
+esac
+for b in containerd containerd-shim-runc-v2 ctr runc firecracker jailer cloud-hypervisor-static flintlockd kubelet kubeadm; do
+  got=$(elf_machine "/usr/bin/$b")
+  if [ "$got" = "$arch" ]; then
+    ok "$b is an $arch binary"
   else
-    fail "$b is not an x86-64 binary"
+    fail "$b is $got, not an $arch binary"
   fi
 done
 
@@ -102,16 +120,16 @@ reports() {
     # User-mode emulation lacks system calls some binaries make before they
     # print anything (the jailer calls close_range). The binary could not
     # speak, so its embedded version string is read instead. This says less
-    # than running it, and says so; on an x86_64 kernel the branch is not
-    # reached.
+    # than running it, and says so; on a kernel of the image's own
+    # architecture the branch is not reached.
     ok "$name embeds $want (could not run here: $(printf '%s' "$out" | grep -m1 -o 'Failed to call.*' | cut -c1-80))"
   else
     fail "$name reports '${got:-nothing}', pinned $want: $out"
   fi
 }
 reports containerd "$CONTAINERD_VERSION" sh -c "containerd --version | awk '{print \$3}'"
-# runc is asked under another name. An emulation layer that runs this x86_64
-# image on another architecture may answer for a binary called "runc" with
+# runc is asked under another name. An emulation layer that runs this image
+# on another architecture may answer for a binary called "runc" with
 # the machine's own native runc (OrbStack does), and the check has to hear
 # from the bytes that were pinned, on every machine.
 cp /usr/bin/runc "$work/runc-under-test"
@@ -133,10 +151,13 @@ expect "containerd has the devmapper snapshotter built in" \
 #/ fail when one does not match.
 # The fetch stage has already refused any mismatch, or this image would not
 # exist. What is checked here is that no download can escape it: every
-# pinned download has a well-formed checksum beside its version.
+# pinned download has a well-formed checksum beside its version, for each
+# architecture the image is built for.
 for k in CONTAINERD RUNC FIRECRACKER CLOUD_HYPERVISOR FLINTLOCK; do
-  sum=${k}_SHA256
-  if [[ ${!sum:-} =~ ^[0-9a-f]{64}$ ]]; then ok "$sum is a sha256"; else fail "$sum is not a sha256"; fi
+  for a in AMD64 ARM64; do
+    sum=${k}_SHA256_$a
+    if [[ ${!sum:-} =~ ^[0-9a-f]{64}$ ]]; then ok "$sum is a sha256"; else fail "$sum is not a sha256"; fi
+  done
 done
 if [[ ${KUBERNETES_REPO_KEY_SHA256:-} =~ ^[0-9a-f]{64}$ ]] &&
   echo "$KUBERNETES_REPO_KEY_SHA256  /etc/pki/rpm-gpg/RPM-GPG-KEY-kubernetes" | sha256sum -c - >/dev/null 2>&1; then

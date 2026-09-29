@@ -7,11 +7,14 @@
 #
 #   labels        the image's OCI labels, one KEY=value per line
 #   platform      the image's platform, for example linux/amd64
+#   want-platform the platform the image was built for, for example
+#                 linux/arm64
 #   versions.env  /usr/share/battery/versions.env from inside the image
 #
 # Fails unless every component version of hostimage/versions.env is a label
-# with the same value, the image is x86_64 and the versions file inside it
-# is this one.
+# with the same value, the image is the platform it was built for and that
+# is linux/amd64 or linux/arm64, and the versions file inside it is this
+# one.
 #
 #= docs/requirements/11-host-image.md#image-build
 #= type=test
@@ -45,12 +48,23 @@ label cloud-init "$CLOUD_INIT_VERSION"
 
 #= docs/requirements/11-host-image.md#image-build
 #= type=test
-#/ The Host Image SHALL be built for the `x86_64` architecture.
+#/ The Host Image SHALL be built for the `x86_64` and `aarch64`
+#/ architectures.
+# linux/amd64 is x86_64 and linux/arm64 is aarch64. CI builds and checks
+# each; this checks one build.
 platform=$(cat "$dir/platform")
-if [ "$platform" = linux/amd64 ]; then
-  echo "ok    the image's platform is linux/amd64"
+want=$(cat "$dir/want-platform")
+case "$want" in
+linux/amd64 | linux/arm64) echo "ok    the image was built for $want" ;;
+*)
+  echo "FAIL  the image was built for $want, which is neither linux/amd64 nor linux/arm64"
+  failed=1
+  ;;
+esac
+if [ "$platform" = "$want" ]; then
+  echo "ok    the image's platform is $platform"
 else
-  echo "FAIL  the image's platform is $platform, want linux/amd64"
+  echo "FAIL  the image's platform is $platform, want $want"
   failed=1
 fi
 

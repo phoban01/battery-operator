@@ -25,7 +25,7 @@ fail() {
 scripts=(hostimage/check.sh hostimage/check-thin-pool.sh hostimage/check-flintlockd-access.sh hostimage/check-flintlockd-certs.sh
   hostimage/check-guest-isolation.sh hostimage/check-gateway-service-egress.sh hostimage/check-selinux-contexts.sh hostimage/check-labels.sh hostimage/lint.sh
   hostimage/build/*.sh hostimage/rootfs/usr/libexec/battery/*)
-scripts+=(hostimage/publish-ami.sh)
+scripts+=(hostimage/publish-ami.sh hostimage/pin-base.sh)
 for s in "${scripts[@]}"; do
   bash -n "$s" || fail "bash -n $s"
 done
@@ -60,7 +60,68 @@ while read -r _ a b c d; do
   esac
   [ "${b,,}" = as ] && stages="$stages$c "
 done < <(grep -E '^FROM ' hostimage/Containerfile)
-grep -Eq '^FROM --platform=linux/amd64 .*bootc@sha256:' hostimage/Containerfile || fail "the base is not a bootc image for linux/amd64"
+grep -Eq '^FROM .*bootc@sha256:[0-9a-f]{64} AS base$' hostimage/Containerfile || fail "the base is not a bootc image pinned by digest"
+
+#= docs/requirements/11-host-image.md#image-build
+#= type=test
+#/ The Host Image SHALL be built for the `x86_64` and `aarch64`
+#/ architectures.
+# The build of each architecture is CI's; here the sources are checked to
+# build either one. The base takes the target platform, so the builder picks
+# the target's image from the base's index; the fetch stage alone runs on
+# the build machine's platform; no FROM names a fixed platform; the fetch
+# stage is given the target architecture; and every download has a
+# checksum for both.
+# The Containerfile's build arguments are literal here, not shell.
+# shellcheck disable=SC2016
+base_re='^FROM --platform=\$TARGETPLATFORM .*bootc@sha256:[0-9a-f]{64} AS base$'
+# shellcheck disable=SC2016
+variable_platform_re='^FROM --platform=\$(TARGETPLATFORM|BUILDPLATFORM) '
+# shellcheck disable=SC2016
+fetch_run='RUN bash /build/fetch.sh /build/versions.env "$TARGETARCH"'
+if grep -Eq "$base_re" hostimage/Containerfile; then
+  echo "ok    the base takes the target platform"
+else
+  fail "the base does not take the target platform: FROM --platform=\$TARGETPLATFORM <bootc>@sha256:... AS base"
+fi
+fixed=$(grep -E '^FROM --platform=' hostimage/Containerfile | grep -vE "$variable_platform_re" | head -n1)
+if [ -n "$fixed" ]; then
+  fail "a FROM names a fixed platform: $fixed"
+else
+  echo "ok    no FROM names a fixed platform"
+fi
+if grep -qxF "$fetch_run" hostimage/Containerfile; then
+  echo "ok    the fetch stage fetches for the target architecture"
+else
+  fail "the fetch stage is not given \$TARGETARCH"
+fi
+while read -r k; do
+  for a in AMD64 ARM64; do
+    if grep -Eq "^${k}_SHA256_$a=[0-9a-f]{64}$" hostimage/versions.env; then
+      echo "ok    hostimage/versions.env has ${k}_SHA256_$a"
+    else
+      fail "hostimage/versions.env has no sha256 ${k}_SHA256_$a"
+    fi
+  done
+done < <(sed -n 's/^\([A-Z][A-Z0-9_]*\)_SHA256_[A-Z0-9]*=.*/\1/p' hostimage/versions.env | sort -u)
+if grep -E '^[A-Z][A-Z0-9_]*_SHA256=' hostimage/versions.env | grep -v '^KUBERNETES_REPO_KEY_SHA256=' | grep -q .; then
+  fail "hostimage/versions.env has a checksum without an architecture: $(grep -E '^[A-Z][A-Z0-9_]*_SHA256=' hostimage/versions.env | grep -v '^KUBERNETES_REPO_KEY_SHA256=' | head -n1)"
+else
+  echo "ok    every binary's checksum names its architecture"
+fi
+# pin-base.sh (make host-image-base-pin) still pins a mirror of the base's
+# index into both FROM lines, and the base still takes the target platform.
+pin_dir=$(mktemp -d)
+cp hostimage/Containerfile "$pin_dir/Containerfile"
+pin_digest=sha256:$(printf 'b%.0s' $(seq 1 64))
+if hostimage/pin-base.sh "ghcr.io/example/fedora-bootc:44-20260929-bbbbbbbb@$pin_digest" "quay.io/fedora/fedora-bootc:44@$pin_digest" \
+  "$pin_dir/Containerfile" >/dev/null &&
+  grep -qxF "FROM --platform=\$TARGETPLATFORM ghcr.io/example/fedora-bootc@$pin_digest AS base" "$pin_dir/Containerfile"; then
+  echo "ok    pin-base.sh pins a mirror of the index for the target platform"
+else
+  fail "pin-base.sh does not pin a mirror of the index into the base for the target platform"
+fi
+rm -rf "$pin_dir"
 
 #= docs/requirements/11-host-image.md#image-build
 #= type=test
