@@ -177,7 +177,7 @@ Commit and push. Flux applies cert-manager first, then battery-operator.
 Notes:
 
 - `ref.tag` pins one release. To take patch releases as they come, use
-  `ref.semver` in its place, for example `semver: "0.1.x"`. Flux then
+  `ref.semver` in its place, for example `semver: "0.2.x"`. Flux then
   ignores the commit SHA tags, because they are not versions.
 - `interval` on the `OCIRepository` is how often Flux looks for a new
   artifact. `interval` on the `Kustomization` is how often Flux corrects
