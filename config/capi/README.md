@@ -20,8 +20,10 @@ run on.
 - A workload cluster that Cluster API manages, with a kubeadm control
   plane, a CNI and the AWS cloud controller manager. The Hosts join it with
   `--cloud-provider=external`.
-- battery-operator in the workload cluster: `config/default` and
-  `config/exec-agent`.
+- battery-operator in the workload cluster, installed from a release as the
+  [install guide](https://phoban01.github.io/battery-operator/install.html)
+  says (`config/release`, which renders `config/default` and
+  `config/exec-agent` together).
 - The Host Image published as an AMI in the region of the cluster. See
   [Publishing an AMI](../../hostimage/README.md#publishing-an-ami).
 - A subnet for the Hosts.
