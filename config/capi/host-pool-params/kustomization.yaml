@@ -121,6 +121,14 @@ replacements:
           - spec.template.spec.additionalSecurityGroups
   - source:
       kind: ConfigMap
+      fieldPath: data.rootVolumeGiB
+    targets:
+      - select:
+          kind: AWSMachineTemplate
+        fieldPaths:
+          - spec.template.spec.rootVolume.size
+  - source:
+      kind: ConfigMap
       fieldPath: data.unhealthySeconds
     targets:
       - select:

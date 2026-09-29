@@ -56,6 +56,7 @@ every value in the pool's `host-pool.yaml`.
    | `amiID` | The AMI of the Host Image, by id |
    | `subnetID` | The subnet of the Hosts, by id |
    | `additionalSecurityGroups` | A list of `id: sg-…` entries: security groups for the Hosts besides CAPA's own. See below |
+   | `rootVolumeGiB` | The size of each Host's root volume, in GiB. It holds the operating system, containerd's images and the emptyDir volumes of the Host's pods |
    | `kubernetesVersion` | The Kubernetes version of that AMI: its `battery.liquidmetal-x.dev/kubernetes-version` tag |
    | `nodeDrainTimeoutSeconds` | How long Cluster API waits for a Host to drain. At least the Exec Agent's `--drain-timeout`, one hour by default |
    | `unhealthySeconds` | How long a Host's Node may stay not ready before Cluster API replaces the Machine |

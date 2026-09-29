@@ -14,6 +14,7 @@ data:
   additionalSecurityGroups:
     - id: sg-0aaaaaaaaaaaaaaa1
     - id: sg-0aaaaaaaaaaaaaaa2
+  rootVolumeGiB: "150"
   kubernetesVersion: v1.35.8
   nodeDrainTimeoutSeconds: "4500"
   unhealthySeconds: "301"

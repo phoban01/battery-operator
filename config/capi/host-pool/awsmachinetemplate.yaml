@@ -43,6 +43,10 @@ spec:
         insecureSkipSecretsManager: true
       # No SSH key: a Host is reached through the cluster.
       sshKeyName: ""
+      #= docs/requirements/12-host-pool.md#host-pool
+      #/ The Host Pool Templates SHALL set the size of every Host's
+      #/ root volume, in GiB, from the pool's settings.
+      # Replaced from host-pool.yaml.
       rootVolume:
         size: 100
         type: gp3

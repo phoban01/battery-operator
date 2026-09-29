@@ -44,6 +44,8 @@ The AMI the templates boot is made by HI-009, in `11-host-image.md`.
   the interval its host-pool.yaml sets.
 - **HP-006** The Host Pool Templates SHALL attach to every Host of a pool the
   additional security groups that the pool's settings list by id.
+- **HP-007** The Host Pool Templates SHALL set the size of every Host's
+  root volume, in GiB, from the pool's settings.
 
 The pool size is the MachineDeployment's replica count. One instance type
 per pool keeps the capacity of a pool simple to reason about, and one AMI
@@ -66,6 +68,12 @@ group does not open that port. One of the pool's groups admits it from the
 Operator's pod network, the ranges of `FLINTLOCKD_CLIENT_CIDRS`, and from
 the node range on a CNI that masquerades pod traffic between Nodes. The
 Host's own firewall still admits only `FLINTLOCKD_CLIENT_CIDRS` (HI-069).
+
+HP-007 exists because the root volume holds more than the operating
+system. containerd keeps the MicroVMs' kernel and root filesystem images
+there, and a consumer's pods keep their emptyDir volumes there, such as a
+cache for services on the guest bridge. How much room that needs depends
+on the pool, not on the Host Image.
 
 A known gap: the MachineHealthCheck of HP-005 watches the Host's own Node.
 A Host that cannot run MicroVMs, for want of KVM (HI-011) or of a thin pool

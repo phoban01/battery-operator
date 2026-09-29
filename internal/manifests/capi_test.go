@@ -90,6 +90,12 @@ type machineDeployment struct {
 	} `json:"spec"`
 }
 
+// The names of the two pools in testdata/capi.
+const (
+	testPoolA = "hosts-a"
+	testPoolB = "hosts-b"
+)
+
 // awsMachineTemplate is the part of an AWSMachineTemplate the tests read,
 // and its spec.template.spec as a map, to look for fields by name.
 type awsMachineTemplate struct {
@@ -107,6 +113,9 @@ type awsMachineTemplate struct {
 				AdditionalSecurityGroups []struct {
 					ID string `json:"id"`
 				} `json:"additionalSecurityGroups"`
+				RootVolume struct {
+					Size int `json:"size"`
+				} `json:"rootVolume"`
 				CloudInit struct {
 					InsecureSkipSecretsManager bool `json:"insecureSkipSecretsManager"`
 				} `json:"cloudInit"`
@@ -370,9 +379,9 @@ func TestHostPoolSettingsLand(t *testing.T) {
 		conf                                        map[string]string
 	}
 	wants := map[string]want{
-		"hosts-a": {"workload-a", "v1.35.8", "m6id.metal", "ami-0123456789abcdef0", "subnet-0aaaaaaaaaaaaaaaa", 3, 4500, 301,
+		testPoolA: {"workload-a", "v1.35.8", "m6id.metal", "ami-0123456789abcdef0", "subnet-0aaaaaaaaaaaaaaaa", 3, 4500, 301,
 			map[string]string{"GUEST_SUBNET": "10.220.0.0/16", "FLINTLOCKD_CLIENT_CIDRS": "192.168.0.0/16"}},
-		"hosts-b": {"workload-a", "v1.35.7", "c6id.metal", "ami-0fedcba9876543210", "subnet-0bbbbbbbbbbbbbbbb", 5, 7200, 600,
+		testPoolB: {"workload-a", "v1.35.7", "c6id.metal", "ami-0fedcba9876543210", "subnet-0bbbbbbbbbbbbbbbb", 5, 7200, 600,
 			map[string]string{"GUEST_SUBNET": "10.230.0.0/24", "THIN_POOL_DEVICE": "/dev/nvme2n1"}},
 	}
 	objs := buildCAPI(t, capiTestdata)
@@ -451,8 +460,8 @@ func TestHostPoolSettingsLand(t *testing.T) {
 func TestHostPoolSecurityGroups(t *testing.T) {
 	t.Parallel()
 	wants := map[string][]string{
-		"hosts-a": {"sg-0aaaaaaaaaaaaaaa1", "sg-0aaaaaaaaaaaaaaa2"},
-		"hosts-b": {"sg-0bbbbbbbbbbbbbbb1"},
+		testPoolA: {"sg-0aaaaaaaaaaaaaaa1", "sg-0aaaaaaaaaaaaaaa2"},
+		testPoolB: {"sg-0bbbbbbbbbbbbbbb1"},
 	}
 	for _, dir := range capiRenders {
 		for _, p := range hostPools(t, buildCAPI(t, dir)) {
@@ -471,6 +480,30 @@ func TestHostPoolSecurityGroups(t *testing.T) {
 			}
 			if dir == capiTestdata && !slices.Equal(got, wants[name]) {
 				t.Errorf("%s/%s: the security groups are %v; want %v", dir, name, got, wants[name])
+			}
+		}
+	}
+}
+
+//= docs/requirements/12-host-pool.md#host-pool
+//= type=test
+//# The Host Pool Templates SHALL set the size of every Host's
+//# root volume, in GiB, from the pool's settings.
+
+// TestHostPoolRootVolume finds each filled-in pool's root volume size on
+// its AWSMachineTemplate, and a size on every pool's.
+func TestHostPoolRootVolume(t *testing.T) {
+	t.Parallel()
+	wants := map[string]int{testPoolA: 150, testPoolB: 400}
+	for _, dir := range capiRenders {
+		for _, p := range hostPools(t, buildCAPI(t, dir)) {
+			name := p.md.Metadata.Name
+			got := p.machine.Spec.Template.Spec.RootVolume.Size
+			if got <= 0 {
+				t.Errorf("%s/%s: the root volume has no size", dir, name)
+			}
+			if dir == capiTestdata && got != wants[name] {
+				t.Errorf("%s/%s: the root volume is %d GiB; want %d", dir, name, got, wants[name])
 			}
 		}
 	}
