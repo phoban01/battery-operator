@@ -43,8 +43,8 @@ Every behaviour is specified as an EARS requirement in
 README there has the rules; the short version:
 
 - Each owned ID is cited in the implementation (`//=` and `//#` lines) and in
-  a test (the same, plus a `//= type=test` line). YAML under `config/` uses
-  `#=` and `#/`.
+  a test (the same, plus a `//= type=test` line). YAML under `config/`, and
+  the Host Image's files under `hostimage/`, use `#=` and `#/`.
 - Keep a blank line between a citation and the doc comment of the `func` or
   type below it. Otherwise `gofmt` rewrites `//=` to `// =`, and duvet ignores
   the citation without an error.
@@ -145,6 +145,7 @@ Now:
 | `docs/requirements/` | EARS requirements, `.duvet/` their configs (code, and models) and snapshot |
 | `hack/` | Boilerplate header, `duvet-coverage.sh`, `duvet-models.sh`, `quint.sh` |
 | `specs/quint/` | Quint models and their shared types |
+| `hostimage/` | The Host Image: a bootc image a Host boots from, its Containerfile, units, scripts, SELinux module and checks (`11-host-image.md`, ADR 0007); the Dagger module builds it, `make host-image-lint` and `make host-image-check` |
 
 Where the issues put new things:
 

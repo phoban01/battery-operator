@@ -25,6 +25,7 @@ The design these requirements specify is recorded in
 | `08-test-doubles.md` | `TD` | The fake battery and fake `flintlockd` that stand in for KVM and battery during development |
 | `09-certificates.md` | `CT` | The Operator as approver and signer of the Hosts' certificates, and the SPIFFE identities they carry |
 | `10-battery.md` | `BA` | What the Operator assumes battery v0.3.3 does, each with a pointer into battery's source |
+| `11-host-image.md` | `HI` | The Host Image: the bootc image a Host boots from, its units, guest network and checks |
 
 `10-battery.md` is the one document whose subject is not a system this
 project builds. Its statements are assumptions about battery, read from
@@ -38,8 +39,9 @@ depends on battery's behaviour names the assumption.
 Use exactly one of these shapes per requirement. The subject is always one of
 the system names defined in the glossary: the Operator, the CRDs, the Claim
 Controller, the Pool Controller, the Inventory Controller, the Exec Agent, the
-Manifests, the Client Library, the fake battery, the fake `flintlockd`, the
-unit tests, the e2e suite. In `10-battery.md` alone, the subject is battery.
+Manifests, the Client Library, the Host Image, the fake battery, the fake
+`flintlockd`, the unit tests, the e2e suite. In `10-battery.md` alone, the
+subject is battery.
 
 | Pattern | Shape |
 |---------|-------|
@@ -110,7 +112,12 @@ reports the citation as missing. Citations on the first lines inside a
 function body are safe too.
 
 YAML under `config/` cites requirements the same way, with `#=` and `#/` in
-place of `//=` and `//#`.
+place of `//=` and `//#`. So do the Host Image's files under `hostimage/`:
+its Containerfile, shell scripts, systemd units, configuration files and
+SELinux module all take `#` comments. Its checks are shell scripts, and a
+check cites a requirement with a `#= type=test` line. Inside a heredoc, a
+quote with backticks would run as a command, so put such a citation above
+the heredoc.
 
 Other annotation types: `type=exception` with a `reason=` line for a
 requirement deliberately not met, `type=implication` for one satisfied by

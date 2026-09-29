@@ -103,8 +103,8 @@ network does not route to the Mac).
 
 ## How the Host is put together
 
-`host/` has the units and scripts. They mirror flintlock-runner's Host
-Image (`image/rootfs/usr/lib/systemd/system/flintlockd.service`) where they
+`host/` has the units and scripts. They mirror the Host
+Image (`hostimage/rootfs/usr/lib/systemd/system/flintlockd.service`) where they
 can, with what battery-operator's ADR 0002 and ADR 0003 change:
 
 - `flintlockd` serves on the Host's internal address, not loopback, with

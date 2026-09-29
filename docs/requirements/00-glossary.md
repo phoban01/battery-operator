@@ -34,6 +34,9 @@ use. It contains no requirements.
   each Host's `flintlockd` in the e2e suite.
 - **unit tests**: the Go tests run by `make test`, which use fakes and no
   Kubernetes API server.
+- **Host Image**: the bootc container image in `hostimage/` that a Node
+  boots from to become a Host. It meets the Host prerequisites, and adds
+  the guest network a MicroVM needs.
 - **e2e suite**: the end-to-end tests in `test/e2e/`, written with
   [sigs.k8s.io/e2e-framework](https://github.com/kubernetes-sigs/e2e-framework),
   which create a kind cluster, deploy the Manifests into it and test the
@@ -83,9 +86,17 @@ use. It contains no requirements.
 - **Host prerequisites**: what a Node has to provide before it can be a
   Host: `flintlockd` with its exec API enabled, serving on the Host's
   internal address with mutual TLS against the `flintlockd` client CA; KVM;
-  and containerd's thin pool. This project ships no Host Image.
-  flintlock-runner has one, which has to change to serve `flintlockd` this
-  way (ADR 0002).
+  and containerd's thin pool. The Host Image is one way to meet them
+  (ADR 0007); a Node built another way that meets them is a Host too.
+- **Host configuration file**: `/etc/battery/host.conf`, the per-Host
+  settings the Host Image reads at boot, which the Host's bootstrap
+  configuration writes: the guest subnet, the thin pool device, the
+  protected CIDRs, the Host reserve and who may reach `flintlockd`.
+- **guest subnet**: the IPv4 subnet of the bridge `flbr0` on a Host, from
+  which the MicroVMs on that Host get their addresses.
+- **not ready reason directory**: `/run/battery/not-ready.d` on a Host, where
+  a Host Image writes one file per reason the Host is not ready, and which
+  the Exec Agent reads (EA-033, EA-036).
 - **`flintlockd` client CA**: the certificate authority whose certificates
   `flintlockd` admits. It signs only for battery and for Exec Agents.
 - **serving CA**: the certificate authority that signs every Host's `flintlockd`

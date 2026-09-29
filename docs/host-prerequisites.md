@@ -1,13 +1,21 @@
 # Host prerequisites
 
 A Host is a Kubernetes Node that runs `flintlockd` and an Exec Agent, and
-that the Inventory Controller has given to battery. This project ships no
-Host Image ([ADR 0001](adr/0001-standalone-operator-over-battery-grpc.md),
-decision 9): it states what a Node has to provide before it can be a Host,
-and the Exec Agent checks it on the Node itself (decision 10). A Node joins
-battery's Hosts only while its Exec Agent reports it ready (IN-001).
+that the Inventory Controller has given to battery. This page states what a
+Node has to provide before it can be a Host, and the Exec Agent checks most
+of it on the Node itself
+([ADR 0001](adr/0001-standalone-operator-over-battery-grpc.md), decision
+10). A Node joins battery's Hosts only while its Exec Agent reports it ready
+(IN-001).
 
-This page is the operator's view. The requirements are
+This page is the contract. One way to meet it is the Host Image in
+[`hostimage/`](../hostimage/README.md), a bootc image a Node boots from
+([ADR 0007](adr/0007-reference-host-image-and-cluster-api.md)): it provides
+every prerequisite below, and its requirements are
+[11-host-image.md](requirements/11-host-image.md). A Node built another way
+that meets the prerequisites is a Host too.
+
+This page is the operator's view. The requirements for the checks are
 [05-exec-agent.md#host-checks](requirements/05-exec-agent.md#host-checks);
 the glossary's *Host prerequisites* is the short form.
 
@@ -19,9 +27,11 @@ the glossary's *Host prerequisites* is the short form.
 | KVM: a KVM device, `/dev/kvm` | `flintlockd`'s hypervisor runs every MicroVM on it | the device in sysfs and `/dev/kvm` a character device, not opened (EA-031) | `KVMUnavailable` |
 | containerd's thin pool | `flintlockd` puts every MicroVM's volumes on containerd's devmapper snapshotter | looking the pool up in sysfs (EA-032) | `ThinPoolMissing` |
 | The label `battery.liquidmetal-x.dev/host=true` | the Exec Agent runs only on labelled Nodes (EA-004) | the DaemonSet's node selector | no Exec Agent, so no Node report |
+| Guest networking: DHCP and NAT on the bridge `flbr0`, and isolation from the cluster | a MicroVM gets its address from the Host and reaches the outside, and nothing of the cluster | not checked by the Exec Agent; the Host Image provides it (HI-030 to HI-037, HI-075 to HI-077) | none: a MicroVM without it has no network, or too much |
 
 A Host Image can add reasons of its own through the not ready reason
-directory (EA-033); the agent reports those as `HostImageNotReady`.
+directory, `/run/battery/not-ready.d` (EA-033); the agent reports those as
+`HostImageNotReady`.
 
 ### `flintlockd`
 
@@ -53,7 +63,8 @@ Image:
 
 A systemd `.path` unit with `PathExists=` on `tls.crt` does the first, and
 another with `PathChanged=` on both files does the second.
-`hack/real-hosts/host/` has both. The agent's own client certificate and
+The Host Image (`flintlockd.path` and `battery-flintlockd-restart.path`)
+and `hack/real-hosts/host/` have both. The agent's own client certificate and
 serving certificate stay in its memory and are not on the Host.
 
 ### KVM
@@ -89,7 +100,7 @@ containerd's devmapper snapshotter uses a device-mapper thin pool whose name
 is its `pool_name`. The pool is activated whenever the Host is up. The Exec
 Agent is configured with the same name, `--thin-pool`, by default
 `flintlock-thinpool`, which is flintlock's default and what
-flintlock-runner's Host Image creates (the logical volume `thinpool` in the
+the Host Image creates (the logical volume `thinpool` in the
 volume group `flintlock`).
 
 The agent looks the name up in sysfs: every device-mapper device is
@@ -104,6 +115,33 @@ resolve. So the DaemonSet needs no mount for this check, and
 
 The check is that the pool is present. It does not check that the device is
 a thin pool rather than some other device of that name, nor how full it is.
+
+### Guest networking
+
+A MicroVM needs an address, a way out, and a wall between it and the
+cluster. The Host provides this with flintlock's documented bridge option,
+without libvirt:
+
+- `flintlockd` puts each MicroVM's TAP device on the bridge `flbr0`
+  (`--bridge-name flbr0`).
+- The bridge has the first address of the guest subnet, and a DHCP and DNS
+  service bound to the bridge alone gives guests an address, the gateway
+  and a resolver.
+- The Host forwards IPv4 and masquerades the guest subnet out of its
+  primary interface.
+- The Host isolates guests from the cluster: it drops their traffic to the
+  instance metadata service, to its own addresses except DHCP and DNS on
+  the gateway, to every interface but the primary one (so pods on the Host
+  and overlay tunnels), and to the cluster's node, pod and Service ranges,
+  a Service's address before kube-proxy's DNAT included.
+
+The Exec Agent does not check any of this, and a Host without it is still
+reported ready: its MicroVMs then have no network, or reach more than they
+should. Keep the guest subnet clear of the cluster's ranges and of the
+network the Host is on. The Host Image's default is `10.220.0.0/16`, which
+clashes with neither AWS's default VPC, `172.31.0.0/16`, nor flintlock's
+documented `192.168.100.0/24`. Its [README](../hostimage/README.md) has the
+rules, and the settings in the Host configuration file that change them.
 
 ## What the Node report says
 

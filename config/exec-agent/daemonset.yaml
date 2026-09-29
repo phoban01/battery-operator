@@ -117,7 +117,7 @@ spec:
             # EA-033: the Host Image's units write their not ready reasons
             # here; the agent only reads them.
             - name: not-ready
-              mountPath: /run/flr/not-ready.d
+              mountPath: /run/battery/not-ready.d
               readOnly: true
             # EA-031: the Host's devices, for /dev/kvm.
             - name: host-dev
@@ -130,7 +130,7 @@ spec:
             type: Directory
         - name: not-ready
           hostPath:
-            path: /run/flr/not-ready.d
+            path: /run/battery/not-ready.d
             type: DirectoryOrCreate
         - name: host-dev
           hostPath:

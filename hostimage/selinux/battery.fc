@@ -1,0 +1,5 @@
+/run/battery(/.*)?		gen_context(system_u:object_r:battery_run_t,s0)
+/run/battery/host\.env	--	gen_context(system_u:object_r:container_ro_file_t,s0)
+/run/battery/\.host\.env\.[^/]+	--	gen_context(system_u:object_r:container_ro_file_t,s0)
+/run/battery/not-ready\.d(/.*)?		gen_context(system_u:object_r:container_ro_file_t,s0)
+/etc/battery/flintlockd(/.*)?		gen_context(system_u:object_r:container_file_t,s0)

@@ -1,0 +1,68 @@
+# The Host Image's defaults for the Host configuration file,
+# /etc/battery/host.conf, in the same format. The Host's bootstrap
+# configuration writes that file at first boot, through cloud-init; a key
+# it leaves out, or the whole file when it is absent, takes the value below.
+# See hostimage/README.md.
+#
+# This file holds settings, never secrets: nothing on a Host reads a
+# credential from it.
+
+#= docs/requirements/11-host-image.md#host-configuration
+#/ If the Host configuration file is absent, then the Host Image
+#/ SHALL boot with its defaults for every setting.
+
+#= docs/requirements/11-host-image.md#image-networking
+#/ The Host Image SHALL use a default guest subnet that the Host
+#/ configuration file can override, so that it can be kept clear of the
+#/ cluster's node, pod and service ranges.
+# The guest bridge subnet, an IPv4 CIDR of /29 or larger. Keep it clear of
+# the cluster's node, pod and service ranges. The default clashes with
+# neither AWS's default VPC, 172.31.0.0/16, nor flintlock's documented
+# bridge subnet, 192.168.100.0/24. It is clear of kubeadm's Service range
+# (10.96.0.0/12), Flannel's (10.244.0.0/16), Calico's (192.168.0.0/16),
+# k3s's (10.42.0.0/16, 10.43.0.0/16) and Docker's (172.17.0.0/16) too.
+GUEST_SUBNET=10.220.0.0/16
+
+# The block device for the containerd thin pool. Empty means detect the
+# unused instance-store device.
+THIN_POOL_DEVICE=
+
+# Comma-separated IPv4 CIDRs no guest may reach, by address or through a
+# Service: the cluster's node, pod and Service ranges, and anything else a
+# MicroVM has no business with. Empty protects nothing off the Host.
+PROTECTED_CIDRS=
+
+# The Host reserve: what the Host's own Node offers to pods. Everything
+# beyond it belongs to the MicroVMs that battery places on the Host.
+HOST_RESERVE_VCPU=2
+HOST_RESERVE_MEMORY_MB=4096
+
+# The Host's own ports guests may never reach: flintlockd's gRPC and HTTP
+# endpoints, the kubelet (10250 and its health, read-only and proxy ports),
+# the Exec Agent's exec API (10270) and containerd's metrics listener. The
+# final drop of the guest firewall closes every other port of the Host to
+# guests too; this list names the ones that matter most.
+HOST_CONTROL_PORTS=9090,8090,10248,10250,10255,10256,10270,1338
+
+#= docs/requirements/11-host-image.md#image-flintlockd
+#/ The Host Image SHALL refuse connections to `flintlockd`'s port
+#/ from the Host's own processes unless they belong to the Exec Agent's user
+#/ id, which it reads from the Host configuration file with a default when
+#/ none is set.
+# The user id the Exec Agent runs as, the only one of the Host's own
+# processes that may connect to flintlockd, and the owner of
+# /etc/battery/flintlockd. 65532 is the user of the Exec Agent's image,
+# which the Exec Agent's DaemonSet does not override; change both
+# together. Never 0.
+EXEC_AGENT_UID=65532
+
+#= docs/requirements/11-host-image.md#image-flintlockd
+#/ The Host Image SHALL drop every connection to `flintlockd`'s
+#/ port that arrives from outside the Host unless its source address is in
+#/ the Operator's pod network, which it reads from the Host configuration
+#/ file.
+# Comma-separated IPv4 CIDRs from which battery, in the Operator's pod, may
+# reach flintlockd: the cluster's pod CIDR, or the part of it the Operator's
+# pods are given. Empty admits nothing from outside the Host, so battery
+# cannot reach this Host until the Host's bootstrap configuration sets it.
+FLINTLOCKD_CLIENT_CIDRS=
