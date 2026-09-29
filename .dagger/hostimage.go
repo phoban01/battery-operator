@@ -7,11 +7,21 @@ package main
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"dagger/battery-operator/internal/dagger"
 )
+
+// craneImage copies the Host Image's base to its mirror
+// (MirrorHostImageBase). crane copies an index and its images unchanged.
+// The debug variant has a shell, which the registry login needs.
+const craneImage = "gcr.io/go-containerregistry/crane/debug:v0.22.1@sha256:e78770b31258a3846f878036d9c1f63fbe4c871f9f56990bf77fd95c013e3c1b"
+
+// digestRE matches a sha256 digest.
+var digestRE = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 
 // HostImage builds the Host Image from hostimage/Containerfile for
 // linux/amd64. The build runs the image's check stage, and fails when a
@@ -175,4 +185,88 @@ func hostImageBuildArgs(versions string) ([]dagger.BuildArg, error) {
 		return nil, fmt.Errorf("%s/versions.env pins no *_VERSION", hostImageDir)
 	}
 	return args, nil
+}
+
+// MirrorHostImageBase copies the Host Image's bootc base, as source is
+// now, to repository, because quay.io deletes an old digest of
+// fedora-bootc within days of a rebuild. crane copies the
+// multi-architecture index and every image in it byte for byte, so the
+// mirror has the source's digest. The copy's tag is the source tag, the
+// date and the first 8 hex digits of the source digest, for example
+// 44-20260929-f59997f5. It returns the source and the mirror by digest,
+// and the make command that pins the mirror in hostimage/Containerfile.
+// Only a person runs it, through `dagger call` or the manual workflow
+// mirror-host-image-base.yml (hostimage/README.md).
+//
+// +cache="never"
+func (m *BatteryOperator) MirrorHostImageBase(
+	ctx context.Context,
+	// The registry user.
+	username string,
+	// The registry password or token.
+	password *dagger.Secret,
+	// The base image to copy, by tag.
+	// +default="quay.io/fedora/fedora-bootc:44"
+	source string,
+	// The repository of the mirror.
+	// +default="ghcr.io/phoban01/battery-operator/fedora-bootc"
+	repository string,
+) (string, error) {
+	sourceRepo, sourceTag, err := splitTag(source)
+	if err != nil {
+		return "", err
+	}
+	now := time.Now().UTC()
+	registry, _, _ := strings.Cut(repository, "/")
+	crane := dag.Container().
+		From(craneImage).
+		// A tag moves, so no step may come from the cache.
+		WithEnvVariable("MIRRORED_AT", now.Format(time.RFC3339Nano)).
+		WithEnvVariable("REGISTRY", registry).
+		WithEnvVariable("REGISTRY_USER", username).
+		WithSecretVariable("REGISTRY_PASSWORD", password).
+		WithExec([]string{"sh", "-ec",
+			`printf '%s' "$REGISTRY_PASSWORD" | crane auth login "$REGISTRY" -u "$REGISTRY_USER" --password-stdin`})
+
+	digest, err := craneDigest(ctx, crane, source)
+	if err != nil {
+		return "", err
+	}
+	tag := fmt.Sprintf("%s-%s-%s", sourceTag, now.Format("20060102"), strings.TrimPrefix(digest, "sha256:")[:8])
+	pinned := sourceRepo + "@" + digest
+	crane = crane.WithExec([]string{"crane", "copy", pinned, repository + ":" + tag})
+
+	mirrored, err := craneDigest(ctx, crane, repository+":"+tag)
+	if err != nil {
+		return "", err
+	}
+	if mirrored != digest {
+		return "", fmt.Errorf("the mirror %s:%s has digest %s, not the source's %s", repository, tag, mirrored, digest)
+	}
+	mirror := repository + ":" + tag + "@" + digest
+	return fmt.Sprintf("source  %s@%s\nmirror  %s\n\nPin the mirror in hostimage/Containerfile with:\n  make host-image-base-pin MIRROR=%s SOURCE=%s@%s\n",
+		source, digest, mirror, mirror, source, digest), nil
+}
+
+// craneDigest is the digest of ref: of its index, when it has one.
+func craneDigest(ctx context.Context, crane *dagger.Container, ref string) (string, error) {
+	out, err := crane.WithExec([]string{"crane", "digest", ref}).Stdout(ctx)
+	if err != nil {
+		return "", fmt.Errorf("reading the digest of %s: %w", ref, err)
+	}
+	digest := strings.TrimSpace(out)
+	if !digestRE.MatchString(digest) {
+		return "", fmt.Errorf("the digest of %s is %q, not sha256:<64 hex digits>", ref, digest)
+	}
+	return digest, nil
+}
+
+// splitTag splits an image reference into its repository and its tag. A
+// port in the registry's host name is not a tag.
+func splitTag(ref string) (repo, tag string, err error) {
+	i := strings.LastIndex(ref, ":")
+	if i < 0 || strings.Contains(ref, "@") || strings.Contains(ref[i+1:], "/") {
+		return "", "", fmt.Errorf("%q is not <repository>:<tag>", ref)
+	}
+	return ref[:i], ref[i+1:], nil
 }

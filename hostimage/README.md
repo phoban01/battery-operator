@@ -24,6 +24,7 @@ from flintlock-runner's `image/`, with `flr` names made `battery` names.
 | `check.sh`, `check-thin-pool.sh`, `check-flintlockd-access.sh`, `check-flintlockd-certs.sh`, `check-guest-isolation.sh`, `check-gateway-service-egress.sh`, `check-selinux-contexts.sh` | The check stage, run inside the built image; all but `check.sh` run in `make host-image-lint` too |
 | `check-labels.sh`, `lint.sh` | Checks that run outside the image |
 | `publish-ami.sh` | Makes an AMI of a published image, on request only; see [Publishing an AMI](#publishing-an-ami) |
+| `pin-base.sh` | Pins a copy of the base in the Containerfile (`make host-image-base-pin`); see [Updating the base image](#updating-the-base-image) |
 
 To make Hosts from the image with Cluster API on AWS, publish it as an AMI
 and use the host pool templates in [config/capi](../config/capi/README.md).
@@ -64,10 +65,7 @@ exist.
 Edit `versions.env`, and only there. Every download has a `*_SHA256` beside
 its version; take it from the checksum file the project publishes with the
 release, or compute it from the downloaded artifact, and never from anywhere
-else. A version bumped without its checksum fails the build. To move the
-base image, resolve the new digest from the registry
-(`skopeo inspect --raw docker://quay.io/fedora/fedora-bootc:44 | sha256sum`)
-and replace it in both `FROM` lines of the Containerfile.
+else. A version bumped without its checksum fails the build.
 
 The kubelet and `kubeadm` are RPMs from pkgs.k8s.io, verified by dnf against
 the repository key, and the key is the pinned download. cloud-init is a
@@ -77,6 +75,44 @@ it, which is the moment to bump it.
 
 Kubernetes is pinned to the v1.35 line because it is the last that supports
 containerd 1.x.
+
+### Updating the base image
+
+The base is `quay.io/fedora/fedora-bootc:44`, pinned by digest. quay.io
+keeps only the moving tag `44`, and deletes an old digest within days of a
+rebuild. A pin of quay.io therefore breaks the build soon after it is made
+(#174). So the Containerfile pins a copy of the base in this repository's
+registry, `ghcr.io/phoban01/battery-operator/fedora-bootc`, which keeps
+every copy. Until the first copy exists, the Containerfile still pins
+quay.io.
+
+To update the base:
+
+1. Run the workflow `mirror host image base` from the repository's Actions
+   tab. It runs `dagger call mirror-host-image-base`, which copies
+   `quay.io/fedora/fedora-bootc:44` as it is now, with the index of every
+   architecture. The copy's tag is the source tag, the date and the first 8
+   hex digits of the digest, for example `44-20260929-f59997f5`. The copy
+   has the same digest as the source.
+2. Take the `make host-image-base-pin` command from the job summary, and run
+   it on a new branch. It puts the digest in both `FROM` lines, and writes
+   the source tag, the source digest and the date in the comment above them.
+3. Open a pull request. CI builds the image on the new base and runs its
+   checks.
+
+A person with write access to the package can also run the copy from their
+machine:
+
+```sh
+dagger call mirror-host-image-base --username=<user> --password=env://GITHUB_TOKEN
+```
+
+The package on ghcr.io must be public, so that CI and a Host can pull the
+base without credentials. A package that a workflow creates starts private:
+make it public once, by hand, after the first copy.
+
+Nothing updates the base on a schedule or from a pull request. A person
+updates it on purpose, and a pull request shows the change.
 
 ## What happens at boot
 
