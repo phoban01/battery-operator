@@ -343,7 +343,8 @@ for kv in BATTERY_GUEST_SUBNET=10.220.0.0/16 BATTERY_GATEWAY=10.220.0.1 BATTERY_
   BATTERY_DHCP_START=10.220.0.10 BATTERY_DHCP_END=10.220.255.254 BATTERY_THIN_POOL_DEVICE= BATTERY_PROTECTED_CIDRS= \
   BATTERY_HOST_RESERVE_VCPU=2 BATTERY_HOST_RESERVE_MEMORY_MB=4096 \
   BATTERY_HOST_CONTROL_PORTS=9090,8090,10248,10250,10255,10256,10270,1338 \
-  BATTERY_EXEC_AGENT_UID=65532 BATTERY_FLINTLOCKD_CLIENT_CIDRS=; do
+  BATTERY_EXEC_AGENT_UID=65532 BATTERY_FLINTLOCKD_CLIENT_CIDRS= \
+  BATTERY_GATEWAY_SERVICE_PORTS= BATTERY_GATEWAY_SERVICE_UIDS=; do
   expect "default $kv" grep -qxF -- "$kv" "$BATTERY_HOST_ENV"
 done
 
@@ -515,8 +516,8 @@ expect "the drops come before guests are let out" test "${drop_line:-9999}" -lt 
 #= docs/requirements/11-host-image.md#image-networking
 #= type=test
 #/ The Host Image SHALL allow traffic from the guest subnet to the bridge
-#/ gateway address only on the DHCP and DNS ports, and SHALL keep every
-#/ other port on the gateway closed to guests.
+#/ gateway address only on the DHCP and DNS ports and the gateway service
+#/ ports, and SHALL keep every other port on the gateway closed to guests.
 expect "DHCP is allowed, as a broadcast and on the gateway" has "$nftf" 'iifname "flbr0" ip daddr \{ 255\.255\.255\.255, 10\.200\.4\.1 \} udp dport 67 accept'
 expect "DNS is allowed on the gateway" has "$nftf" 'iifname "flbr0" ip daddr 10\.200\.4\.1 udp dport 53 accept'
 expect "DNS over TCP is allowed on the gateway" has "$nftf" 'iifname "flbr0" ip daddr 10\.200\.4\.1 tcp dport 53 accept'
@@ -542,13 +543,38 @@ expect "the drop is the input chain's last rule" test "$(echo "$last_input" | xa
 #= type=test
 #/ The Host Image SHALL drop traffic from the guest subnet whose
 #/ destination before any destination NAT on the Host is in a protected CIDR.
+#
+#= docs/requirements/11-host-image.md#image-networking
+#= type=test
+#/ The Host Image SHALL allow TCP traffic from the guest subnet to
+#/ the bridge gateway address on the gateway service ports, which it reads
+#/ from the Host configuration file, and SHALL allow it on no port when
+#/ none are set.
+#
+#= docs/requirements/11-host-image.md#image-networking
+#= type=test
+#/ The Host Image SHALL drop traffic to the gateway service ports on
+#/ the bridge gateway address that arrives on any interface other than the
+#/ bridge and loopback.
 # The rules, rendered from the installed scripts. That the kernel enforces
 # them needs network namespaces, which a build container does not grant;
 # `make host-image-lint` shows it where they are available.
 if "$LIBEXEC/check-guest-isolation-cases" "$work"; then
-  ok "guest isolation cases (the Host's addresses, other interfaces, Services)"
+  ok "guest isolation cases (the Host's addresses, other interfaces, Services, gateway service ports)"
 else
   fail "guest isolation cases"
+fi
+
+#= docs/requirements/11-host-image.md#image-networking
+#= type=test
+#/ The Host Image SHALL drop traffic from the gateway service user
+#/ ids, which it reads from the Host configuration file, to the instance
+#/ metadata service addresses and to the Host's own `flintlockd`, kubelet,
+#/ Exec Agent and metrics ports.
+if "$LIBEXEC/check-gateway-service-egress-cases" "$work"; then
+  ok "gateway service egress cases (listed user ids kept from the metadata service and the control ports)"
+else
+  fail "gateway service egress cases"
 fi
 # nft -c needs a netlink socket, which a build container may not grant.
 nft_out=$(nft -c -f "$nftf" 2>&1)

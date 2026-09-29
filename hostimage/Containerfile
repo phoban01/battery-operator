@@ -67,6 +67,7 @@ COPY check-flintlockd-access.sh /usr/libexec/battery/check-flintlockd-access-cas
 COPY check-selinux-contexts.sh /usr/libexec/battery/check-selinux-contexts-cases
 COPY check-flintlockd-certs.sh /usr/libexec/battery/check-flintlockd-certs-cases
 COPY check-guest-isolation.sh /usr/libexec/battery/check-guest-isolation-cases
+COPY check-gateway-service-egress.sh /usr/libexec/battery/check-gateway-service-egress-cases
 COPY --from=selinux /src/battery.pp /usr/share/selinux/packages/battery.pp
 COPY build/configure.sh /tmp/battery-build/configure.sh
 RUN bash /tmp/battery-build/configure.sh && rm -rf /tmp/battery-build

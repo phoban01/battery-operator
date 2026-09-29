@@ -56,6 +56,21 @@ fi
 # The input chain's rule for BATTERY_HOST_CONTROL_PORTS, which
 # battery-host-config read from HOST_CONTROL_PORTS. This citation is out of
 # the heredoc below because its backticks would run there.
+#
+#= docs/requirements/11-host-image.md#image-networking
+#/ The Host Image SHALL drop traffic from the gateway service user
+#/ ids, which it reads from the Host configuration file, to the instance
+#/ metadata service addresses and to the Host's own `flintlockd`, kubelet,
+#/ Exec Agent and metrics ports.
+# The last three rules of the output chain, with the ids battery-host-config
+# read into BATTERY_GATEWAY_SERVICE_UIDS, or no rule when it is empty. The
+# ports are the control ports of HI-034 and flintlockd's own, once each.
+# This citation is out of the heredoc for its backticks too.
+service_blocked_ports=$BATTERY_HOST_CONTROL_PORTS
+case ",$service_blocked_ports," in
+*",$BATTERY_FLINTLOCKD_PORT,"*) ;;
+*) service_blocked_ports=$service_blocked_ports,$BATTERY_FLINTLOCKD_PORT ;;
+esac
 render_firewall() {
   cat <<EOF
 table inet battery
@@ -91,12 +106,29 @@ $([ -z "$BATTERY_FLINTLOCKD_CLIENT_CIDRS" ] || echo "		elements = { ${BATTERY_FL
 		iifname != { "lo", "$bridge" } tcp dport $BATTERY_FLINTLOCKD_PORT counter drop
 		#= docs/requirements/11-host-image.md#image-networking
 		#/ The Host Image SHALL allow traffic from the guest subnet to the bridge
-		#/ gateway address only on the DHCP and DNS ports, and SHALL keep every
-		#/ other port on the gateway closed to guests.
+		#/ gateway address only on the DHCP and DNS ports and the gateway service
+		#/ ports, and SHALL keep every other port on the gateway closed to guests.
 		# DHCP arrives as a broadcast, and a renewal on the gateway.
 		iifname "$bridge" ip daddr { 255.255.255.255, $BATTERY_GATEWAY } udp dport 67 accept
 		iifname "$bridge" ip daddr $BATTERY_GATEWAY udp dport 53 accept
 		iifname "$bridge" ip daddr $BATTERY_GATEWAY tcp dport 53 accept
+		#= docs/requirements/11-host-image.md#image-networking
+		#/ The Host Image SHALL allow TCP traffic from the guest subnet to
+		#/ the bridge gateway address on the gateway service ports, which it reads
+		#/ from the Host configuration file, and SHALL allow it on no port when
+		#/ none are set.
+		#
+		#= docs/requirements/11-host-image.md#image-networking
+		#/ The Host Image SHALL drop traffic to the gateway service ports on
+		#/ the bridge gateway address that arrives on any interface other than the
+		#/ bridge and loopback.
+		# Both rules, or neither when GATEWAY_SERVICE_PORTS is empty. The Host
+		# reaches its own addresses over loopback, so "lo" is the Host itself;
+		# a pod on the Host, or anything off it, arrives on another interface.
+$(if [ -n "$BATTERY_GATEWAY_SERVICE_PORTS" ]; then
+    echo "		iifname \"$bridge\" ip daddr $BATTERY_GATEWAY tcp dport { ${BATTERY_GATEWAY_SERVICE_PORTS//,/, } } accept"
+    echo "		iifname != { \"$bridge\", \"lo\" } ip daddr $BATTERY_GATEWAY tcp dport { ${BATTERY_GATEWAY_SERVICE_PORTS//,/, } } drop"
+  fi)
 		# HI-034: the Host's control ports, by name.
 		iifname "$bridge" tcp dport { ${BATTERY_HOST_CONTROL_PORTS//,/, } } drop
 		#= docs/requirements/11-host-image.md#image-networking
@@ -141,7 +173,8 @@ $([ -z "$BATTERY_FLINTLOCKD_CLIENT_CIDRS" ] || echo "		elements = { ${BATTERY_FL
 		oifname "$bridge" drop
 	}
 
-	# Connections from the Host's own processes to flintlockd.
+	# Connections from the Host's own processes: to flintlockd, and from
+	# the gateway services.
 	chain output {
 		type filter hook output priority filter - 10; policy accept;
 		# HI-070. Every packet a local socket sends to the flintlockd port over
@@ -152,6 +185,16 @@ $([ -z "$BATTERY_FLINTLOCKD_CLIENT_CIDRS" ] || echo "		elements = { ${BATTERY_FL
 		# than timing out. flintlockd's own replies go from that port, not to
 		# it, and pass.
 		oifname "lo" tcp dport $BATTERY_FLINTLOCKD_PORT meta skuid != $BATTERY_EXEC_AGENT_UID counter reject with tcp reset
+		# HI-080. The gateway services run in the Host's network namespace,
+		# where the forward chain never sees them, and they act for guests.
+		# Every address of the Host, the bridge gateway included, is reached
+		# over loopback, so "lo" is the Host itself. Anything else, the
+		# internet and the gateway service ports among it, is untouched.
+$(if [ -n "$BATTERY_GATEWAY_SERVICE_UIDS" ]; then
+    echo "		meta skuid { ${BATTERY_GATEWAY_SERVICE_UIDS//,/, } } ip daddr $BATTERY_METADATA_V4 counter drop"
+    echo "		meta skuid { ${BATTERY_GATEWAY_SERVICE_UIDS//,/, } } ip6 daddr $BATTERY_METADATA_V6 counter drop"
+    echo "		meta skuid { ${BATTERY_GATEWAY_SERVICE_UIDS//,/, } } oifname \"lo\" tcp dport { ${service_blocked_ports//,/, } } counter drop"
+  fi)
 	}
 }
 
@@ -229,3 +272,6 @@ log "bridge $bridge at $BATTERY_GATEWAY/$BATTERY_PREFIX, guests NATed out of $pr
 log "flintlockd serves $address:$BATTERY_FLINTLOCKD_PORT to user id $BATTERY_EXEC_AGENT_UID on the Host and to ${BATTERY_FLINTLOCKD_CLIENT_CIDRS:-no network}"
 [ -n "$BATTERY_FLINTLOCKD_CLIENT_CIDRS" ] || log "warning: FLINTLOCKD_CLIENT_CIDRS is empty, so battery cannot reach flintlockd on this Host"
 [ -n "$BATTERY_PROTECTED_CIDRS" ] || log "warning: PROTECTED_CIDRS is empty, so guests reach every address of the cluster off this Host"
+if [ -n "$BATTERY_GATEWAY_SERVICE_PORTS" ]; then
+  log "guests reach TCP ports $BATTERY_GATEWAY_SERVICE_PORTS on $BATTERY_GATEWAY; user ids ${BATTERY_GATEWAY_SERVICE_UIDS:-none} are kept from the metadata service and the control ports"
+fi

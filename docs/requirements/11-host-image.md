@@ -16,8 +16,9 @@ requirements. Each keeps the number it had in flintlock-runner's
 requirements not carried over: those flintlock-runner had withdrawn
 (HI-042, HI-044, HI-063), the one about its Host Services (HI-064), and the
 one about publishing an AMI (HI-009), which belongs with the Cluster API
-host-pool templates. A new requirement takes the next free number above
-HI-077.
+host-pool templates. HI-064 comes back in a generic form as HI-080,
+under a new number because its scope changed. A new requirement takes the next
+free number above HI-080.
 
 ## Build {#image-build}
 
@@ -149,8 +150,9 @@ structures looks in use, and must not be refused for it.
 - **HI-035** The Host Image SHALL drop traffic from the guest subnet to every
   protected CIDR listed in the Host configuration file.
 - **HI-036** The Host Image SHALL allow traffic from the guest subnet to the
-  bridge gateway address only on the DHCP and DNS ports, and SHALL keep
-  every other port on the gateway closed to guests.
+  bridge gateway address only on the DHCP and DNS ports and the gateway
+  service ports, and SHALL keep every other port on the gateway closed to
+  guests.
 - **HI-037** The Host Image SHALL use a default guest subnet that the Host
   configuration file can override, so that it can be kept clear of the
   cluster's node, pod and service ranges.
@@ -161,6 +163,17 @@ structures looks in use, and must not be refused for it.
   destination before any destination NAT on the Host is in a protected CIDR.
 - **HI-077** The Host Image SHALL drop traffic from the guest subnet to every
   address of the Host other than the bridge gateway address.
+- **HI-078** The Host Image SHALL allow TCP traffic from the guest subnet to
+  the bridge gateway address on the gateway service ports, which it reads
+  from the Host configuration file, and SHALL allow it on no port when
+  none are set.
+- **HI-079** The Host Image SHALL drop traffic to the gateway service ports on
+  the bridge gateway address that arrives on any interface other than the
+  bridge and loopback.
+- **HI-080** The Host Image SHALL drop traffic from the gateway service user
+  ids, which it reads from the Host configuration file, to the instance
+  metadata service addresses and to the Host's own `flintlockd`, kubelet,
+  Exec Agent and metrics ports.
 
 Guest networking follows flintlock's documented bridge option: `flintlockd`
 puts each MicroVM's TAP device on the bridge `flbr0`, and the Host gives
@@ -199,6 +212,31 @@ HI-077 close the ways round HI-035 that a Host in a cluster has:
 The Host still forwards a guest's traffic to any address outside the
 protected ranges, private addresses included, so the protected CIDRs name
 every range of the cluster: its nodes, its pods and its Services.
+
+A Host may run services for its MicroVMs on the bridge gateway, such as a
+registry mirror or a package cache. The gateway service ports
+(`GATEWAY_SERVICE_PORTS`) open those ports to guests (HI-078), and the
+gateway service user ids (`GATEWAY_SERVICE_UIDS`) name the processes that
+serve them. Both are empty by default, so a guest reaches only DHCP and DNS
+on the gateway, as HI-036 says. A gateway service port cannot be a control
+port of HI-034, because the gateway's accept would open that port to guests.
+
+The services answer only guests and the Host itself (HI-079). A pod on the
+Host, and anything off it, arrives on another interface and is dropped.
+
+The services run in the Host's own network namespace, so the guest subnet
+rules do not apply to their own traffic. They act for guests, and a build
+service may run a guest's commands as one of its user ids. HI-080 keeps
+those ids from the metadata service and the Host's control ports, as
+HI-033 and HI-034 do for guests. Root cannot be a gateway service user id,
+nor can the Exec Agent's user id of HI-070: dropping their traffic would
+cut the Host off from the metadata service and the kubelet, and the Exec
+Agent off from `flintlockd`.
+
+HI-078 to HI-080 come from flintlock-runner's HI-036 and HI-064, which
+opened the gateway to its Host Services and kept their user ids from the
+metadata service and the control ports. flintlock-runner set its own ports
+and ids by default; here the settings are generic and empty by default.
 
 ## flintlockd {#image-flintlockd}
 

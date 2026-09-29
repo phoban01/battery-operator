@@ -27,7 +27,7 @@ the glossary's *Host prerequisites* is the short form.
 | KVM: a KVM device, `/dev/kvm` | `flintlockd`'s hypervisor runs every MicroVM on it | the device in sysfs and `/dev/kvm` a character device, not opened (EA-031) | `KVMUnavailable` |
 | containerd's thin pool | `flintlockd` puts every MicroVM's volumes on containerd's devmapper snapshotter | looking the pool up in sysfs (EA-032) | `ThinPoolMissing` |
 | The label `battery.liquidmetal-x.dev/host=true` | the Exec Agent runs only on labelled Nodes (EA-004) | the DaemonSet's node selector | no Exec Agent, so no Node report |
-| Guest networking: DHCP and NAT on the bridge `flbr0`, and isolation from the cluster | a MicroVM gets its address from the Host and reaches the outside, and nothing of the cluster | not checked by the Exec Agent; the Host Image provides it (HI-030 to HI-037, HI-075 to HI-077) | none: a MicroVM without it has no network, or too much |
+| Guest networking: DHCP and NAT on the bridge `flbr0`, and isolation from the cluster | a MicroVM gets its address from the Host and reaches the outside, and nothing of the cluster | not checked by the Exec Agent; the Host Image provides it (HI-030 to HI-037, HI-075 to HI-080) | none: a MicroVM without it has no network, or too much |
 
 A Host Image can add reasons of its own through the not ready reason
 directory, `/run/battery/not-ready.d` (EA-033); the agent reports those as
@@ -134,6 +134,19 @@ without libvirt:
   the gateway, to every interface but the primary one (so pods on the Host
   and overlay tunnels), and to the cluster's node, pod and Service ranges,
   a Service's address before kube-proxy's DNAT included.
+
+A Host may also offer services to its guests on the bridge gateway, such as
+a registry mirror or a package cache. The Host Image does this through two
+settings in the Host configuration file, both empty by default:
+
+- `GATEWAY_SERVICE_PORTS` lists the TCP ports on the gateway that guests
+  may reach. Only guests and the Host itself reach them (HI-078, HI-079).
+- `GATEWAY_SERVICE_UIDS` lists the user ids of the processes that serve
+  those ports. The Host drops their traffic to the instance metadata
+  service and to its own control ports, as it does for guests (HI-080).
+
+With both empty, guests reach only DHCP and DNS on the gateway. A Host
+built another way that offers such services keeps the same limits.
 
 The Exec Agent does not check any of this, and a Host without it is still
 reported ready: its MicroVMs then have no network, or reach more than they
