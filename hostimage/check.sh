@@ -472,6 +472,13 @@ expect "flintlockd keeps its state under /var" has "$UNITS/flintlockd.service" '
 expect "containerd keeps its state under /var" has /etc/containerd/config.toml '^root = "/var/lib/containerd"$'
 expect "the devmapper snapshotter keeps its state under /var" has /etc/containerd/config.toml 'root_path = "/var/lib/containerd/'
 expect "tmpfiles.d creates the state directories" has /usr/lib/tmpfiles.d/battery.conf '^d /var/lib/flintlock '
+# The kubelet's CNI plugins are state too: a CNI DaemonSet such as
+# Flannel's writes its own plugin into containerd's bin_dir, /opt/cni/bin.
+# The base's /opt is read-only, so /opt/cni is a link into /var.
+expect "containerd looks for CNI plugins in /opt/cni/bin" has /etc/containerd/config.toml '^ *bin_dir = "/opt/cni/bin"$'
+expect "/opt/cni is a link to /var/opt/cni" test "$(readlink /opt/cni)" = /var/opt/cni
+expect "tmpfiles.d copies the CNI plugins into /var/opt/cni/bin" has /usr/lib/tmpfiles.d/battery.conf '^C /var/opt/cni/bin .* /usr/libexec/cni$'
+expect "the CNI plugins are in the image" test -x /usr/libexec/cni/bridge
 
 # ---------------------------------------------------------------------------
 echo "== networking"

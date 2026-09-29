@@ -1,0 +1,2 @@
+# up.sh's kubeconfig, ssh key, rendered pool and user-data.
+.state/
