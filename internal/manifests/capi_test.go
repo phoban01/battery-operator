@@ -104,6 +104,9 @@ type awsMachineTemplate struct {
 					ID      string `json:"id"`
 					Filters []any  `json:"filters"`
 				} `json:"subnet"`
+				AdditionalSecurityGroups []struct {
+					ID string `json:"id"`
+				} `json:"additionalSecurityGroups"`
 				CloudInit struct {
 					InsecureSkipSecretsManager bool `json:"insecureSkipSecretsManager"`
 				} `json:"cloudInit"`
@@ -425,7 +428,7 @@ func TestHostPoolSettingsLand(t *testing.T) {
 			}
 		}
 	}
-	placeholders := regexp.MustCompile(`\b(POOL|CLUSTER|KUBERNETES_VERSION|INSTANCE_TYPE|AMI_ID|SUBNET_ID|HOST_CONF)\b`)
+	placeholders := regexp.MustCompile(`\b(POOL|CLUSTER|KUBERNETES_VERSION|INSTANCE_TYPE|AMI_ID|SUBNET_ID|SECURITY_GROUP_ID|HOST_CONF)\b`)
 	for _, dir := range capiRenders {
 		for _, o := range buildCAPI(t, dir) {
 			if o.Kind == "ConfigMap" {
@@ -433,6 +436,41 @@ func TestHostPoolSettingsLand(t *testing.T) {
 			}
 			if m := placeholders.Find(o.raw); m != nil {
 				t.Errorf("%s: %s %s still has the placeholder %s", dir, o.Kind, o.Name, m)
+			}
+		}
+	}
+}
+
+//= docs/requirements/12-host-pool.md#host-pool
+//= type=test
+//# The Host Pool Templates SHALL attach to every Host of a pool the
+//# additional security groups that the pool's settings list by id.
+
+// TestHostPoolSecurityGroups finds each filled-in pool's security groups,
+// in order, on its AWSMachineTemplate, and an id on every pool's.
+func TestHostPoolSecurityGroups(t *testing.T) {
+	t.Parallel()
+	wants := map[string][]string{
+		"hosts-a": {"sg-0aaaaaaaaaaaaaaa1", "sg-0aaaaaaaaaaaaaaa2"},
+		"hosts-b": {"sg-0bbbbbbbbbbbbbbb1"},
+	}
+	for _, dir := range capiRenders {
+		for _, p := range hostPools(t, buildCAPI(t, dir)) {
+			name := p.md.Metadata.Name
+			var got []string
+			for _, g := range p.machine.Spec.Template.Spec.AdditionalSecurityGroups {
+				got = append(got, g.ID)
+			}
+			if len(got) == 0 {
+				t.Errorf("%s/%s: no additional security group", dir, name)
+			}
+			for _, id := range got {
+				if !strings.HasPrefix(id, "sg-") {
+					t.Errorf("%s/%s: security group %q is not an id", dir, name, id)
+				}
+			}
+			if dir == capiTestdata && !slices.Equal(got, wants[name]) {
+				t.Errorf("%s/%s: the security groups are %v; want %v", dir, name, got, wants[name])
 			}
 		}
 	}

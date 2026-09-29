@@ -42,6 +42,8 @@ The AMI the templates boot is made by HI-009, in `11-host-image.md`.
 - **HP-005** The Host Pool Templates SHALL define a MachineHealthCheck for
   each Host pool that replaces a Machine whose Node stays not ready beyond
   the interval its host-pool.yaml sets.
+- **HP-006** The Host Pool Templates SHALL attach to every Host of a pool the
+  additional security groups that the pool's settings list by id.
 
 The pool size is the MachineDeployment's replica count. One instance type
 per pool keeps the capacity of a pool simple to reason about, and one AMI
@@ -57,6 +59,13 @@ HP-004 exists because the Exec Agent holds a drain of its Host's Node open
 while claims are Bound on it (EA-040), for at most its drain timeout, one
 hour by default. If Cluster API gave up on the drain sooner, it would
 delete the Machine under Bound claims.
+
+HP-006 exists because battery reaches each Host's `flintlockd` on TCP port
+9090 from the Operator's pod (ADR 0002), and CAPA's default node security
+group does not open that port. One of the pool's groups admits it from the
+Operator's pod network, the ranges of `FLINTLOCKD_CLIENT_CIDRS`, and from
+the node range on a CNI that masquerades pod traffic between Nodes. The
+Host's own firewall still admits only `FLINTLOCKD_CLIENT_CIDRS` (HI-069).
 
 A known gap: the MachineHealthCheck of HP-005 watches the Host's own Node.
 A Host that cannot run MicroVMs, for want of KVM (HI-011) or of a thin pool

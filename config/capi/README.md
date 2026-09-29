@@ -24,11 +24,9 @@ run on.
   `config/exec-agent`.
 - The Host Image published as an AMI in the region of the cluster. See
   [Publishing an AMI](../../hostimage/README.md#publishing-an-ami).
-- A subnet for the Hosts. The cluster's security groups have to let the
-  Operator's pod reach TCP port 9090 on each Host, where `flintlockd`
-  listens. CAPA's default node security group does not open that port.
-  Add a security group to the AWSMachineTemplate with a kustomize patch if
-  you need one.
+- A subnet for the Hosts.
+- A security group that lets battery reach `flintlockd` on each Host. See
+  [The security group](#the-security-group).
 
 ## Layout
 
@@ -57,6 +55,7 @@ every value in the pool's `host-pool.yaml`.
    | `instanceType` | One EC2 instance type. A Host needs KVM, so a metal instance, and an instance-store disk for the thin pool |
    | `amiID` | The AMI of the Host Image, by id |
    | `subnetID` | The subnet of the Hosts, by id |
+   | `additionalSecurityGroups` | A list of `id: sg-…` entries: security groups for the Hosts besides CAPA's own. See below |
    | `kubernetesVersion` | The Kubernetes version of that AMI: its `battery.liquidmetal-x.dev/kubernetes-version` tag |
    | `nodeDrainTimeoutSeconds` | How long Cluster API waits for a Host to drain. At least the Exec Agent's `--drain-timeout`, one hour by default |
    | `unhealthySeconds` | How long a Host's Node may stay not ready before Cluster API replaces the Machine |
@@ -76,6 +75,26 @@ later, change `replicas` and apply again.
 The ConfigMap in `host-pool.yaml` holds the settings only. Its
 `config.kubernetes.io/local-config` annotation keeps it out of the output,
 so it never reaches a cluster.
+
+## The security group
+
+battery runs in the Operator's pod and calls each Host's `flintlockd` on
+TCP port 9090. CAPA's default node security group does not open that port.
+So at least one group in `additionalSecurityGroups` needs this inbound
+rule:
+
+| Protocol | Port | Source |
+|----------|------|--------|
+| TCP | 9090 | The Operator's pod network: the same ranges as `FLINTLOCKD_CLIENT_CIDRS` |
+
+If your CNI masquerades pod traffic between Nodes, the traffic arrives
+from the source Node's address. Then add the node range as a source too,
+and to `FLINTLOCKD_CLIENT_CIDRS`. The Host's own firewall still admits only
+`FLINTLOCKD_CLIENT_CIDRS`.
+
+`additionalSecurityGroups` is a list in `host-pool.yaml`, not a string.
+The settings object is never applied, so kustomize copies the list into
+the AWSMachineTemplate as it is.
 
 ## The Host's settings
 

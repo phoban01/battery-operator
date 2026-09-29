@@ -11,6 +11,8 @@ data:
   instanceType: c6id.metal
   amiID: ami-0fedcba9876543210
   subnetID: subnet-0bbbbbbbbbbbbbbbb
+  additionalSecurityGroups:
+    - id: sg-0bbbbbbbbbbbbbbb1
   kubernetesVersion: v1.35.7
   nodeDrainTimeoutSeconds: "7200"
   unhealthySeconds: "600"

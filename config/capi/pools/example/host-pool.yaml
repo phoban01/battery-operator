@@ -34,6 +34,17 @@ data:
   # The subnet the Hosts run in, by id.
   subnetID: subnet-REPLACE
   #= docs/requirements/12-host-pool.md#host-pool
+  #/ The Host Pool Templates SHALL attach to every Host of a pool the
+  #/ additional security groups that the pool's settings list by id.
+  # Security groups for the Hosts besides CAPA's own, by id. One of them
+  # has to admit TCP 9090, flintlockd's port, from the Operator's pod
+  # network: the ranges of FLINTLOCKD_CLIENT_CIDRS below. On a CNI that
+  # masquerades pod traffic between Nodes, admit the node range too. This
+  # is a list, not a string: the object is never applied, so kustomize
+  # copies the list as it is.
+  additionalSecurityGroups:
+    - id: sg-REPLACE
+  #= docs/requirements/12-host-pool.md#host-pool
   #/ The Host Pool Templates SHALL default a Host pool's Kubernetes
   #/ version to the version that the Host Image pins.
   # The Kubernetes version of the Host Image the AMI was made from: its

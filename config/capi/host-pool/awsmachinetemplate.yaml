@@ -31,6 +31,14 @@ spec:
         id: AMI_ID
       subnet:
         id: SUBNET_ID
+      #= docs/requirements/12-host-pool.md#host-pool
+      #/ The Host Pool Templates SHALL attach to every Host of a pool the
+      #/ additional security groups that the pool's settings list by id.
+      # Replaced from host-pool.yaml. CAPA's default node security group
+      # does not open flintlockd's port, 9090, so one of these groups opens
+      # it to the Operator's pod network (config/capi/README.md).
+      additionalSecurityGroups:
+        - id: SECURITY_GROUP_ID
       cloudInit:
         insecureSkipSecretsManager: true
       # No SSH key: a Host is reached through the cluster.

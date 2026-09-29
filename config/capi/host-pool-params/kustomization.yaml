@@ -110,6 +110,15 @@ replacements:
           kind: AWSMachineTemplate
         fieldPaths:
           - spec.template.spec.subnet.id
+  # A list of {id: sg-...}, copied whole.
+  - source:
+      kind: ConfigMap
+      fieldPath: data.additionalSecurityGroups
+    targets:
+      - select:
+          kind: AWSMachineTemplate
+        fieldPaths:
+          - spec.template.spec.additionalSecurityGroups
   - source:
       kind: ConfigMap
       fieldPath: data.unhealthySeconds
