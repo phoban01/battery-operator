@@ -72,5 +72,13 @@ consumer of battery-operator would need the same image.
 
 - Whether battery-operator also publishes the image for linux/arm64. The
   first build is linux/amd64, as flintlock-runner's is.
+
+  > **Answered, 2026-09-29 (#178):** yes. The Host Image is built for
+  > linux/amd64 and linux/arm64 from the one Containerfile, each on a CI
+  > runner of its own architecture, and a tag publishes one
+  > multi-architecture image (HI-002). The local proof of #169 runs the
+  > arm64 image on an Apple silicon Mac. The AMI that `publish-ami.sh`
+  > makes stays x86_64. The decision stands.
+
 - Which cloud account, and which Cluster API infrastructure provider, the
   templates are tested against in CI, beyond rendering and schema checks.
