@@ -1,0 +1,117 @@
+# The Host Image (docs/requirements/11-host-image.md, ADR 0007).
+#
+# The Dagger module builds it (`dagger call host-image`, or `make
+# host-image`), and passes the versions of hostimage/versions.env as build
+# arguments so that they can become OCI labels; the build fails when an
+# argument disagrees with the file. The build context is the hostimage/
+# directory. The steps live in build/*.sh rather than in heredocs so that
+# every builder runs them and shellcheck reads them. A bootc image is an
+# operating system rather than one binary, so it keeps this Containerfile
+# (ADR 0007, decision 5).
+
+#= docs/requirements/11-host-image.md#image-build
+#/ The Host Image SHALL be defined by one Containerfile whose base
+#/ is a bootc base image pinned by digest.
+# quay.io/fedora/fedora-bootc:44 as of 2026-09-28. The digest is that of the
+# multi-architecture index; --platform selects x86_64 from it.
+#
+#= docs/requirements/11-host-image.md#image-build
+#/ The Host Image SHALL be built for the `x86_64` architecture.
+FROM --platform=linux/amd64 quay.io/fedora/fedora-bootc@sha256:d979ac14037212ab3e7e9dfc6001e2c44ece20a45c6d3ca1d7b9623461066790 AS base
+
+# ---------------------------------------------------------------------------
+# fetch: download and verify every binary that does not come from a signed
+# package repository (HI-004). It reads the versions file and nothing else,
+# and runs nothing it downloads, so it runs on the build machine's own
+# architecture: the same pinned index, without emulation.
+FROM --platform=$BUILDPLATFORM quay.io/fedora/fedora-bootc@sha256:d979ac14037212ab3e7e9dfc6001e2c44ece20a45c6d3ca1d7b9623461066790 AS fetch
+COPY versions.env build/fetch.sh /build/
+RUN bash /build/fetch.sh /build/versions.env
+
+# ---------------------------------------------------------------------------
+# selinux: compile the policy module against the base image's own policy.
+FROM base AS selinux
+COPY selinux/ /src/
+RUN dnf -y install selinux-policy-devel make && \
+    make -C /src -f /usr/share/selinux/devel/Makefile battery.pp
+
+# ---------------------------------------------------------------------------
+# image: the Host Image itself.
+FROM base AS image
+ARG CONTAINERD_VERSION
+ARG RUNC_VERSION
+ARG FIRECRACKER_VERSION
+ARG CLOUD_HYPERVISOR_VERSION
+ARG FLINTLOCK_VERSION
+ARG KUBERNETES_VERSION
+ARG CLOUD_INIT_VERSION
+
+#= docs/requirements/11-host-image.md#image-build
+#/ The Host Image SHALL contain containerd, Firecracker with its
+#/ jailer, Cloud Hypervisor, `flintlockd`, the kubelet, `kubeadm` and
+#/ cloud-init at the versions pinned in one versions file that the
+#/ Containerfile reads.
+COPY versions.env /usr/share/battery/versions.env
+# The repository key goes in before the packages it verifies; the binaries
+# go in after them, so that a package which one day ships a binary of the
+# same name cannot stand in for a pinned one. None does today.
+COPY --from=fetch /out/etc/ /etc/
+COPY build/packages.sh /tmp/battery-build/packages.sh
+RUN bash /tmp/battery-build/packages.sh
+COPY --from=fetch /out/usr/ /usr/
+
+COPY rootfs/ /
+COPY check.sh /usr/libexec/battery/check
+COPY check-thin-pool.sh /usr/libexec/battery/check-thin-pool-cases
+COPY check-flintlockd-access.sh /usr/libexec/battery/check-flintlockd-access-cases
+COPY check-selinux-contexts.sh /usr/libexec/battery/check-selinux-contexts-cases
+COPY check-flintlockd-certs.sh /usr/libexec/battery/check-flintlockd-certs-cases
+COPY check-guest-isolation.sh /usr/libexec/battery/check-guest-isolation-cases
+COPY --from=selinux /src/battery.pp /usr/share/selinux/packages/battery.pp
+COPY build/configure.sh /tmp/battery-build/configure.sh
+RUN bash /tmp/battery-build/configure.sh && rm -rf /tmp/battery-build
+
+# Bind-mounted rather than copied: the linter itself flags anything left in
+# /tmp or /run.
+RUN --mount=type=bind,source=build/bootc-lint.sh,target=/battery-lint/bootc-lint.sh bash /battery-lint/bootc-lint.sh
+
+# ---------------------------------------------------------------------------
+# check: run the checks inside the built image.
+FROM image AS check
+#= docs/requirements/11-host-image.md#image-build
+#/ The Host Image build SHALL run a check stage inside the built
+#/ container image that fails unless every component of HI-003 reports its
+#/ pinned version and every unit this document requires is enabled.
+RUN /usr/libexec/battery/check && mkdir -p /checked && \
+    sha256sum /usr/share/battery/versions.env >/checked/checked
+
+# ---------------------------------------------------------------------------
+# The published image. It takes a file from the check stage so that no
+# builder can skip that stage as unused: an image that fails its checks is
+# never produced.
+FROM image
+COPY --from=check /checked/checked /usr/share/battery/checked
+
+ARG CONTAINERD_VERSION
+ARG RUNC_VERSION
+ARG FIRECRACKER_VERSION
+ARG CLOUD_HYPERVISOR_VERSION
+ARG FLINTLOCK_VERSION
+ARG KUBERNETES_VERSION
+ARG CLOUD_INIT_VERSION
+#= docs/requirements/11-host-image.md#image-build
+#/ The Host Image SHALL record the pinned version of each component
+#/ of HI-003 as an OCI image label and in a versions file on the image's
+#/ `/usr` tree.
+LABEL org.opencontainers.image.title="battery-operator Host Image" \
+      org.opencontainers.image.description="battery-operator: the reference Host Image, a bootc image a Host boots from" \
+      org.opencontainers.image.source="https://github.com/phoban01/battery-operator" \
+      org.opencontainers.image.licenses="Apache-2.0" \
+      containers.bootc="1" \
+      dev.liquidmetal-x.battery.version.containerd="${CONTAINERD_VERSION}" \
+      dev.liquidmetal-x.battery.version.runc="${RUNC_VERSION}" \
+      dev.liquidmetal-x.battery.version.firecracker="${FIRECRACKER_VERSION}" \
+      dev.liquidmetal-x.battery.version.cloud-hypervisor="${CLOUD_HYPERVISOR_VERSION}" \
+      dev.liquidmetal-x.battery.version.flintlock="${FLINTLOCK_VERSION}" \
+      dev.liquidmetal-x.battery.version.kubernetes="${KUBERNETES_VERSION}" \
+      dev.liquidmetal-x.battery.version.cloud-init="${CLOUD_INIT_VERSION}"

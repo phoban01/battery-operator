@@ -33,9 +33,9 @@ import (
 )
 
 // DefaultNotReadyDir is the directory of the not ready reason contract; see
-// ReadNotReadyReasons. It is the path flintlock-runner's Host Image writes
-// to, the one Host Image that exists.
-const DefaultNotReadyDir = "/run/flr/not-ready.d"
+// ReadNotReadyReasons. It is the path the Host Image (hostimage/) writes
+// to.
+const DefaultNotReadyDir = "/run/battery/not-ready.d"
 
 // maxReasonLength caps one not ready reason.
 const maxReasonLength = 256

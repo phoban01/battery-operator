@@ -1,0 +1,22 @@
+#= docs/requirements/11-host-image.md#image-networking
+#/ The Host Image SHALL run a DHCP and DNS service bound to the
+#/ bridge so that guests obtain an address, gateway and resolver without
+#/ static configuration.
+# A dnsmasq of its own rather than the distribution's dnsmasq.service, which
+# stays disabled: this one reads only the file battery-network.service wrote and
+# so serves only the bridge.
+[Unit]
+Description=Host Image: DHCP and DNS for guests on flbr0
+Documentation=https://github.com/phoban01/battery-operator/blob/main/hostimage/README.md
+Requires=battery-network.service
+After=battery-network.service
+
+[Service]
+Type=exec
+ExecStartPre=/usr/sbin/dnsmasq --test --conf-file=/run/battery/dnsmasq.conf
+ExecStart=/usr/sbin/dnsmasq --keep-in-foreground --conf-file=/run/battery/dnsmasq.conf --pid-file= --user=dnsmasq --group=dnsmasq
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

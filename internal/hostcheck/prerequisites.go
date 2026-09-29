@@ -33,7 +33,7 @@ const (
 	DefaultKVMSysfsDir = "/sys/class/misc/kvm"
 	// DefaultThinPool is the device-mapper name of containerd's thin pool,
 	// the pool_name of containerd's devmapper snapshotter. It is
-	// flintlock's default, and the name flintlock-runner's Host Image gives
+	// flintlock's default, and the name the Host Image (hostimage/) gives
 	// the pool: the logical volume thinpool in the volume group flintlock.
 	DefaultThinPool = "flintlock-thinpool"
 	// DefaultSysBlockDir is where the kernel lists block devices, the

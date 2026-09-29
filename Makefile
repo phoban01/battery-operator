@@ -148,6 +148,29 @@ docker-build: ## Build the Operator and Exec Agent images with Dagger and load t
 docker-push: ## Build both images for linux/amd64 and linux/arm64 with Dagger and push them to IMAGE_REPO at IMAGE_TAG.
 	$(DAGGER) call publish --repository=${IMAGE_REPO} --tags=${IMAGE_TAG}
 
+# The Host Image (hostimage/, docs/requirements/11-host-image.md) is a bootc
+# image built from its Containerfile by the Dagger module, for linux/amd64
+# only (ADR 0007). Building it runs its check stage. It is large: CI builds
+# it on every pull request that changes it, and publishes it on a tag.
+HOST_IMAGE_REPO ?= $(IMAGE_REPO)/host-image
+HOST_IMG ?= $(HOST_IMAGE_REPO):$(IMAGE_TAG)
+
+.PHONY: host-image
+host-image: ## Build the Host Image, check stage included, with Dagger and load it into Docker as HOST_IMG.
+	$(DAGGER) call host-image export-image --name=${HOST_IMG}
+
+.PHONY: host-image-check
+host-image-check: ## Build the Host Image with Dagger, run its checks again in it, and compare its labels with hostimage/versions.env.
+	$(DAGGER) call host-image-check
+
+.PHONY: host-image-lint
+host-image-lint: ## Lint the Host Image sources with Dagger, without building it: shellcheck, nft syntax and the check cases.
+	$(DAGGER) call host-image-lint
+
+.PHONY: host-image-push
+host-image-push: ## Build the Host Image with Dagger and push it to HOST_IMAGE_REPO at IMAGE_TAG.
+	$(DAGGER) call host-image-publish --repository=${HOST_IMAGE_REPO} --tags=${IMAGE_TAG}
+
 .PHONY: build-installer
 build-installer: manifests generate kustomize ## Generate a consolidated YAML with CRDs and deployment.
 	mkdir -p dist

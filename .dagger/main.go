@@ -23,11 +23,18 @@
 //	dagger call operator-image export-image --name=battery-operator:dev
 //	dagger call fake-flintlockd-image export-image --name=fake-flintlockd:dev
 //	dagger call publish --repository=ttl.sh/battery-operator-dev --tags=1h
+//	dagger call host-image-lint
+//	dagger call host-image-check
+//	dagger call host-image export-image --name=battery-host-image:dev
+//	dagger call host-image-publish --repository=ttl.sh/battery-host-image-dev --tags=1h
 //
 // The two images, the Operator's and the Exec Agent's, and the e2e suite's
 // fake flintlockd image are defined here and nowhere else. There is no
 // Dockerfile: see
-// docs/adr/0005-images-built-by-dagger.md.
+// docs/adr/0005-images-built-by-dagger.md. The Host Image is the one image
+// with a definition of its own, hostimage/Containerfile: it is a bootc
+// operating system image, not one binary, and this module builds it from
+// that file (docs/adr/0007-reference-host-image-and-cluster-api.md).
 package main
 
 import (
@@ -70,6 +77,17 @@ const (
 	// sourceURL labels the images, which links the packages on ghcr.io to
 	// the repository.
 	sourceURL = "https://github.com/phoban01/battery-operator"
+
+	// hostImageDir is the Host Image's build context. Its base image,
+	// quay.io/fedora/fedora-bootc:44, is pinned by digest in its
+	// Containerfile (HI-001), not here, so that the Containerfile is the
+	// image's one definition.
+	hostImageDir = "hostimage"
+	// hostImagePlatform is the one platform the Host Image is built for
+	// (HI-002).
+	hostImagePlatform dagger.Platform = "linux/amd64"
+	// hostImageRepository is where HostImagePublish pushes by default.
+	hostImageRepository = "ghcr.io/phoban01/battery-operator/host-image"
 )
 
 // platforms are what every image is built and published for.

@@ -1,0 +1,22 @@
+#= docs/requirements/11-host-image.md#kubernetes-node
+#/ The Host Image SHALL register its kubelet with the label
+#/ `battery.liquidmetal-x.dev/host-image` set to a value derived from the
+#/ image digest, and with one label per hypervisor carrying its pinned
+#/ version.
+# kubeadm join starts the kubelet from cloud-init's final stage, which runs
+# after multi-user.target, so this unit has always finished by then;
+# Before=kubelet.service covers every later boot.
+[Unit]
+Description=Host Image: kubelet labels and reservations
+Documentation=https://github.com/phoban01/battery-operator/blob/main/hostimage/README.md
+Requires=battery-host-config.service
+After=battery-host-config.service
+Before=kubelet.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/battery/kubelet-config
+
+[Install]
+WantedBy=multi-user.target

@@ -139,7 +139,7 @@ echo 'net.ipv4.ip_forward = 1' >/etc/sysctl.d/90-bo-trial.conf
 # agent's user, 65532, and read by flintlockd as root.
 install -d -m 0755 -o 65532 -g 65532 /etc/battery/flintlockd
 # The not ready reason directory the agent reads (EA-033).
-install -d -m 0755 /run/flr/not-ready.d
+install -d -m 0755 /run/battery/not-ready.d
 install -d -m 0755 /var/lib/flintlock /var/lib/bo-trial/thinpool
 
 systemctl daemon-reload

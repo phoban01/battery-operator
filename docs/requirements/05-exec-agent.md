@@ -111,10 +111,11 @@ that answers nothing.
   its configuration names.
 
 EA-030 to EA-032 are the Host prerequisites of the glossary, checked on the
-Host itself, since this project ships no Host Image (decision 9). EA-033 is
-flintlock-runner's not ready reason contract, which lets a Host Image report
-reasons of its own, such as a Host Service that has not started. The Node
-report is the contract the Inventory Controller (IN-001) and the Claim
+Host itself, whatever built it: the Host Image of `11-host-image.md` is one
+way to meet them, not the only one (ADR 0007). EA-033 is the not ready
+reason contract, from flintlock-runner, which lets a Host Image report
+reasons of its own, such as a gate that refused to start `flintlockd`. The
+Node report is the contract the Inventory Controller (IN-001) and the Claim
 Controller (CL-005) read. EA-035 gives the Inventory Controller the address
 battery reaches `flintlockd` at (IN-003).
 

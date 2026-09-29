@@ -32,6 +32,58 @@ comment-style = { meta = "#=", content = "#/" }
 pattern = "config/**/*.yaml"
 comment-style = { meta = "#=", content = "#/" }
 
+# The Host Image (11-host-image.md) is not Go. Its Containerfile, shell
+# scripts, systemd units, configuration files and SELinux module all take
+# `#` comments, so they cite requirements with `#=` and `#/`.
+#
+# duvet reads every path a pattern matches and fails on a directory, and
+# `hostimage/**/*` matches the directories under hostimage/ too. The
+# patterns below therefore name files only: by extension where directory
+# names carry dots (tmpfiles.d, kubelet.service.d), by directory elsewhere.
+[[source]]
+pattern = "hostimage/Containerfile"
+comment-style = { meta = "#=", content = "#/" }
+
+[[source]]
+pattern = "hostimage/*.*"
+comment-style = { meta = "#=", content = "#/" }
+
+[[source]]
+pattern = "hostimage/build/*"
+comment-style = { meta = "#=", content = "#/" }
+
+[[source]]
+pattern = "hostimage/selinux/*"
+comment-style = { meta = "#=", content = "#/" }
+
+[[source]]
+pattern = "hostimage/rootfs/usr/libexec/battery/*"
+comment-style = { meta = "#=", content = "#/" }
+
+[[source]]
+pattern = "hostimage/rootfs/usr/share/battery/*"
+comment-style = { meta = "#=", content = "#/" }
+
+[[source]]
+pattern = "hostimage/rootfs/usr/lib/**/*.service"
+comment-style = { meta = "#=", content = "#/" }
+
+[[source]]
+pattern = "hostimage/rootfs/usr/lib/**/*.path"
+comment-style = { meta = "#=", content = "#/" }
+
+[[source]]
+pattern = "hostimage/rootfs/usr/lib/**/*.conf"
+comment-style = { meta = "#=", content = "#/" }
+
+[[source]]
+pattern = "hostimage/rootfs/etc/**/*.toml"
+comment-style = { meta = "#=", content = "#/" }
+
+[[source]]
+pattern = "hostimage/rootfs/etc/**/*.cfg"
+comment-style = { meta = "#=", content = "#/" }
+
 [[specification]]
 source = "docs/requirements/01-resources.md"
 format = "markdown"
@@ -71,6 +123,11 @@ format = "markdown"
 # What the Operator assumes battery does; the fake battery cites it.
 [[specification]]
 source = "docs/requirements/10-battery.md"
+format = "markdown"
+
+# The Host Image; its sources are the hostimage/ patterns above.
+[[specification]]
+source = "docs/requirements/11-host-image.md"
 format = "markdown"
 
 [report.html]
