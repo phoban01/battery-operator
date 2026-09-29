@@ -1,0 +1,8 @@
+# The ssh user of the proof's scripts, with sudo, as a KubeadmConfig user.
+- op: add
+  path: /spec/template/spec/users
+  value:
+    - name: "@HOST_USER@"
+      sudo: "ALL=(ALL) NOPASSWD:ALL"
+      sshAuthorizedKeys:
+        - "@SSH_PUBLIC_KEY@"

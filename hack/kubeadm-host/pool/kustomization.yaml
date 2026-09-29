@@ -1,0 +1,28 @@
+# The proof's Host pool: config/capi's host-pool objects with the
+# host-pool-params Component, as config/capi/pools/example builds them, and
+# this pool's settings. up.sh copies this directory into .state, fills in
+# the @...@ values and builds it; the user-data comes from its
+# KubeadmConfigTemplate. Only the KubeadmConfigTemplate is used: there is
+# no Cluster API management cluster, and no AWS.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - @CAPI@/host-pool
+  - host-pool.yaml
+
+components:
+  - @CAPI@/host-pool-params
+
+# Two additions to the template, both through fields of the KubeadmConfig
+# that CABPK renders: a user for the scripts' ssh (users.yaml), which the
+# AWS templates leave out because a Host is reached through the cluster;
+# and a route to the control plane that the Mac's network needs
+# (network.yaml).
+patches:
+  - path: users.yaml
+    target:
+      kind: KubeadmConfigTemplate
+  - path: network.yaml
+    target:
+      kind: KubeadmConfigTemplate

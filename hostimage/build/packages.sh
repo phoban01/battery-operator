@@ -45,7 +45,7 @@ repo_gpgcheck=1
 gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-kubernetes
 EOF
 
-# The kubernetes-cni package installs into /opt, a link to /var/opt.
+# The kubernetes-cni package installs into /opt/cni/bin.
 mkdir -p /var/opt
 dnf -y --enablerepo=kubernetes --setopt=install_weak_deps=False install \
   "cloud-init-$CLOUD_INIT_VERSION" \
@@ -56,8 +56,12 @@ dnf -y --enablerepo=kubernetes --setopt=install_weak_deps=False install \
   container-selinux policycoreutils
 
 # The CNI plugins move to /usr, which an upgrade replaces; tmpfiles.d copies
-# them to /opt/cni/bin at boot.
+# them to /var/opt/cni/bin at boot. The base's /opt is a directory of the
+# read-only image, not a link to /var/opt, so /opt/cni becomes a link to
+# /var/opt/cni: a CNI DaemonSet installs its own plugin into /opt/cni/bin
+# (Flannel's does), and containerd looks there.
 mkdir -p /usr/libexec/cni
 cp -a /opt/cni/bin/. /usr/libexec/cni/
-rm -rf /var/opt/cni
+rm -rf /opt/cni /var/opt/cni
+ln -s /var/opt/cni /opt/cni
 dnf clean all

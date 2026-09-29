@@ -1,0 +1,143 @@
+# kubeadm Host proof
+
+A Node booted from the [Host Image](../../hostimage/README.md) and joined
+by kubeadm becomes a working Host
+([ADR 0007](../../docs/adr/0007-reference-host-image-and-cluster-api.md),
+consequence 4). The proof boots the image in a VM on an Apple silicon Mac,
+with cloud-init user-data rendered from the Cluster API
+KubeadmConfigTemplate in [config/capi](../../config/capi/README.md), joins
+it to a kubeadm control plane in a second VM, deploys battery-operator
+from this checkout's Manifests, and runs the
+[real hosts trial](../real-hosts/README.md)'s smoke test on it.
+
+This is a manual harness, like the trial. It needs KVM, which CI has not
+got.
+
+## What it proves
+
+- The Host Image boots from a disk that `bootc install to-disk` makes of
+  it, on arm64, with SELinux enforcing.
+- cloud-init runs the user-data that Cluster API's kubeadm bootstrap
+  provider (CABPK) would make of the KubeadmConfigTemplate. It writes
+  `/etc/battery/host.conf` from the template's `files`, and runs
+  `kubeadm join`. The Node takes its name from
+  `{{ ds.meta_data.local_hostname }}`, gets the Host label and the Host
+  taint, and CABPK's success file is written.
+- At boot the image makes the thin pool on the second disk, the guest
+  bridge and the firewall, and labels the Node with its image digest and
+  the Firecracker and Cloud Hypervisor versions.
+- The Exec Agent gets its certificates through CSRs the Operator signs,
+  `flintlockd` starts with them, and the agent reports the Host ready.
+- The trial's smoke steps pass on the Host: a Pool of two MicroVMs becomes
+  Ready; a claim runs `uname -a` in a MicroVM through the Exec Agent; a
+  MicroVM reaches `https://github.com` through the guest network; a
+  MicroVM survives a restart of `flintlockd`; and deleting the Pool
+  deletes its MicroVMs.
+
+It does not prove the AWS side of the templates: the AWSMachineTemplate,
+the MachineDeployment and the MachineHealthCheck are rendered but not used.
+Only the KubeadmConfigTemplate is.
+
+## How it works
+
+| Piece | What |
+|---|---|
+| Control plane | A Lima VM, `bo-kubeadm-cp`: Ubuntu 24.04, 2 CPUs, 3 GiB. containerd, `kubeadm init` at the Host Image's `KUBERNETES_VERSION` (`hostimage/versions.env`), Flannel, and local-path storage. Its taint is removed, so it runs the Operator and cert-manager. |
+| Host Image | Built from this checkout with `make host-image` for linux/arm64, and loaded into Docker. |
+| Disk | `bootc install to-disk`, run from the image itself in a privileged container, onto a sparse 20 GiB raw file. A blank 20 GiB file is the thin pool's disk. |
+| Host | A [vfkit](https://github.com/crc-org/vfkit) VM, `bo-kubeadm-host-1`, 4 CPUs, 8 GiB, with nested virtualization, EFI, the two disks, and the user-data as a NoCloud seed. |
+| User-data | `pool/` is a Host pool like `config/capi/pools/example`: it builds `config/capi/host-pool` with the `host-pool-params` Component. `userdata/main.go` turns its KubeadmConfigTemplate into cloud-config the way CABPK does: the `files` and `users`, the join configuration as a kubeadm v1beta4 `JoinConfiguration` with a bootstrap token, and `kubeadm join` in `runcmd`. It fails on any template field it does not map. |
+| images, deploy, smoke | The trial's own steps (`../real-hosts/up.sh images deploy` and `../real-hosts/smoke.sh`), with the trial's `ssh` driver pointed at the Host. The trial's registry runs on the Host in podman, on `127.0.0.1:5000`. |
+
+The pool differs from a real one in these ways, each for the Mac and not
+for the templates:
+
+- `host.conf` names the thin pool's disk, `/dev/vdb`. A virtio disk has no
+  `Instance Storage` model, so the image does not detect it.
+- A user with an ssh key and sudo, through the KubeadmConfig's `users`
+  (`pool/users.yaml`), for the scripts.
+- A route to the control plane through the Mac, through the
+  KubeadmConfig's `preKubeadmCommands` (`pool/network.yaml`). macOS makes
+  each VM's port on its shared network private, so two VMs on it cannot
+  reach each other directly. The Mac routes between them. `up.sh` adds the
+  route back on the control plane.
+
+Two more things stand in for what a cloud cluster has:
+
+- The template starts the kubelet with `--cloud-provider=external`. The
+  kubelet then leaves the Node's addresses empty and taints it
+  `node.cloudprovider.kubernetes.io/uninitialized` until a cloud
+  controller manager initializes it. There is none here, so `up.sh` sets
+  the Node's `InternalIP` and removes the taint, as the AWS cloud
+  controller manager would.
+- Flannel's two init containers run as `spc_t`. They are unprivileged and
+  write to `/opt/cni/bin` and `/etc/cni/net.d`, which a `container_t`
+  process may not write on the Host (HI-066). See "Pods run confined" in
+  the Host Image README.
+
+## What it needs
+
+- An Apple silicon Mac of the M3 generation or later, on macOS 15 or later,
+  for nested virtualization, with [Lima](https://lima-vm.io) 2.2. `up.sh`
+  downloads vfkit v0.6.4 and checks its checksum.
+- 6 CPUs and 11 GiB of memory free for the two VMs, and about 20 GiB of
+  disk: the Host's disk takes about 7 GiB on the Mac, the control plane
+  about 5 GiB, and the Host Image about 2.5 GiB in Docker.
+- The scripts run on a Linux machine that reaches the Mac with `mac
+  <command>` and routes to the Mac's shared network, such as an OrbStack
+  machine, with Docker, `kubectl`, and `devbox` or Go. `HOST_SSH_VIA_MAC=1`
+  sends ssh to the Host through the Mac for a machine that does not route
+  there. Docker runs `bootc install` in a privileged container, which needs
+  loop devices.
+- The Mac awake: the scripts run `caffeinate -i` for two hours.
+- Network access to GitHub, pkgs.k8s.io, quay.io, ghcr.io, Docker Hub and
+  the Fedora mirrors.
+
+The Host's disks, vfkit and its logs are in `~/.cache/bo-kubeadm-host` on
+the Mac. `console.log` there is the Host's serial console.
+
+## Steps
+
+```sh
+hack/kubeadm-host/up.sh      # or: up.sh controlplane image disk host join images deploy
+hack/kubeadm-host/smoke.sh   # or: smoke.sh pool claim network restart delete
+export KUBECONFIG=hack/kubeadm-host/.state/kubeconfig
+hack/kubeadm-host/down.sh    # stops the Host, deletes bo-kubeadm-cp and the Host's disks
+```
+
+Run them inside devbox (`devbox run -- hack/kubeadm-host/up.sh`), or with
+Go and `kubectl` on the `PATH`.
+
+| Step | What it does |
+|---|---|
+| `controlplane` | Creates and starts `bo-kubeadm-cp` on Lima's `vzNAT` network, and runs `controlplane/provision.sh` on it. Writes `.state/kubeconfig`. |
+| `image` | `make host-image` for linux/arm64, as `HOST_IMG`, unless Docker has it. `REBUILD_IMAGE=1` builds it again. |
+| `disk` | Installs `HOST_IMG` onto `host-root.raw` and makes a blank `host-thin-pool.raw`, unless the root disk exists. `REBUILD_DISK=1` makes both again. |
+| `host` | Renders the user-data and starts vfkit. |
+| `join` | Waits for the Host's address in the Mac's DHCP leases, adds the route to it, waits for the Node, initializes it as above, and waits for it to be Ready. |
+| `images`, `deploy` | Starts the registry on the Host, then the trial's steps. |
+
+`up.sh` is idempotent: each step does only what is missing. The Host
+boots only once from its user-data: to boot it again from new user-data,
+run `down.sh` (or stop vfkit and set `REBUILD_DISK=1`), then `up.sh`.
+
+`IMAGE_TAG=<main commit SHA>` deploys the Operator and the Exec Agent at
+that commit instead of `latest`, as in the trial.
+
+## What the first run found
+
+On an M4 Mac, macOS 26.5, at `main` of 29 September 2026:
+
+- The Host Image's `/opt` is a directory of the read-only image, not a link
+  to `/var/opt` as the image assumed. Flannel could not install its plugin
+  into `/opt/cni/bin`. The image now makes `/opt/cni` a link to
+  `/var/opt/cni`, where its plugins are copied at boot.
+- Flannel's unprivileged init containers cannot write `/opt/cni/bin` under
+  the Host's SELinux policy, as the Host Image README expected of such a
+  DaemonSet. The proof runs them as `spc_t`.
+- The Host's `/usr/local` is read-only, so the trial's smoke test takes the
+  Consumer's path on the Host from `CONSUMER_BIN`.
+- Everything else worked as the Host Image README says. The Exec Agent ran
+  as `container_t` with categories of its own, `flintlockd` as
+  `unconfined_service_t`, and battery reached `flintlockd` through the
+  `flintlockd_clients` rule.

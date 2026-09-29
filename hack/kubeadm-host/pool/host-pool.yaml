@@ -1,0 +1,37 @@
+# The settings of the proof's Host pool, in the shape of
+# config/capi/pools/example/host-pool.yaml. up.sh fills in the @...@ values
+# from the control plane. The AWS values are placeholders: nothing here
+# makes an AWSMachineTemplate real.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: host-pool-kubeadm-proof
+  annotations:
+    config.kubernetes.io/local-config: "true"
+data:
+  name: bo-kubeadm-proof
+  clusterName: bo-kubeadm-proof
+  replicas: "1"
+  instanceType: vfkit
+  amiID: ami-none
+  subnetID: subnet-none
+  additionalSecurityGroups:
+    - id: sg-none
+  rootVolumeGiB: "20"
+  kubernetesVersion: "@KUBERNETES_VERSION@"
+  nodeDrainTimeoutSeconds: "4500"
+  unhealthySeconds: "300"
+  # - THIN_POOL_DEVICE: vfkit's second disk. A virtio disk has no
+  #   "Instance Storage" model, so the Host Image does not detect it.
+  # - FLINTLOCKD_CLIENT_CIDRS: Flannel masquerades pod traffic to another
+  #   Node's address, so battery reaches flintlockd from the control plane
+  #   Node's address; the pod range is listed as well.
+  # - PROTECTED_CIDRS: the Nodes, pods and Services.
+  # - HOST_RESERVE_MEMORY_MB: the VM has 8 GiB; half is for the MicroVMs.
+  host.conf: |
+    GUEST_SUBNET=10.220.0.0/16
+    THIN_POOL_DEVICE=/dev/vdb
+    PROTECTED_CIDRS=@NODE_CIDR@,@POD_CIDR@,@SERVICE_CIDR@
+    FLINTLOCKD_CLIENT_CIDRS=@POD_CIDR@,@NODE_CIDR@
+    HOST_RESERVE_VCPU=2
+    HOST_RESERVE_MEMORY_MB=4096

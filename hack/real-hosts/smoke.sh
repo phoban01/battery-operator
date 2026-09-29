@@ -21,11 +21,14 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 NS=bo-trial
 POOL=trial
 POOL_SIZE=2
+# Where the Consumer goes on the Host. A bootc Host's /usr/local is
+# read-only; the kubeadm Host proof sets a path under /var.
+CONSUMER_BIN="${CONSUMER_BIN:-/usr/local/bin/bo-trial-smoke}"
 
 # firecrackers prints "<pid> <microvm id>" for every Firecracker process on
 # the Host.
 firecrackers() {
-	host_root sh -c 'for p in $(pgrep -x firecracker); do printf "%s %s\n" "$p" "$(tr "\0" " " </proc/$p/cmdline | grep -o "\-\-id [^ ]*" | cut -d" " -f2)"; done'
+	host_root sh -c 'for p in $(pgrep -x firecracker); do printf "%s %s\n" "$p" "$(tr "\0" " " </proc/$p/cmdline | grep -o -e "--id [^ ]*" | cut -d" " -f2)"; done'
 }
 
 wait_pool_ready() {
@@ -56,14 +59,15 @@ build_smoke() {
 	arch="$(host_arch)"
 	log "Building the Consumer (smoke/main.go) for linux/${arch}"
 	(cd "${REPO_ROOT}" && CGO_ENABLED=0 GOOS=linux GOARCH="${arch}" ${GO:-go} build -tags realhosts -o "${out}" ./hack/real-hosts/smoke)
-	host_put "${out}" /usr/local/bin/bo-trial-smoke 0755
+	host_put "${out}" "${CONSUMER_BIN}" 0755
 }
 
 # claim_once runs the Consumer on the Host, where the Exec Agent's address
-# is reachable, with k3s's admin kubeconfig to request the Holder's tokens.
-# It runs uname -a in the MicroVM, or the command given.
+# is reachable, with k3s's admin kubeconfig to request the Holder's tokens
+# (or CONSUMER_KUBECONFIG, a path on the Host, for a Host that is not the
+# k3s server). It runs uname -a in the MicroVM, or the command given.
 claim_once() {
-	host_root /usr/local/bin/bo-trial-smoke -kubeconfig /etc/rancher/k3s/k3s.yaml \
+	host_root "${CONSUMER_BIN}" -kubeconfig "${CONSUMER_KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}" \
 		-namespace "${NS}" -pool "${POOL}" -holder trial-holder -command "${1:-uname -a}"
 }
 

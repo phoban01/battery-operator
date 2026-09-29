@@ -528,12 +528,14 @@ file over containerd's defaults without starting it, and requires the CRI
 plugin's `enable_selinux` to be `true`; it also checks that the base
 policy's container process context is `container_t`.
 
-Not verified until a Host boots: that containerd starts with the setting on
-an enforcing kernel, that pods' containers show `container_t` with
-categories of their own (`ps -eZ`), and that no AVC denials follow
-(`ausearch -m avc -ts boot`). An unprivileged CNI or storage DaemonSet that
-touches host paths is the most likely thing to need its own
-`seLinuxOptions`.
+The kubeadm Host proof (`hack/kubeadm-host`) booted the image with
+SELinux enforcing. containerd started with the setting, and `ps -eZ` showed
+the Exec Agent and Flannel as `container_t` with categories of their own.
+An unprivileged CNI or storage DaemonSet that writes host paths needs its
+own `seLinuxOptions`: Flannel's init containers could not write
+`/opt/cni/bin` until they ran as `spc_t`. Not yet checked: that no other
+AVC denials follow (`ausearch -m avc -ts boot`; the image does not run
+`auditd`).
 
 ## Networking notes
 

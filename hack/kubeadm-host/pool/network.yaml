@@ -1,0 +1,10 @@
+# The Mac's shared network does not pass traffic from one VM to another:
+# macOS makes each VM's port on the bridge private. The Mac itself routes
+# between them. So the Host reaches the control plane through the Mac, by a
+# route cloud-init adds before `kubeadm join`, through the KubeadmConfig's
+# own preKubeadmCommands. up.sh adds the route back on the control plane.
+# A cloud network needs none of this.
+- op: add
+  path: /spec/template/spec/preKubeadmCommands
+  value:
+    - ip route replace @CP_IP@/32 via @GATEWAY_IP@
