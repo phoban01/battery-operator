@@ -11,7 +11,7 @@ BATTERY_UNIT=battery-host-config
 #/ configuration file that cloud-init writes at first boot, containing the
 #/ guest subnet, the thin pool device, the protected CIDRs and the Host
 #/ reserve.
-KEYS="GUEST_SUBNET THIN_POOL_DEVICE PROTECTED_CIDRS HOST_RESERVE_VCPU HOST_RESERVE_MEMORY_MB HOST_CONTROL_PORTS EXEC_AGENT_UID FLINTLOCKD_CLIENT_CIDRS"
+KEYS="GUEST_SUBNET THIN_POOL_DEVICE PROTECTED_CIDRS HOST_RESERVE_VCPU HOST_RESERVE_MEMORY_MB HOST_CONTROL_PORTS EXEC_AGENT_UID FLINTLOCKD_CLIENT_CIDRS GATEWAY_SERVICE_PORTS GATEWAY_SERVICE_UIDS"
 declare -A CONF=()
 
 #= docs/requirements/11-host-image.md#host-configuration
@@ -109,6 +109,71 @@ for c in ${client_cidrs//,/ }; do
 done
 if [[ $client_cidrs =~ (^,|,,|,$) ]]; then bad "FLINTLOCKD_CLIENT_CIDRS has an empty entry"; fi
 
+#= docs/requirements/11-host-image.md#image-networking
+#/ The Host Image SHALL allow TCP traffic from the guest subnet to
+#/ the bridge gateway address on the gateway service ports, which it reads
+#/ from the Host configuration file, and SHALL allow it on no port when
+#/ none are set.
+# Empty opens nothing. A port that is also a control port, or flintlockd's,
+# would open that port to guests, because the gateway's accept comes before
+# the control ports' drop, so the Host refuses it. The ports are written in
+# plain decimal, once each.
+service_ports=${CONF[GATEWAY_SERVICE_PORTS]// /}
+valid_ports "$service_ports" || bad "GATEWAY_SERVICE_PORTS is not a comma-separated list of ports"
+ports=()
+for p in ${service_ports//,/ }; do
+  p=$((10#$p))
+  case ",$control_ports,$BATTERY_FLINTLOCKD_PORT," in
+  *",$p,"*) bad "GATEWAY_SERVICE_PORTS entry $p is a control port of the Host" ;;
+  esac
+  case " ${ports[*]} " in
+  *" $p "*) bad "GATEWAY_SERVICE_PORTS lists $p twice" ;;
+  esac
+  ports+=("$p")
+done
+service_ports=$(
+  IFS=,
+  echo "${ports[*]}"
+)
+
+#= docs/requirements/11-host-image.md#image-networking
+#/ The Host Image SHALL drop traffic from the gateway service user
+#/ ids, which it reads from the Host configuration file, to the instance
+#/ metadata service addresses and to the Host's own `flintlockd`, kubelet,
+#/ Exec Agent and metrics ports.
+# Empty drops nothing. Root is not a gateway service's user id: dropping
+# its traffic would cut the Host itself off from the metadata service and
+# the kubelet. The Exec Agent's id is not one either: dropping its traffic
+# would cut it off from flintlockd. The entries may not overlap, so that
+# nftables takes the list as one set.
+service_uids=${CONF[GATEWAY_SERVICE_UIDS]// /}
+if [ -n "$service_uids" ] && ! [[ $service_uids =~ ^[0-9]{1,10}(-[0-9]{1,10})?(,[0-9]{1,10}(-[0-9]{1,10})?)*$ ]]; then
+  bad "GATEWAY_SERVICE_UIDS is not a comma-separated list of user ids and ranges LOW-HIGH"
+fi
+uids=()
+lows=()
+highs=()
+for u in ${service_uids//,/ }; do
+  lo=$((10#${u%-*}))
+  hi=$((10#${u#*-}))
+  if [ "$lo" -lt 1 ] || [ "$hi" -gt 4294967294 ] || [ "$lo" -gt "$hi" ]; then
+    bad "GATEWAY_SERVICE_UIDS entry $u is not a user id or range from 1 to 4294967294"
+  fi
+  if [ "$lo" -le "$((10#$agent_uid))" ] && [ "$((10#$agent_uid))" -le "$hi" ]; then
+    bad "GATEWAY_SERVICE_UIDS entry $u holds the Exec Agent's user id $((10#$agent_uid))"
+  fi
+  for i in "${!lows[@]}"; do
+    if [ "$lo" -le "${highs[$i]}" ] && [ "${lows[$i]}" -le "$hi" ]; then bad "GATEWAY_SERVICE_UIDS entry $u overlaps another"; fi
+  done
+  lows+=("$lo")
+  highs+=("$hi")
+  if [ "$lo" = "$hi" ]; then uids+=("$lo"); else uids+=("$lo-$hi"); fi
+done
+service_uids=$(
+  IFS=,
+  echo "${uids[*]}"
+)
+
 # The addressing: the gateway is the first address, DHCP hands out the
 # rest, leaving the first ten of a subnet larger than /26 for static use.
 mask=$(((0xffffffff << (32 - prefix)) & 0xffffffff))
@@ -135,6 +200,8 @@ BATTERY_HOST_RESERVE_MEMORY_MB=$((10#${CONF[HOST_RESERVE_MEMORY_MB]}))
 BATTERY_HOST_CONTROL_PORTS=$control_ports
 BATTERY_EXEC_AGENT_UID=$((10#$agent_uid))
 BATTERY_FLINTLOCKD_CLIENT_CIDRS=$client_cidrs
+BATTERY_GATEWAY_SERVICE_PORTS=$service_ports
+BATTERY_GATEWAY_SERVICE_UIDS=$service_uids
 EOF
 chmod 0644 "$tmp"
 #= docs/requirements/11-host-image.md#kernel-and-kvm

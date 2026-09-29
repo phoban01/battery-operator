@@ -21,7 +21,7 @@ from flintlock-runner's `image/`, with `flr` names made `battery` names.
 | `build/` | The build steps the Containerfile runs |
 | `rootfs/` | Copied to `/`: units, `/usr/libexec/battery` scripts, configuration |
 | `selinux/` | The policy module |
-| `check.sh`, `check-thin-pool.sh`, `check-flintlockd-access.sh`, `check-flintlockd-certs.sh`, `check-guest-isolation.sh`, `check-selinux-contexts.sh` | The check stage, run inside the built image; all but `check.sh` run in `make host-image-lint` too |
+| `check.sh`, `check-thin-pool.sh`, `check-flintlockd-access.sh`, `check-flintlockd-certs.sh`, `check-guest-isolation.sh`, `check-gateway-service-egress.sh`, `check-selinux-contexts.sh` | The check stage, run inside the built image; all but `check.sh` run in `make host-image-lint` too |
 | `check-labels.sh`, `lint.sh` | Checks that run outside the image |
 
 ## Building
@@ -82,7 +82,7 @@ containerd 1.x.
 | `battery-host-config` | validates the Host configuration file, writes `/run/battery/host.env`, labelled for containers | HI-050 to HI-052, HI-065 |
 | `battery-kvm` | refuses unless `/dev/kvm` opens for reading and writing | HI-011 |
 | `battery-thin-pool` | creates the thin pool once; leaves an existing one alone | HI-020 to HI-023 |
-| `battery-network` | bridge `flbr0`, forwarding, NAT, guest firewall, `flintlockd`'s endpoint and who may connect to it | HI-030, HI-032 to HI-037, HI-067, HI-069, HI-070, HI-075 to HI-077 |
+| `battery-network` | bridge `flbr0`, forwarding, NAT, guest firewall, `flintlockd`'s endpoint and who may connect to it | HI-030, HI-032 to HI-037, HI-067, HI-069, HI-070, HI-075 to HI-080 |
 | `battery-dnsmasq` | DHCP and DNS on the bridge | HI-031 |
 | `battery-flintlockd-certs` | makes `/etc/battery/flintlockd` for the Exec Agent, owned by its user id and labelled for its container | HI-072 |
 | `containerd` | one containerd for the kubelet and for `flintlockd` | HI-040 |
@@ -100,7 +100,7 @@ pod and for the Exec Agent on the Host; the HTTP gateway stays off. See
 [flintlockd's clients](#flintlockds-clients) and
 [flintlockd's certificates](#flintlockds-certificates). A guest cannot
 reach it: the guest firewall drops everything that arrives on the bridge
-except DHCP and DNS on the gateway.
+except DHCP, DNS and the gateway service ports on the gateway.
 
 ## Host configuration file
 
@@ -122,6 +122,8 @@ user-data.
 | `HOST_RESERVE_MEMORY_MB` | `4096` | Memory the Host's own Node offers to pods |
 | `HOST_CONTROL_PORTS` | `9090,8090,10248,10250,10255,10256,10270,1338` | The Host's own ports, dropped for guests by name as well as by the final drop |
 | `EXEC_AGENT_UID` | `65532` | The one user id of the Host's own processes that may connect to `flintlockd`, and the owner of `/etc/battery/flintlockd`: the Exec Agent's; 1 to 4294967294, never 0. See below |
+| `GATEWAY_SERVICE_PORTS` | empty | Comma-separated TCP ports on the bridge gateway that guests may reach, for services the Host runs for its MicroVMs. Only guests and the Host itself reach them. None may be in `HOST_CONTROL_PORTS`. Empty leaves guests only DHCP and DNS on the gateway (HI-078, HI-079) |
+| `GATEWAY_SERVICE_UIDS` | empty | Comma-separated user ids, and ranges `LOW-HIGH`, of the processes that serve those ports. Their traffic to the instance metadata service, `HOST_CONTROL_PORTS` and `flintlockd`'s port is dropped. Never 0, never `EXEC_AGENT_UID`, no overlaps. Empty drops nothing (HI-080) |
 | `FLINTLOCKD_CLIENT_CIDRS` | empty | Comma-separated IPv4 CIDRs from off the Host that may connect to `flintlockd`: the Operator's pod network, where battery runs. Empty admits none, so battery cannot reach the Host. See below |
 
 ```yaml
@@ -490,11 +492,21 @@ touches host paths is the most likely thing to need its own
   `PROTECTED_CIDRS` next to its node and pod ranges: a Service is then
   dropped wherever its pods are. The input chain accepts a guest only for
   DHCP and DNS on the gateway, and on the broadcast address for DHCP.
+- `GATEWAY_SERVICE_PORTS` adds TCP ports on the gateway to that list
+  (HI-078). The input chain drops those ports on every interface but the
+  bridge and loopback, so a pod on the Host and anything off it cannot
+  reach them (HI-079). `GATEWAY_SERVICE_UIDS` names the user ids that serve
+  them. The output chain drops their traffic to the metadata service, v4
+  and v6, and over loopback to the control ports and `flintlockd`'s port
+  (HI-080). Both are empty by default, and then neither adds a rule.
+  `check-gateway-service-egress.sh` checks the output chain's rules, and
+  connects as a listed id where it can make namespaces.
 - `check-guest-isolation.sh` checks the rules, and where it can make
   unprivileged user and network namespaces with bridges, veth and nftables
   (a developer machine, not the image build), it loads them into a stand-in
-  Host. A stand-in guest then reaches an outside address and DNS on the
-  gateway, and does not reach another port on the gateway, the Host's
+  Host. A stand-in guest then reaches an outside address, and DNS and a
+  listed gateway service port on the gateway, and does not reach an
+  unlisted port on the gateway, the Host's
   primary address, a pod behind its own interface on the Host, or a
   protected Service address that a DNAT rule sends outside every protected
   range.

@@ -7,7 +7,8 @@ chmod 0755 /usr/libexec/battery/host-config /usr/libexec/battery/kvm-gate /usr/l
   /usr/libexec/battery/network /usr/libexec/battery/kubelet-config /usr/libexec/battery/flintlockd-certs \
   /usr/libexec/battery/check /usr/libexec/battery/check-thin-pool-cases /usr/libexec/battery/check-flintlockd-access-cases \
   /usr/libexec/battery/check-selinux-contexts-cases \
-  /usr/libexec/battery/check-flintlockd-certs-cases /usr/libexec/battery/check-guest-isolation-cases
+  /usr/libexec/battery/check-flintlockd-certs-cases /usr/libexec/battery/check-guest-isolation-cases \
+  /usr/libexec/battery/check-gateway-service-egress-cases
 chmod 0644 /usr/libexec/battery/lib.sh
 
 #= docs/requirements/11-host-image.md#kernel-and-kvm

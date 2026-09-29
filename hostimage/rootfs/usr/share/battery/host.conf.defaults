@@ -37,6 +37,31 @@ PROTECTED_CIDRS=
 HOST_RESERVE_VCPU=2
 HOST_RESERVE_MEMORY_MB=4096
 
+#= docs/requirements/11-host-image.md#image-networking
+#/ The Host Image SHALL allow TCP traffic from the guest subnet to
+#/ the bridge gateway address on the gateway service ports, which it reads
+#/ from the Host configuration file, and SHALL allow it on no port when
+#/ none are set.
+# Comma-separated TCP ports on the bridge gateway that guests may reach:
+# services that the Host runs for its MicroVMs, such as a registry mirror
+# or a package cache. They answer only guests and the Host itself. None of
+# them may be a port in HOST_CONTROL_PORTS. Empty means guests reach only
+# DHCP and DNS on the gateway.
+GATEWAY_SERVICE_PORTS=
+
+#= docs/requirements/11-host-image.md#image-networking
+#/ The Host Image SHALL drop traffic from the gateway service user
+#/ ids, which it reads from the Host configuration file, to the instance
+#/ metadata service addresses and to the Host's own `flintlockd`, kubelet,
+#/ Exec Agent and metrics ports.
+# Comma-separated user ids, and ranges LOW-HIGH, of the processes that
+# serve GATEWAY_SERVICE_PORTS. They run on the Host, where the guest
+# firewall does not see them, and they act for guests, so the Host drops
+# their traffic to the instance metadata service and to HOST_CONTROL_PORTS
+# and flintlockd's port. Never 0, and never EXEC_AGENT_UID. Empty drops
+# nothing.
+GATEWAY_SERVICE_UIDS=
+
 # The Host's own ports guests may never reach: flintlockd's gRPC and HTTP
 # endpoints, the kubelet (10250 and its health, read-only and proxy ports),
 # the Exec Agent's exec API (10270) and containerd's metrics listener. The

@@ -3,7 +3,9 @@
 # configuration file with protected CIDRs, and checks the guest firewall
 # rules that keep a MicroVM away from the cluster: the Host's own addresses,
 # the Host's other interfaces, and Services behind destination NAT (HI-075
-# to HI-077). Installed as /usr/libexec/battery/check-guest-isolation-cases and
+# to HI-077), and the gateway service ports that open the gateway to guests
+# and to nothing else (HI-078, HI-079). Installed as
+# /usr/libexec/battery/check-guest-isolation-cases and
 # called by the check stage; `hostimage/check-guest-isolation.sh DIR LIBEXEC
 # DEFAULTS` runs it outside the image against the sources, which
 # `make host-image-lint` does.
@@ -12,6 +14,20 @@
 # namespaces, the ruleset is also loaded into a stand-in Host, and a stand-in
 # guest connects to the outside, to the gateway, to the Host's primary
 # address, to a pod on the Host and to a Service that the Host translates.
+# A pod on the Host, and the Host itself, connect to a gateway service port.
+#
+#= docs/requirements/11-host-image.md#image-networking
+#= type=test
+#/ The Host Image SHALL allow TCP traffic from the guest subnet to
+#/ the bridge gateway address on the gateway service ports, which it reads
+#/ from the Host configuration file, and SHALL allow it on no port when
+#/ none are set.
+#
+#= docs/requirements/11-host-image.md#image-networking
+#= type=test
+#/ The Host Image SHALL drop traffic to the gateway service ports on
+#/ the bridge gateway address that arrives on any interface other than the
+#/ bridge and loopback.
 #
 #= docs/requirements/11-host-image.md#image-networking
 #= type=test
@@ -42,26 +58,26 @@ fail() {
 
 # The stand-in Host: a guest subnet, a primary address, a pod network on
 # the Host and a Service range, of which the node and Service ranges are
-# protected and the pod network is not.
+# protected and the pod network is not. The Host serves TCP ports 5000 and
+# 3128 on the gateway; 1234 is a port it does not list.
 gateway=10.200.4.1
 guest=10.200.4.10
 primary=192.0.2.10
 outside=192.0.2.1
 pod=10.244.0.2
 service=10.96.0.10
-printf 'GUEST_SUBNET=10.200.4.0/22\nPROTECTED_CIDRS=10.0.0.0/16,10.96.0.0/12\n' >"$C.conf"
-
-rm -rf "$C"
-mkdir -p "$C/run/not-ready.d"
-env=(BATTERY_PATH="$PATH" BATTERY_LIB="$libexec/lib.sh" BATTERY_HOST_DEFAULTS="$defaults" BATTERY_HOST_CONF="$C.conf"
-  BATTERY_RUN="$C/run" BATTERY_NOT_READY_DIR="$C/run/not-ready.d" BATTERY_HOST_ENV="$C/run/host.env")
-if ! env "${env[@]}" bash "$libexec/host-config" >/dev/null 2>&1 ||
-  ! env "${env[@]}" BATTERY_PRIMARY_INTERFACE=eth0 BATTERY_PRIMARY_ADDRESS=$primary bash "$libexec/network" render "$C/net" >/dev/null 2>&1; then
-  fail "host-config or network render fails for $(tr '\n' ' ' <"$C.conf")"
-  rm -rf "$C" "$C.conf"
-  exit 1
-fi
 nftf=$C/net/guest-firewall.nft
+
+# render CONF: host-config with CONF as the Host configuration file, then
+# the firewall into $nftf. Fails when host-config refuses CONF.
+render() {
+  rm -rf "$C"
+  mkdir -p "$C/run/not-ready.d"
+  local env=(BATTERY_PATH="$PATH" BATTERY_LIB="$libexec/lib.sh" BATTERY_HOST_DEFAULTS="$defaults" BATTERY_HOST_CONF="$1"
+    BATTERY_RUN="$C/run" BATTERY_NOT_READY_DIR="$C/run/not-ready.d" BATTERY_HOST_ENV="$C/run/host.env")
+  env "${env[@]}" bash "$libexec/host-config" >/dev/null 2>&1 || return 1
+  env "${env[@]}" BATTERY_PRIMARY_INTERFACE=eth0 BATTERY_PRIMARY_ADDRESS=$primary bash "$libexec/network" render "$C/net" >/dev/null 2>&1
+}
 
 # chain NAME prints the rules of a rendered chain, one per line, without
 # comments or indentation.
@@ -69,6 +85,77 @@ chain() {
   awk -v c="$1" '$0 ~ "^\tchain " c " \\{" { on = 1; next } on && /^\t\}/ { exit } on' "$nftf" |
     sed -e 's/#.*//' -e 's/^[[:space:]]*//' -e '/^$/d'
 }
+
+# HI-078: with no Host configuration file, the default opens no port on the
+# gateway beyond DHCP and DNS, and nothing else is written for it.
+if render "$C.absent.conf"; then
+  if grep -qx 'BATTERY_GATEWAY_SERVICE_PORTS=' "$C/run/host.env"; then
+    ok "host.env carries the empty default of GATEWAY_SERVICE_PORTS"
+  else
+    fail "host.env lacks BATTERY_GATEWAY_SERVICE_PORTS="
+  fi
+  accepts=$(chain input | grep '^iifname "flbr0".*accept$' | sed "s/10\\.220\\.0\\.1/GW/g")
+  want=$(printf '%s\n' 'iifname "flbr0" ip daddr { 255.255.255.255, GW } udp dport 67 accept' \
+    'iifname "flbr0" ip daddr GW udp dport 53 accept' 'iifname "flbr0" ip daddr GW tcp dport 53 accept')
+  if [ "$accepts" = "$want" ]; then
+    ok "by default guests reach only DHCP and DNS on the gateway"
+  else
+    fail "by default the input chain accepts from guests: $(printf '%s\n' "$accepts" | tr '\n' ';')"
+  fi
+  if chain input | grep -q '^iifname != { "flbr0", "lo" }'; then
+    fail "by default the input chain has a rule for gateway service ports"
+  else
+    ok "by default the input chain has no rule for gateway service ports"
+  fi
+else
+  fail "host-config or network render fails without a Host configuration file"
+fi
+
+# A port that is also a control port, or flintlockd's, would open it to
+# guests, since the gateway's accept comes before the control ports' drop.
+# Those and anything that is not a list of ports stop the Host.
+# shellcheck disable=SC2016
+for bad in 10250 9090 5000,10270 0 65536 http 5000,5000 '5000,' '5000;reboot' '$(id -u)'; do
+  printf 'GATEWAY_SERVICE_PORTS=%s\n' "$bad" >"$C.conf"
+  if render "$C.conf"; then
+    fail "host-config accepts GATEWAY_SERVICE_PORTS='$bad'"
+  elif grep -q '^host configuration invalid: GATEWAY_SERVICE_PORTS' "$C/run/not-ready.d/battery-host-config" 2>/dev/null; then
+    ok "host-config refuses GATEWAY_SERVICE_PORTS='$bad' and says why"
+  else
+    fail "host-config refuses GATEWAY_SERVICE_PORTS='$bad' without recording why"
+  fi
+done
+
+printf 'GUEST_SUBNET=10.200.4.0/22\nPROTECTED_CIDRS=10.0.0.0/16,10.96.0.0/12\nGATEWAY_SERVICE_PORTS = "5000, 03128"\n' >"$C.conf"
+if ! render "$C.conf"; then
+  fail "host-config or network render fails for $(tr '\n' ' ' <"$C.conf")"
+  rm -rf "$C" "$C.conf" "$C.absent.conf"
+  exit 1
+fi
+
+# HI-078 and HI-079: the listed ports, in plain decimal, open on the gateway
+# to guests, and closed to every other interface but loopback.
+input=$(chain input)
+if grep -qx 'BATTERY_GATEWAY_SERVICE_PORTS=5000,3128' "$C/run/host.env"; then
+  ok "host.env carries the configured gateway service ports"
+else
+  fail "host.env's gateway service ports are: $(grep GATEWAY_SERVICE_PORTS "$C/run/host.env")"
+fi
+if printf '%s\n' "$input" | grep -qxF "iifname \"flbr0\" ip daddr $gateway tcp dport { 5000, 3128 } accept"; then
+  ok "guests may reach TCP ports 5000 and 3128 on the gateway"
+else
+  fail "the input chain does not accept guests on ports 5000 and 3128 of the gateway: $(printf '%s\n' "$input" | tr '\n' ';')"
+fi
+if printf '%s\n' "$input" | grep -qxF "iifname != { \"flbr0\", \"lo\" } ip daddr $gateway tcp dport { 5000, 3128 } drop"; then
+  ok "ports 5000 and 3128 on the gateway are dropped on every interface but the bridge and loopback"
+else
+  fail "the input chain does not drop ports 5000 and 3128 of the gateway from other interfaces"
+fi
+if [ "$(printf '%s\n' "$input" | grep -c '5000')" = 2 ]; then
+  ok "no other rule names a gateway service port"
+else
+  fail "other rules name port 5000: $(printf '%s\n' "$input" | grep 5000 | tr '\n' ';')"
+fi
 
 # HI-075: after the drops, a guest's packet leaves by the primary
 # interface or not at all.
@@ -158,17 +245,27 @@ table ip kube_proxy {
 }
 EOF
     } >/dev/null 2>&1 || exit 3
-    try() {
+    # probe NAME FROM HOST PORT connects from the namespace of process
+    # FROM, or from the Host itself when FROM is "host".
+    probe() {
       local out
-      out=$(inns "$g" timeout 2 bash -c "exec 3<>/dev/tcp/$2/$3" 2>&1)
+      if [ "$2" = host ]; then
+        out=$(timeout 2 bash -c "exec 3<>/dev/tcp/$3/$4" 2>&1)
+      else
+        out=$(inns "$2" timeout 2 bash -c "exec 3<>/dev/tcp/$3/$4" 2>&1)
+      fi
       case $? in
       124) echo "$1 dropped" ;;
       *) case $out in *refused*) echo "$1 reached" ;; *) echo "$1 unknown" ;; esac ;;
       esac
     }
+    try() { probe "$1" "$g" "$2" "$3"; }
     try outside $outside 80
     try gateway $gateway 53
+    try gateway-service $gateway 5000
     try gateway-other $gateway 1234
+    probe pod-to-service "$p" $gateway 5000
+    probe host-to-service host $gateway 5000
     try primary $primary 22
     try pod $pod 80
     # The pod cannot answer a guest either way, because the Host drops
@@ -190,12 +287,15 @@ else
     result() { printf '%s\n' "$results" | sed -n "s/^$1 //p"; }
     ok "enforced: a guest reaches an address outside the Host through the primary interface"
     if [ "$(result gateway)" = reached ]; then ok "enforced: a guest reaches DNS on the gateway"; else fail "enforced: DNS on the gateway is $(result gateway)"; fi
-    if [ "$(result gateway-other)" = dropped ]; then ok "enforced: a guest's traffic to any other port on the gateway is dropped"; else fail "enforced: port 1234 on the gateway is $(result gateway-other)"; fi
+    if [ "$(result gateway-service)" = reached ]; then ok "enforced: a guest reaches gateway service port 5000"; else fail "enforced: gateway service port 5000 is $(result gateway-service) for a guest"; fi
+    if [ "$(result gateway-other)" = dropped ]; then ok "enforced: a guest's traffic to port 1234 on the gateway, which is not listed, is dropped"; else fail "enforced: port 1234 on the gateway is $(result gateway-other)"; fi
+    if [ "$(result pod-to-service)" = dropped ]; then ok "enforced: a pod on the Host cannot reach gateway service port 5000"; else fail "enforced: gateway service port 5000 is $(result pod-to-service) for a pod on the Host"; fi
+    if [ "$(result host-to-service)" = reached ]; then ok "enforced: the Host itself reaches gateway service port 5000"; else fail "enforced: gateway service port 5000 is $(result host-to-service) for the Host itself"; fi
     if [ "$(result primary)" = dropped ]; then ok "enforced: a guest's traffic to the Host's primary address is dropped"; else fail "enforced: the Host's primary address is $(result primary)"; fi
     if [ "$(result pod | xargs)" = dropped ]; then ok "enforced: a guest's traffic to a pod on the Host, outside every protected range, is dropped"; else fail "enforced: a pod on the Host is $(result pod | xargs)"; fi
     if [ "$(result service)" = dropped ]; then ok "enforced: a guest's traffic to a protected Service address is dropped after kube-proxy's DNAT"; else fail "enforced: a protected Service address is $(result service)"; fi
   fi
 fi
 
-rm -rf "$C" "$C.conf"
+rm -rf "$C" "$C.conf" "$C.absent.conf"
 [ "$failures" -eq 0 ]

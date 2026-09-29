@@ -5,7 +5,8 @@
 # the shellcheck tool over every script; the digest pin and the versions file; the
 # thin-pool cases against stand-in tools; the flintlockd access and
 # certificate cases (HI-067 to HI-072); the guest isolation cases (HI-075
-# to HI-077); the nft syntax of the rendered firewall; and
+# to HI-079); the gateway service egress cases (HI-080); the nft syntax of
+# the rendered firewall; and
 # `systemd-analyze verify` where it is installed.
 #
 # HOST_IMAGE_REQUIRE_SHELLCHECK=1 makes a missing shellcheck a failure
@@ -22,7 +23,7 @@ fail() {
 }
 
 scripts=(hostimage/check.sh hostimage/check-thin-pool.sh hostimage/check-flintlockd-access.sh hostimage/check-flintlockd-certs.sh
-  hostimage/check-guest-isolation.sh hostimage/check-selinux-contexts.sh hostimage/check-labels.sh hostimage/lint.sh
+  hostimage/check-guest-isolation.sh hostimage/check-gateway-service-egress.sh hostimage/check-selinux-contexts.sh hostimage/check-labels.sh hostimage/lint.sh
   hostimage/build/*.sh hostimage/rootfs/usr/libexec/battery/*)
 for s in "${scripts[@]}"; do
   bash -n "$s" || fail "bash -n $s"
@@ -140,15 +141,45 @@ fi
 #= type=test
 #/ The Host Image SHALL drop traffic from the guest subnet to every
 #/ address of the Host other than the bridge gateway address.
+#
+#= docs/requirements/11-host-image.md#image-networking
+#= type=test
+#/ The Host Image SHALL allow TCP traffic from the guest subnet to
+#/ the bridge gateway address on the gateway service ports, which it reads
+#/ from the Host configuration file, and SHALL allow it on no port when
+#/ none are set.
+#
+#= docs/requirements/11-host-image.md#image-networking
+#= type=test
+#/ The Host Image SHALL drop traffic to the gateway service ports on
+#/ the bridge gateway address that arrives on any interface other than the
+#/ bridge and loopback.
 # The check stage's cases against the sources. Where this machine has nft
 # and unprivileged user and network namespaces they also load the rules
-# into a stand-in Host and show a guest reach the outside and DNS on the
-# gateway, and not another port on the gateway, the Host's primary
-# address, a pod on the Host or a protected Service.
+# into a stand-in Host and show a guest reach the outside, DNS and a
+# listed gateway service port on the gateway, and not an unlisted port on
+# the gateway, the Host's primary address, a pod on the Host or a
+# protected Service. A pod on the Host does not reach the listed port, and
+# the Host itself does.
 if hostimage/check-guest-isolation.sh "$tmp" hostimage/rootfs/usr/libexec/battery hostimage/rootfs/usr/share/battery/host.conf.defaults; then
   echo "ok    guest isolation cases"
 else
   fail "guest isolation cases"
+fi
+
+#= docs/requirements/11-host-image.md#image-networking
+#= type=test
+#/ The Host Image SHALL drop traffic from the gateway service user
+#/ ids, which it reads from the Host configuration file, to the instance
+#/ metadata service addresses and to the Host's own `flintlockd`, kubelet,
+#/ Exec Agent and metrics ports.
+# The check stage's cases against the sources. Where this machine has nft
+# and unprivileged user and network namespaces they also load the rules
+# and connect as a listed user id and as others.
+if hostimage/check-gateway-service-egress.sh "$tmp" hostimage/rootfs/usr/libexec/battery hostimage/rootfs/usr/share/battery/host.conf.defaults; then
+  echo "ok    gateway service egress cases"
+else
+  fail "gateway service egress cases"
 fi
 
 #= docs/requirements/11-host-image.md#kernel-and-kvm
@@ -181,7 +212,7 @@ render_nft() {
   env "${env[@]}" bash "$lib/host-config" >/dev/null 2>&1 &&
     env "${env[@]}" BATTERY_PRIMARY_INTERFACE=eth0 BATTERY_PRIMARY_ADDRESS=192.0.2.10 bash "$lib/network" render "$dir/net" >/dev/null 2>&1
 }
-printf 'PROTECTED_CIDRS=10.0.0.0/16,10.96.0.0/12\nFLINTLOCKD_CLIENT_CIDRS=10.244.0.0/16\n' >"$tmp/nft-set.conf"
+printf 'PROTECTED_CIDRS=10.0.0.0/16,10.96.0.0/12\nFLINTLOCKD_CLIENT_CIDRS=10.244.0.0/16\nGATEWAY_SERVICE_PORTS=5000,3128\nGATEWAY_SERVICE_UIDS=1000,100000-165535\n' >"$tmp/nft-set.conf"
 if ! command -v nft >/dev/null 2>&1; then
   if [ -n "${HOST_IMAGE_REQUIRE_NFT:-}" ]; then fail "HOST_IMAGE_REQUIRE_NFT is set but nft is not installed"; else echo "skip  nft is not installed"; fi
 else
