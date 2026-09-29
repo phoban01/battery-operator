@@ -5,8 +5,7 @@ title: battery-operator
 
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/asciinema-player@3.10.0/dist/bundle/asciinema-player.css">
 
-**Home** · [Install]({{ "/install.html" | relative_url }}) · Hosts (coming with
-[#192](https://github.com/phoban01/battery-operator/issues/192))
+**Home** · [Install]({{ "/install.html" | relative_url }}) · [Hosts]({{ "/hosts.html" | relative_url }})
 
 battery-operator is a Kubernetes operator for
 [battery](https://github.com/liquidmetal-dev/battery), which keeps warm
