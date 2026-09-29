@@ -20,5 +20,7 @@ limitations under the License.
 // the Host Pool Templates (docs/requirements/12-host-pool.md). The tests
 // run `kustomize build` ($KUSTOMIZE, or bin/kustomize, which `make test`
 // installs) and parse its output strictly, with no cluster: applying the
-// Manifests to one is the e2e suite's job.
+// Manifests to one is the e2e suite's job. release_test.go checks
+// config/release as a release renders it, and TestManifestsArtifact checks
+// the OCI artifact that hack/manifests-artifact-check.sh pushes and pulls.
 package manifests

@@ -9,7 +9,8 @@ on:
     types: [opened, synchronize, reopened, edited]
   push:
     branches: [main]
-    # a version tag publishes the images at that version
+    # a version tag publishes the images, the Manifests and the Host Image
+    # at that version
     tags: ["v*"]
 
 permissions:
@@ -78,6 +79,23 @@ jobs:
         with:
           version: ${{ env.DAGGER_VERSION }}
           call: check-generated
+
+  # The Manifests' OCI artifact (docs/requirements/06-deployment.md#manifests-artifact):
+  # render config/release with images pinned as a release pins them, push it
+  # with the flux CLI to a registry inside the check's own container, and
+  # check the media types, the annotations, both tags and what
+  # `flux pull artifact` extracts. It pushes nothing outside the container.
+  # A version tag publishes the artifact in the publish job.
+  manifests:
+    name: manifests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: ./.github/actions/setup-dagger
+        with:
+          version: ${{ env.DAGGER_VERSION }}
+          call: manifests-check
 
   # The Cluster API host pools (config/capi, docs/requirements/12-host-pool.md,
   # ADR 0007): render them with kustomize and validate every object against
@@ -302,11 +320,15 @@ jobs:
   # request. The Operator's goes to ghcr.io/phoban01/battery-operator, the
   # Exec Agent's to ghcr.io/phoban01/battery-operator/exec-agent. Each is
   # tagged with the commit SHA, and with latest on main or the version on a
-  # tag.
+  # tag. On a version tag it then publishes the Manifests' OCI artifact
+  # (DP-030), with the images it has just pushed pinned by digest, to
+  # ghcr.io/phoban01/battery-operator/manifests, tagged with the version and
+  # the commit SHA. The job summary lists every reference with its digest,
+  # to copy into the release notes.
   publish:
     name: publish
     if: github.event_name == 'push'
-    needs: [lint, test, build, check-generated, requirements]
+    needs: [lint, test, build, check-generated, requirements, manifests]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -319,6 +341,9 @@ jobs:
         with:
           version: ${{ env.DAGGER_VERSION }}
       - name: publish
+        # bash -eo pipefail, so that a failed dagger call fails the step
+        # through tee
+        shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ACTOR: ${{ github.actor }}
@@ -330,7 +355,47 @@ jobs:
             *) echo "::error::publish runs only for main and version tags, not $GITHUB_REF"; exit 1 ;;
           esac
           echo "publishing at: $tags"
-          dagger --progress=plain call publish --tags="$tags" --username="$ACTOR" --password=env://GITHUB_TOKEN
+          dagger --progress=plain call publish --tags="$tags" --username="$ACTOR" --password=env://GITHUB_TOKEN \
+            | tee "$RUNNER_TEMP/images.txt"
+          {
+            echo "## Images"
+            echo
+            echo '```'
+            cat "$RUNNER_TEMP/images.txt"
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
+      - name: publish the Manifests
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          # The images the step above pushed at this version, by digest.
+          operator=$(grep -E "^ghcr\.io/phoban01/battery-operator:${GITHUB_REF_NAME}@sha256:[0-9a-f]{64}$" "$RUNNER_TEMP/images.txt")
+          exec_agent=$(grep -E "^ghcr\.io/phoban01/battery-operator/exec-agent:${GITHUB_REF_NAME}@sha256:[0-9a-f]{64}$" "$RUNNER_TEMP/images.txt")
+          echo "pinning $operator and $exec_agent"
+          dagger --progress=plain call manifests-publish \
+            --version="$GITHUB_REF_NAME" --commit="$GITHUB_SHA" \
+            --operator-image="$operator" --exec-agent-image="$exec_agent" \
+            --username="$ACTOR" --password=env://GITHUB_TOKEN \
+            | tee "$RUNNER_TEMP/manifests.txt"
+          ref=$(tail -n 1 "$RUNNER_TEMP/manifests.txt")
+          {
+            echo "## Manifests"
+            echo
+            echo "The Manifests' OCI artifact, also tagged \`$GITHUB_SHA\`:"
+            echo
+            echo '```'
+            echo "$ref"
+            echo '```'
+            echo
+            echo "Pull it with Flux:"
+            echo
+            echo '```sh'
+            echo "flux pull artifact oci://${ref%@*} --output ./battery-operator"
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
 
   # Publishes the Host Image once every check and its own builds have passed
   # on a push of a version tag, and never from a pull request or main. Each

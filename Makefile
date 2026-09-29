@@ -204,11 +204,14 @@ host-image-base-pin: ## Pin the copy of the Host Image's base in hostimage/Conta
 	@test -n "$(MIRROR)" -a -n "$(SOURCE)" || { echo "set MIRROR and SOURCE, as mirror-host-image-base prints them" >&2; exit 2; }
 	hostimage/pin-base.sh "$(MIRROR)" "$(SOURCE)"
 
+# dist/install.yaml is the Manifests as a release ships them, config/release,
+# with IMG, EXEC_AGENT_IMG and POOLMGRD_IMG as their images. It is what the
+# Manifests' OCI artifact holds (docs/requirements/06-deployment.md#manifests-artifact).
+# It leaves config/ as it is.
 .PHONY: build-installer
-build-installer: manifests generate kustomize ## Generate a consolidated YAML with CRDs and deployment.
-	mkdir -p dist
-	cd config/manager && "$(KUSTOMIZE)" edit set image ghcr.io/phoban01/battery-operator=${IMG} ghcr.io/liquidmetal-dev/poolmgrd=${POOLMGRD_IMG}
-	"$(KUSTOMIZE)" build config/default > dist/install.yaml
+build-installer: manifests generate kustomize ## Render the Operator and the Exec Agent into dist/install.yaml, with IMG, EXEC_AGENT_IMG and POOLMGRD_IMG.
+	KUSTOMIZE="$(KUSTOMIZE)" IMG="$(IMG)" EXEC_AGENT_IMG="$(EXEC_AGENT_IMG)" POOLMGRD_IMG="$(POOLMGRD_IMG)" \
+		hack/manifests-artifact.sh render dist
 
 ##@ Deployment
 
