@@ -16,7 +16,8 @@ limitations under the License.
 
 // Package manifests holds the tests of the Manifests as kustomize renders
 // them: config/default, the Operator with battery as its sidecar
-// (docs/requirements/06-deployment.md), and config/exec-agent. The tests
+// (docs/requirements/06-deployment.md), config/exec-agent, and config/capi,
+// the Host Pool Templates (docs/requirements/12-host-pool.md). The tests
 // run `kustomize build` ($KUSTOMIZE, or bin/kustomize, which `make test`
 // installs) and parse its output strictly, with no cluster: applying the
 // Manifests to one is the e2e suite's job.

@@ -1,0 +1,59 @@
+# The EC2 side of one Host pool: one instance type, the Host Image's AMI by
+# explicit id, never by lookup, and one subnet by explicit id.
+#
+#= docs/requirements/12-host-pool.md#host-pool
+#/ The Host Pool Templates SHALL define each Host pool as one
+#/ Cluster API MachineDeployment with an AWSMachineTemplate of its own,
+#/ which names a single instance type, an AMI by explicit id and a subnet by
+#/ explicit id.
+#
+#= docs/requirements/12-host-pool.md#host-access
+#/ The Host Pool Templates SHALL NOT give a Host an AWS instance
+#/ profile, and SHALL NOT fetch a Host's bootstrap data from AWS Secrets
+#/ Manager.
+# No iamInstanceProfile: a Host has no AWS role, so nothing on it, the Exec
+# Agent and other host-network pods included, can get AWS credentials from
+# the instance metadata service. That is also why cloudInit skips Secrets
+# Manager: fetching the bootstrap data from it needs an instance profile.
+# The bootstrap data holds a short-lived kubeadm join token and the Host
+# configuration file, which holds no secret (HI-052).
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta2
+kind: AWSMachineTemplate
+metadata:
+  name: POOL
+spec:
+  template:
+    spec:
+      # Replaced from host-pool.yaml. A Host needs KVM, so a metal instance,
+      # and an instance-store device for the thin pool (HI-020).
+      instanceType: INSTANCE_TYPE
+      ami:
+        id: AMI_ID
+      subnet:
+        id: SUBNET_ID
+      #= docs/requirements/12-host-pool.md#host-pool
+      #/ The Host Pool Templates SHALL attach to every Host of a pool the
+      #/ additional security groups that the pool's settings list by id.
+      # Replaced from host-pool.yaml. CAPA's default node security group
+      # does not open flintlockd's port, 9090, so one of these groups opens
+      # it to the Operator's pod network (config/capi/README.md).
+      additionalSecurityGroups:
+        - id: SECURITY_GROUP_ID
+      cloudInit:
+        insecureSkipSecretsManager: true
+      # No SSH key: a Host is reached through the cluster.
+      sshKeyName: ""
+      rootVolume:
+        size: 100
+        type: gp3
+      #= docs/requirements/12-host-pool.md#host-access
+      #/ The Host Pool Templates SHALL require session tokens for the
+      #/ instance metadata service on every Host, with a response hop limit
+      #/ of 1.
+      # IMDSv2 only, one hop: a pod in its own network namespace cannot
+      # reach the service. A host-network pod can, and finds no credentials
+      # there.
+      instanceMetadataOptions:
+        httpEndpoint: enabled
+        httpTokens: required
+        httpPutResponseHopLimit: 1

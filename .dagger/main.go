@@ -14,6 +14,7 @@
 //	dagger call test
 //	dagger call build export --path=bin/manager
 //	dagger call check-generated
+//	dagger call capi-check
 //	dagger call requirements --owns=none
 //	dagger call requirements --owns=none --base=$(git merge-base origin/main HEAD)
 //	dagger call duvet-report export --path=.duvet/reports
@@ -184,6 +185,18 @@ if [ -n "$(git status --porcelain)" ]; then
 fi
 echo "generated files are up to date"
 `}).
+		Stdout(ctx)
+}
+
+// CapiCheck renders the Cluster API host pools, config/capi, and validates
+// every object against the CRDs of the pinned Cluster API and CAPA
+// releases, through `make capi-check` (docs/requirements/12-host-pool.md).
+// It downloads the CRDs from GitHub and checks them against their
+// checksums; it needs no cloud account.
+func (m *BatteryOperator) CapiCheck(ctx context.Context) (string, error) {
+	// The check reports on stderr; return it with stdout.
+	return m.gobase("capi").
+		WithExec([]string{"sh", "-ec", "make capi-check 2>&1"}).
 		Stdout(ctx)
 }
 

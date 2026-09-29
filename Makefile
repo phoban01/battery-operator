@@ -171,6 +171,25 @@ host-image-lint: ## Lint the Host Image sources with Dagger, without building it
 host-image-push: ## Build the Host Image with Dagger and push it to HOST_IMAGE_REPO at IMAGE_TAG.
 	$(DAGGER) call host-image-publish --repository=${HOST_IMAGE_REPO} --tags=${IMAGE_TAG}
 
+# host-image-ami turns a published Host Image into an AMI for the Cluster API
+# host pools (config/capi), with hostimage/publish-ami.sh (HI-009). It is the
+# one target that needs AWS, and nothing runs it unless asked: no other
+# target and no workflow. HOST_IMAGE_AMI_ARGS are the script's arguments,
+# for example "--bucket my-import-bucket --region eu-west-1".
+HOST_IMAGE_AMI_ARGS ?=
+
+.PHONY: host-image-ami
+host-image-ami: ## Publish HOST_IMG as an AMI with bootc-image-builder; needs podman, AWS and HOST_IMAGE_AMI_ARGS (hostimage/README.md).
+	hostimage/publish-ami.sh ${HOST_IMG} $(HOST_IMAGE_AMI_ARGS)
+
+# The Cluster API host pools (config/capi, docs/requirements/12-host-pool.md,
+# ADR 0007). capi-check renders them and validates every object against the
+# CRDs of the Cluster API and CAPA releases that hack/capi-check.sh pins. The
+# targeted checks are Go tests, which `make test` runs.
+.PHONY: capi-check
+capi-check: kustomize kubeconform ## Render config/capi and validate it against the pinned Cluster API and CAPA CRDs.
+	KUSTOMIZE="$(KUSTOMIZE)" KUBECONFORM="$(KUBECONFORM)" hack/capi-check.sh
+
 .PHONY: build-installer
 build-installer: manifests generate kustomize ## Generate a consolidated YAML with CRDs and deployment.
 	mkdir -p dist
@@ -276,6 +295,7 @@ KUBECTL ?= kubectl
 KIND ?= kind
 DAGGER ?= dagger
 KUSTOMIZE ?= $(LOCALBIN)/kustomize
+KUBECONFORM ?= $(LOCALBIN)/kubeconform
 CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen
 ENVTEST ?= $(LOCALBIN)/setup-envtest
 GOLANGCI_LINT = $(LOCALBIN)/golangci-lint
@@ -287,6 +307,7 @@ CONTROLLER_GEN_PATHS ?= $(shell go list -m)/...
 
 ## Tool Versions
 KUSTOMIZE_VERSION ?= v5.8.1
+KUBECONFORM_VERSION ?= v0.8.0
 CONTROLLER_TOOLS_VERSION ?= v0.21.0
 
 #ENVTEST_VERSION is the controller-runtime version to use for setup-envtest, derived from go.mod
@@ -304,6 +325,11 @@ GOLANGCI_LINT_VERSION ?= v2.12.2
 kustomize: $(KUSTOMIZE) ## Download kustomize locally if necessary.
 $(KUSTOMIZE): $(LOCALBIN)
 	$(call go-install-tool,$(KUSTOMIZE),sigs.k8s.io/kustomize/kustomize/v5,$(KUSTOMIZE_VERSION))
+
+.PHONY: kubeconform
+kubeconform: $(KUBECONFORM) ## Download kubeconform locally if necessary.
+$(KUBECONFORM): $(LOCALBIN)
+	$(call go-install-tool,$(KUBECONFORM),github.com/yannh/kubeconform/cmd/kubeconform,$(KUBECONFORM_VERSION))
 
 .PHONY: controller-gen
 controller-gen: $(CONTROLLER_GEN) ## Download controller-gen locally if necessary.

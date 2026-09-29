@@ -1,0 +1,54 @@
+# One Host pool. Every name, label and value that differs between pools is
+# a placeholder here. The pool's host-pool.yaml sets it, through the
+# host-pool-params Component (config/capi/README.md).
+#
+#= docs/requirements/12-host-pool.md#host-pool
+#/ The Host Pool Templates SHALL define each Host pool as one
+#/ Cluster API MachineDeployment with an AWSMachineTemplate of its own,
+#/ which names a single instance type, an AMI by explicit id and a subnet by
+#/ explicit id.
+# One MachineDeployment, one AWSMachineTemplate, one KubeadmConfigTemplate
+# and one MachineHealthCheck per pool. The pool size is the replica count.
+# The Kubernetes version has to be the one the AMI's Host Image carries,
+# which publish-ami.sh tags the AMI with (HI-009).
+apiVersion: cluster.x-k8s.io/v1beta2
+kind: MachineDeployment
+metadata:
+  name: POOL
+  labels:
+    cluster.x-k8s.io/cluster-name: CLUSTER
+    battery.liquidmetal-x.dev/host-pool: POOL
+spec:
+  clusterName: CLUSTER
+  replicas: 0
+  selector:
+    matchLabels:
+      cluster.x-k8s.io/cluster-name: CLUSTER
+      battery.liquidmetal-x.dev/host-pool: POOL
+  template:
+    metadata:
+      labels:
+        cluster.x-k8s.io/cluster-name: CLUSTER
+        battery.liquidmetal-x.dev/host-pool: POOL
+    spec:
+      clusterName: CLUSTER
+      version: KUBERNETES_VERSION
+      bootstrap:
+        configRef:
+          apiGroup: bootstrap.cluster.x-k8s.io
+          kind: KubeadmConfigTemplate
+          name: POOL
+      infrastructureRef:
+        apiGroup: infrastructure.cluster.x-k8s.io
+        kind: AWSMachineTemplate
+        name: POOL
+      deletion:
+        #= docs/requirements/12-host-pool.md#host-pool
+        #/ The Host Pool Templates SHALL set no node drain timeout on a
+        #/ Host pool's Machines that is shorter than the Exec Agent's default
+        #/ drain timeout.
+        # The Exec Agent holds a drain open while claims are Bound on its
+        # Host (EA-040), for at most its --drain-timeout: one hour by
+        # default. A shorter timeout here lets Cluster API give up on the
+        # drain and delete the Machine under Bound claims.
+        nodeDrainTimeoutSeconds: 0

@@ -60,6 +60,10 @@ format = "markdown"
 source = "docs/requirements/11-host-image.md"
 format = "markdown"
 
+[[specification]]
+source = "docs/requirements/12-host-pool.md"
+format = "markdown"
+
 [report.html]
 enabled = true
 path = ".duvet/reports/models.html"

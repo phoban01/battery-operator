@@ -37,6 +37,9 @@ use. It contains no requirements.
 - **Host Image**: the bootc container image in `hostimage/` that a Node
   boots from to become a Host. It meets the Host prerequisites, and adds
   the guest network a MicroVM needs.
+- **Host Pool Templates**: the Cluster API templates in `config/capi/`
+  that boot Hosts from the Host Image's AMI on AWS and join them to a
+  workload cluster with kubeadm, one MachineDeployment per Host pool.
 - **e2e suite**: the end-to-end tests in `test/e2e/`, written with
   [sigs.k8s.io/e2e-framework](https://github.com/kubernetes-sigs/e2e-framework),
   which create a kind cluster, deploy the Manifests into it and test the
@@ -61,6 +64,9 @@ use. It contains no requirements.
   the Pool, with a size of 0, the replenishment strategy
   `MIN_SIZE_THRESHOLD` with a `min_size` of 1, no pre-lease commands and
   the hook failure policy `DELETE_AND_REPLACE`.
+- **Host pool**: a set of Hosts that the Host Pool Templates make from one
+  MachineDeployment, with one instance type and one AMI. It is not a
+  `Pool`: a Pool is MicroVMs, a Host pool is machines.
 - **Claim**: a `MicroVMClaim` resource: one consumer's hold on one warm
   MicroVM from a Pool.
 - **Lease**: battery's record of a claimed MicroVM, identified by the lease

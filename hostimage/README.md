@@ -23,6 +23,10 @@ from flintlock-runner's `image/`, with `flr` names made `battery` names.
 | `selinux/` | The policy module |
 | `check.sh`, `check-thin-pool.sh`, `check-flintlockd-access.sh`, `check-flintlockd-certs.sh`, `check-guest-isolation.sh`, `check-gateway-service-egress.sh`, `check-selinux-contexts.sh` | The check stage, run inside the built image; all but `check.sh` run in `make host-image-lint` too |
 | `check-labels.sh`, `lint.sh` | Checks that run outside the image |
+| `publish-ami.sh` | Makes an AMI of a published image, on request only; see [Publishing an AMI](#publishing-an-ami) |
+
+To make Hosts from the image with Cluster API on AWS, publish it as an AMI
+and use the host pool templates in [config/capi](../config/capi/README.md).
 
 ## Building
 
@@ -287,10 +291,12 @@ booted Host.
   reserve, so that the Node's allocatable is the Host reserve (less the
   kubelet's own eviction threshold).
 
-Because the flag comes last it replaces a `--node-labels` given through
-`kubeletExtraArgs` in the kubeadm join configuration. Put other labels on
-the Node through the API instead. A taint that keeps ordinary pods off a
-Host belongs in the join configuration and is untouched.
+The kubelet merges repeated `--node-labels` flags, so labels given through
+`kubeletExtraArgs` in the kubeadm join configuration stay. Where both set
+the same key, this flag comes last and its value wins. The Cluster API host
+pools in [config/capi](../config/capi/README.md) set the Host label there
+too. A taint that keeps ordinary pods off a Host belongs in the join
+configuration and is untouched.
 
 `battery.liquidmetal-x.dev/host=true` is the Host label (HI-074). The Exec
 Agent's DaemonSet selects it, so every Host runs an Exec Agent, which then
@@ -518,6 +524,47 @@ touches host paths is the most likely thing to need its own
   loopback or the bridge gateway. A guest's traffic to any address of the
   Host arrives on the bridge and is dropped there, so it cannot reach
   `flintlockd` even if something (kube-proxy can) sets `route_localnet`.
+
+## Publishing an AMI
+
+The Cluster API host pools in [config/capi](../config/capi/README.md) boot
+the image from an AMI. `publish-ami.sh` makes one from a published image
+(HI-009):
+
+```sh
+make host-image-ami HOST_IMG=ghcr.io/phoban01/battery-operator/host-image:v0.2.0 \
+  HOST_IMAGE_AMI_ARGS="--bucket my-import-bucket --region eu-west-1"
+```
+
+The script pulls the image into root's podman storage. It then runs
+`bootc-image-builder --type ami`, pinned by digest. The builder uploads the
+disk image to the S3 bucket, imports it as a snapshot through the
+`vmimport` service role, and registers the AMI. The script then tags the
+AMI:
+
+| Tag | Value |
+|-----|-------|
+| `battery.liquidmetal-x.dev/image-digest` | The digest of the container image |
+| `battery.liquidmetal-x.dev/kubernetes-version` | The image's Kubernetes version, from its OCI label. A pool that boots the AMI sets this as its `kubernetesVersion` |
+| `battery.liquidmetal-x.dev/host-image` | `true` |
+
+It needs podman, sudo, the `aws` command line and AWS credentials, from
+the environment or `~/.aws`. You create the bucket and the `vmimport` role
+once. The image must be in a registry, so that it has a digest; an image
+built only locally has none, and the script refuses it. `--dry-run` prints
+the commands and runs nothing.
+
+Nothing else in this directory needs AWS, and nothing runs the script
+unless you ask: no other make target and no CI workflow calls it.
+`lint.sh` checks both, and checks a dry run.
+
+The script has not run against AWS: the project has no AWS account yet. It
+comes from flintlock-runner, which had none either.
+
+The AMI is made outside the Dagger module on purpose. bootc-image-builder
+runs as a privileged podman container that reads root's container storage,
+and it needs AWS credentials. Neither fits a Dagger function or a CI job
+that runs without cloud credentials (HI-007).
 
 ## Upgrading
 

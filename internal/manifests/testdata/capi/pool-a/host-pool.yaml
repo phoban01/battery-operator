@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: host-pool-a
+  annotations:
+    config.kubernetes.io/local-config: "true"
+data:
+  name: hosts-a
+  clusterName: workload-a
+  replicas: "3"
+  instanceType: m6id.metal
+  amiID: ami-0123456789abcdef0
+  subnetID: subnet-0aaaaaaaaaaaaaaaa
+  additionalSecurityGroups:
+    - id: sg-0aaaaaaaaaaaaaaa1
+    - id: sg-0aaaaaaaaaaaaaaa2
+  kubernetesVersion: v1.35.8
+  nodeDrainTimeoutSeconds: "4500"
+  unhealthySeconds: "301"
+  host.conf: |
+    GUEST_SUBNET=10.220.0.0/16
+    PROTECTED_CIDRS=10.0.0.0/16,192.168.0.0/16,10.96.0.0/12
+    FLINTLOCKD_CLIENT_CIDRS=192.168.0.0/16
+    HOST_RESERVE_VCPU=2
+    HOST_RESERVE_MEMORY_MB=4096
