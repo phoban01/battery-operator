@@ -146,6 +146,7 @@ Now:
 | `hack/` | Boilerplate header, `duvet-coverage.sh`, `duvet-models.sh`, `quint.sh` |
 | `specs/quint/` | Quint models and their shared types |
 | `hostimage/` | The Host Image: a bootc image a Host boots from, its Containerfile, units, scripts, SELinux module and checks (`11-host-image.md`, ADR 0007); the Dagger module builds it, `make host-image-lint` and `make host-image-check` |
+| `config/capi/` | Cluster API host pool templates that boot the Host Image and join it with kubeadm, one settings object per pool (`12-host-pool.md`, ADR 0007); `make capi-check` validates them against the pinned Cluster API and CAPA CRDs |
 
 Where the issues put new things:
 
