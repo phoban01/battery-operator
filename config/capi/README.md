@@ -120,6 +120,11 @@ useful default:
 Also check `GUEST_SUBNET`, the subnet of the MicroVMs on each Host. Keep it
 clear of the ranges above. Its default is `10.220.0.0/16`.
 
+A consumer that runs services for its MicroVMs on the bridge gateway sets
+`GATEWAY_SERVICE_PORTS` and `GATEWAY_SERVICE_UIDS` too. The example has
+them commented out. Left out, guests reach only DHCP and DNS on the
+gateway.
+
 The file holds settings, never secrets. The bootstrap data goes to the
 instance as user-data, not through AWS Secrets Manager, because a Host has
 no instance profile.

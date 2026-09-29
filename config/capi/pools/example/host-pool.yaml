@@ -77,3 +77,8 @@ data:
     FLINTLOCKD_CLIENT_CIDRS=REPLACE-operator-pod-cidr
     HOST_RESERVE_VCPU=2
     HOST_RESERVE_MEMORY_MB=4096
+    # Services on the bridge gateway, for a consumer that runs them for its
+    # MicroVMs (hostimage/README.md). Left out, guests reach only DHCP and
+    # DNS on the gateway.
+    # GATEWAY_SERVICE_PORTS=REPLACE-tcp-ports
+    # GATEWAY_SERVICE_UIDS=REPLACE-user-ids
