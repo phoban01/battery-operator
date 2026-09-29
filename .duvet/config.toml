@@ -27,7 +27,8 @@ pattern = "test/**/*.yaml"
 comment-style = { meta = "#=", content = "#/" }
 
 # The Manifests (06-deployment.md, 05-exec-agent.md#identity) are YAML and
-# cite requirements with `#=` and `#/`.
+# cite requirements with `#=` and `#/`. So are the Host Pool Templates,
+# config/capi (12-host-pool.md), whose tests are Go, in internal/manifests.
 [[source]]
 pattern = "config/**/*.yaml"
 comment-style = { meta = "#=", content = "#/" }
@@ -125,9 +126,15 @@ format = "markdown"
 source = "docs/requirements/10-battery.md"
 format = "markdown"
 
-# The Host Image; its sources are the hostimage/ patterns above.
+# The Host Image; its sources are the hostimage/ patterns above, with
+# hostimage/publish-ami.sh among them.
 [[specification]]
 source = "docs/requirements/11-host-image.md"
+format = "markdown"
+
+# The Host Pool Templates; their sources are config/**/*.yaml above.
+[[specification]]
+source = "docs/requirements/12-host-pool.md"
 format = "markdown"
 
 [report.html]

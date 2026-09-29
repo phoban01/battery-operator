@@ -79,6 +79,21 @@ jobs:
           version: ${{ env.DAGGER_VERSION }}
           call: check-generated
 
+  # The Cluster API host pools (config/capi, docs/requirements/12-host-pool.md,
+  # ADR 0007): render them with kustomize and validate every object against
+  # the CRDs of the pinned Cluster API and CAPA releases. Their targeted
+  # checks are Go tests, in the test job.
+  capi:
+    name: capi
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: ./.github/actions/setup-dagger
+        with:
+          version: ${{ env.DAGGER_VERSION }}
+          call: capi-check
+
   # The Host Image (hostimage/, docs/requirements/11-host-image.md, ADR 0007):
   # lint its sources, then build it for linux/amd64 from its Containerfile,
   # which runs its check stage, run the checks again in the built image and

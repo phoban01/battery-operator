@@ -14,11 +14,11 @@ The Host Image comes from flintlock-runner's `image/`, and so do these
 requirements. Each keeps the number it had in flintlock-runner's
 `11-host-image.md`, so the history reads straight across. The gaps are the
 requirements not carried over: those flintlock-runner had withdrawn
-(HI-042, HI-044, HI-063), the one about its Host Services (HI-064), and the
-one about publishing an AMI (HI-009), which belongs with the Cluster API
-host-pool templates. HI-064 comes back in a generic form as HI-080,
-under a new number because its scope changed. A new requirement takes the next
-free number above HI-080.
+(HI-042, HI-044, HI-063) and the one about its Host Services (HI-064).
+HI-009, about publishing an AMI, came over later with the Cluster API
+host-pool templates (`12-host-pool.md`). HI-064 comes back in a generic
+form as HI-080, under a new number because its scope changed. A new
+requirement takes the next free number above HI-080.
 
 ## Build {#image-build}
 
@@ -42,13 +42,19 @@ free number above HI-080.
 - **HI-008** The Host Image build SHALL run a check stage inside the built
   container image that fails unless every component of HI-003 reports its
   pinned version and every unit this document requires is enabled.
+- **HI-009** Where publishing an AMI is requested, the Host Image build SHALL
+  convert the container image to an AMI with `bootc-image-builder` and SHALL
+  tag the AMI with the container image digest and the pinned Kubernetes
+  version.
 
 The Dagger module builds the image from its Containerfile, as ADR 0005 and
 ADR 0007 say, and CI publishes it on a version tag. The Kubernetes version
 is part of the image because the kubelet is, so a Host boots from an image
 whose Kubernetes version the cluster it joins supports. Turning the
-container image into a machine image for a cloud, an AMI for example, is
-not part of the build.
+container image into a machine image for a cloud is a separate step that
+runs only on request: HI-009 does it for AWS, for the Cluster API host
+pools of `12-host-pool.md`. An AMI is usable only by a MachineDeployment
+whose `version` matches its Kubernetes version tag.
 
 ## Kernel and KVM {#kernel-and-kvm}
 

@@ -1,0 +1,53 @@
+# How a Host of the pool joins the workload cluster: cloud-init, from the
+# Host Image, runs this at first boot.
+apiVersion: bootstrap.cluster.x-k8s.io/v1beta2
+kind: KubeadmConfigTemplate
+metadata:
+  name: POOL
+spec:
+  template:
+    spec:
+      format: cloud-config
+      #= docs/requirements/12-host-pool.md#host-configuration
+      #/ The Host Pool Templates SHALL write the Host configuration file
+      #/ `/etc/battery/host.conf` through the files of each Host pool's
+      #/ KubeadmConfigTemplate, with only keys that the Host Image's defaults
+      #/ file names.
+      # cloud-init writes the file in its network stage, before the Host
+      # Image's battery-host-config unit reads it (HI-050). The content is
+      # the pool's host.conf in host-pool.yaml. The format is in
+      # hostimage/README.md, "Host configuration file". It holds settings and
+      # no secret (HI-052).
+      files:
+        - path: /etc/battery/host.conf
+          owner: root:root
+          permissions: "0644"
+          content: HOST_CONF
+      joinConfiguration:
+        nodeRegistration:
+          # CAPA's convention: the Node takes the instance's private DNS
+          # name, which the AWS cloud controller manager expects.
+          name: "{{ ds.meta_data.local_hostname }}"
+          #= docs/requirements/12-host-pool.md#host-node
+          #/ The Host Pool Templates SHALL join every Host with the taint
+          #/ `battery.liquidmetal-x.dev/host=true:NoSchedule`, so that only pods
+          #/ that tolerate it run on a Host's own Node.
+          # A Host's Node offers pods only the Host reserve (HI-061). The
+          # Exec Agent tolerates every taint (config/exec-agent).
+          taints:
+            - key: battery.liquidmetal-x.dev/host
+              value: "true"
+              effect: NoSchedule
+          kubeletExtraArgs:
+            # The AWS cloud controller manager sets the provider id.
+            - name: cloud-provider
+              value: external
+            #= docs/requirements/12-host-pool.md#host-node
+            #/ The Host Pool Templates SHALL register every Host's kubelet
+            #/ with the label `battery.liquidmetal-x.dev/host` set to `true`,
+            #/ through the node labels of the kubeadm join configuration.
+            # The Host Image sets the same label (HI-074). The kubelet merges
+            # repeated --node-labels flags, so both reach the Node, and a
+            # Host keeps the label if its image does not set it.
+            - name: node-labels
+              value: battery.liquidmetal-x.dev/host=true

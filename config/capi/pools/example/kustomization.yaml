@@ -1,0 +1,11 @@
+# The Host pool `example`: the objects of config/capi/host-pool with the
+# settings of host-pool.yaml. Copy this directory to add a pool.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../host-pool
+  - host-pool.yaml
+
+components:
+  - ../../host-pool-params

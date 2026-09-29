@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: host-pool-b
+  annotations:
+    config.kubernetes.io/local-config: "true"
+data:
+  name: hosts-b
+  clusterName: workload-a
+  replicas: "5"
+  instanceType: c6id.metal
+  amiID: ami-0fedcba9876543210
+  subnetID: subnet-0bbbbbbbbbbbbbbbb
+  kubernetesVersion: v1.35.7
+  nodeDrainTimeoutSeconds: "7200"
+  unhealthySeconds: "600"
+  host.conf: |
+    GUEST_SUBNET=10.230.0.0/24
+    THIN_POOL_DEVICE=/dev/nvme2n1
+    PROTECTED_CIDRS=10.1.0.0/16,10.244.0.0/16,10.96.0.0/12
+    FLINTLOCKD_CLIENT_CIDRS=10.244.0.0/16,10.1.0.0/16
+    EXEC_AGENT_UID=65532

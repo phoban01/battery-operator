@@ -25,6 +25,7 @@ fail() {
 scripts=(hostimage/check.sh hostimage/check-thin-pool.sh hostimage/check-flintlockd-access.sh hostimage/check-flintlockd-certs.sh
   hostimage/check-guest-isolation.sh hostimage/check-gateway-service-egress.sh hostimage/check-selinux-contexts.sh hostimage/check-labels.sh hostimage/lint.sh
   hostimage/build/*.sh hostimage/rootfs/usr/libexec/battery/*)
+scripts+=(hostimage/publish-ami.sh)
 for s in "${scripts[@]}"; do
   bash -n "$s" || fail "bash -n $s"
 done
@@ -247,6 +248,35 @@ else
     *) fail "nft rejects the firewall rendered for $(basename "$c"): $out" ;;
     esac
   done
+fi
+
+#= docs/requirements/11-host-image.md#image-build
+#= type=test
+#/ Where publishing an AMI is requested, the Host Image build SHALL
+#/ convert the container image to an AMI with `bootc-image-builder` and SHALL
+#/ tag the AMI with the container image digest and the pinned Kubernetes
+#/ version.
+# A dry run: what publish-ami.sh would run, without podman, AWS or an
+# image. It shows the commands are formed as intended, not that AWS accepts
+# them; nothing has run the script against AWS.
+digest=sha256:$(printf 'a%.0s' $(seq 1 64))
+k8s=$(sed -n 's/^KUBERNETES_VERSION=//p' hostimage/versions.env)
+ami_out=$(IMAGE_DIGEST=$digest hostimage/publish-ami.sh registry.example/host:1 --bucket b --region eu-west-1 --dry-run 2>&1)
+for want in "bootc-image-builder@sha256:" "--type ami" "--target-arch amd64" "--aws-bucket b" "--aws-region eu-west-1" \
+  "registry.example/host:1" "create-tags" "Key=battery.liquidmetal-x.dev/image-digest,Value=$digest" \
+  "Key=battery.liquidmetal-x.dev/kubernetes-version,Value=$k8s"; do
+  if printf '%s\n' "$ami_out" | tr -d "\\\\" | grep -qF -- "$want"; then
+    echo "ok    publish-ami dry run has: $want"
+  else
+    fail "publish-ami dry run lacks: $want"
+  fi
+done
+# Only when requested: no target but host-image-ami, and no workflow, runs it.
+if grep -n 'publish-ami\|host-image-ami' Makefile .github/workflows/*.yml .dagger/*.go |
+  grep -v '^Makefile:[0-9]*:\(#\|host-image-ami:\|\.PHONY: host-image-ami\|	hostimage/publish-ami.sh \)' | grep -q .; then
+  fail "something other than make host-image-ami runs publish-ami.sh"
+else
+  echo "ok    only make host-image-ami runs publish-ami.sh"
 fi
 
 if command -v systemd-analyze >/dev/null 2>&1; then

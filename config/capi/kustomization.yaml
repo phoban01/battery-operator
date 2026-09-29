@@ -1,0 +1,19 @@
+# Cluster API host pools: Hosts booted from the Host Image's AMI on AWS,
+# joined to a workload cluster with kubeadm (ADR 0007). Apply them to the
+# management cluster, in the namespace of the workload cluster's Cluster
+# object:
+#
+#   kustomize build config/capi | kubectl --context MANAGEMENT apply -f -
+#
+# One directory under pools/ per Host pool. config/capi/README.md says what
+# to fill in. config/default does not include this directory: the Operator
+# runs in the workload cluster, and these objects go to the management
+# cluster.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# REPLACE with the namespace of the workload cluster's Cluster object.
+namespace: default
+
+resources:
+  - pools/example

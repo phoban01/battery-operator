@@ -15,6 +15,11 @@ every prerequisite below, and its requirements are
 [11-host-image.md](requirements/11-host-image.md). A Node built another way
 that meets the prerequisites is a Host too.
 
+To make Hosts from the Host Image with Cluster API on AWS, use the host pool
+templates in [`config/capi`](../config/capi/README.md). They boot the image
+from an AMI, join each Host with kubeadm, and write its settings, such as
+who may reach `flintlockd`, at first boot.
+
 This page is the operator's view. The requirements for the checks are
 [05-exec-agent.md#host-checks](requirements/05-exec-agent.md#host-checks);
 the glossary's *Host prerequisites* is the short form.

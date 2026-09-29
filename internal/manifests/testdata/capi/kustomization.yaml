@@ -1,0 +1,11 @@
+# Two Host pools filled in as a user fills them in, and built together, for
+# capi_test.go and `make capi-check`. Every setting has a value of its own,
+# so that a test can see where each one lands.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: capi-test
+
+resources:
+  - pool-a
+  - pool-b

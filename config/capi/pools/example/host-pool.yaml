@@ -1,0 +1,68 @@
+# The settings of one Host pool. This object is never applied: it is
+# local-config, and the host-pool-params Component writes its values into
+# the pool's MachineDeployment, KubeadmConfigTemplate, AWSMachineTemplate
+# and MachineHealthCheck. config/capi/README.md says how to fill it in and
+# how to add a pool.
+#
+# Replace every value that says REPLACE. This pool cannot be applied as it
+# stands.
+#
+#= docs/requirements/12-host-pool.md#host-pool
+#/ The Host Pool Templates SHALL take a Host pool's name, cluster,
+#/ size, Kubernetes version, instance type, AMI, subnet, health check
+#/ interval, drain timeout and Host configuration file from one settings
+#/ object per pool, which is never applied to a cluster.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  # Every pool's settings object needs a name of its own.
+  name: host-pool-example
+  annotations:
+    config.kubernetes.io/local-config: "true"
+data:
+  # The pool's name, and the name of each of its objects.
+  name: battery-hosts-example
+  # The Cluster API Cluster of the workload cluster the Hosts join.
+  clusterName: REPLACE-workload-cluster
+  # The pool size: the number of Hosts.
+  replicas: "1"
+  # One instance type. A Host needs KVM, so a metal instance, and an
+  # instance-store disk for the thin pool.
+  instanceType: m6id.metal
+  # The AMI published from the Host Image (make host-image-ami), by id.
+  amiID: ami-REPLACE
+  # The subnet the Hosts run in, by id.
+  subnetID: subnet-REPLACE
+  #= docs/requirements/12-host-pool.md#host-pool
+  #/ The Host Pool Templates SHALL default a Host pool's Kubernetes
+  #/ version to the version that the Host Image pins.
+  # The Kubernetes version of the Host Image the AMI was made from: its
+  # battery.liquidmetal-x.dev/kubernetes-version tag, and KUBERNETES_VERSION
+  # in hostimage/versions.env.
+  kubernetesVersion: v1.35.8
+  # At least the Exec Agent's --drain-timeout, one hour by default (EA-040),
+  # with room to spare.
+  nodeDrainTimeoutSeconds: "4500"
+  # How long a Host's Node may stay not ready before its Machine is
+  # replaced.
+  unhealthySeconds: "300"
+  #= docs/requirements/12-host-pool.md#host-configuration
+  #/ The Host Pool Templates SHALL set `FLINTLOCKD_CLIENT_CIDRS` and
+  #/ `PROTECTED_CIDRS` in every Host configuration file they write.
+  # The Host configuration file, /etc/battery/host.conf (HI-050). Keys and
+  # defaults: hostimage/README.md, "Host configuration file", and
+  # hostimage/rootfs/usr/share/battery/host.conf.defaults. A key left out
+  # takes its default.
+  #
+  # - FLINTLOCKD_CLIENT_CIDRS: the pod network of the Operator, where
+  #   battery runs. It is the only place off the Host that may reach
+  #   flintlockd (HI-069). Empty, battery cannot reach the Host.
+  # - PROTECTED_CIDRS: the cluster's node, pod and Service ranges, so that
+  #   a MicroVM reaches none of them (HI-035, HI-076).
+  # - GUEST_SUBNET: the MicroVMs' subnet. Keep it clear of the ranges above.
+  host.conf: |
+    GUEST_SUBNET=10.220.0.0/16
+    PROTECTED_CIDRS=REPLACE-node-cidr,REPLACE-pod-cidr,REPLACE-service-cidr
+    FLINTLOCKD_CLIENT_CIDRS=REPLACE-operator-pod-cidr
+    HOST_RESERVE_VCPU=2
+    HOST_RESERVE_MEMORY_MB=4096

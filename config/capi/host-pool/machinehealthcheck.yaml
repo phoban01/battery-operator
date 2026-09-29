@@ -1,0 +1,36 @@
+#= docs/requirements/12-host-pool.md#host-pool
+#/ The Host Pool Templates SHALL define a MachineHealthCheck for each
+#/ Host pool that replaces a Machine whose Node stays not ready beyond the
+#/ interval its host-pool.yaml sets.
+# It watches the Host's own Node. A Host whose flintlockd cannot run
+# (HI-011, HI-022) keeps a ready Node: the Exec Agent reports the reason in
+# its Node report (EA-033), an annotation and not a condition, so this check
+# cannot see it. The Inventory Controller takes such a Host out of
+# battery's Hosts, and the Machine stays until someone replaces it.
+apiVersion: cluster.x-k8s.io/v1beta2
+kind: MachineHealthCheck
+metadata:
+  name: POOL
+spec:
+  clusterName: CLUSTER
+  selector:
+    matchLabels:
+      cluster.x-k8s.io/cluster-name: CLUSTER
+      battery.liquidmetal-x.dev/host-pool: POOL
+  checks:
+    # A Host's first boot creates its thin pool and pulls images: give it
+    # time before calling it failed.
+    nodeStartupTimeoutSeconds: 1200
+    # Both timeouts are replaced from host-pool.yaml.
+    unhealthyNodeConditions:
+      - type: Ready
+        status: "False"
+        timeoutSeconds: 0
+      - type: Ready
+        status: Unknown
+        timeoutSeconds: 0
+  remediation:
+    # Stop replacing Machines when many fail at once. That is more likely a
+    # broken AMI or a network problem than a set of broken Hosts.
+    triggerIf:
+      unhealthyLessThanOrEqualTo: 40%
