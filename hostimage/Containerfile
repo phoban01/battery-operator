@@ -12,19 +12,22 @@
 #= docs/requirements/11-host-image.md#image-build
 #/ The Host Image SHALL be defined by one Containerfile whose base
 #/ is a bootc base image pinned by digest.
-# quay.io/fedora/fedora-bootc:44 as of 2026-09-29. The digest is that of the
-# multi-architecture index; --platform selects x86_64 from it.
+# The base is ghcr.io/phoban01/battery-operator/fedora-bootc:44-20260929-f59997f5, a copy of
+# quay.io/fedora/fedora-bootc:44 made on 2026-09-29, whose digest was
+# sha256:f59997f5b4925af2875e2bdef6753bbd58ed44257400fedeb1f41c50734a9e0d.
+# The digest is that of the multi-architecture index; --platform selects
+# x86_64 from it. hostimage/README.md says how to update it.
 #
 #= docs/requirements/11-host-image.md#image-build
 #/ The Host Image SHALL be built for the `x86_64` architecture.
-FROM --platform=linux/amd64 quay.io/fedora/fedora-bootc@sha256:f59997f5b4925af2875e2bdef6753bbd58ed44257400fedeb1f41c50734a9e0d AS base
+FROM --platform=linux/amd64 ghcr.io/phoban01/battery-operator/fedora-bootc@sha256:f59997f5b4925af2875e2bdef6753bbd58ed44257400fedeb1f41c50734a9e0d AS base
 
 # ---------------------------------------------------------------------------
 # fetch: download and verify every binary that does not come from a signed
 # package repository (HI-004). It reads the versions file and nothing else,
 # and runs nothing it downloads, so it runs on the build machine's own
 # architecture: the same pinned index, without emulation.
-FROM --platform=$BUILDPLATFORM quay.io/fedora/fedora-bootc@sha256:f59997f5b4925af2875e2bdef6753bbd58ed44257400fedeb1f41c50734a9e0d AS fetch
+FROM --platform=$BUILDPLATFORM ghcr.io/phoban01/battery-operator/fedora-bootc@sha256:f59997f5b4925af2875e2bdef6753bbd58ed44257400fedeb1f41c50734a9e0d AS fetch
 COPY versions.env build/fetch.sh /build/
 RUN bash /build/fetch.sh /build/versions.env
 
