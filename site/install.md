@@ -3,8 +3,7 @@ layout: default
 title: Install battery-operator
 ---
 
-[Home]({{ "/" | relative_url }}) · **Install** · Hosts (coming with
-[#192](https://github.com/phoban01/battery-operator/issues/192))
+[Home]({{ "/" | relative_url }}) · **Install** · [Hosts]({{ "/hosts.html" | relative_url }})
 
 # Install battery-operator
 
@@ -52,8 +51,9 @@ You need:
   [Host prerequisites](https://github.com/phoban01/battery-operator/blob/main/docs/host-prerequisites.md)
   say what a Host needs. The
   [Host Image](https://github.com/phoban01/battery-operator/tree/main/hostimage)
-  is one way to build a Host. A page about Hosts comes with
-  [#192](https://github.com/phoban01/battery-operator/issues/192).
+  is one way to build a Host.
+  [Hosts with Cluster API]({{ "/hosts.html" | relative_url }}) makes
+  Hosts from it on AWS.
 
 You can install the Operator before you have Hosts. It runs, and it waits
 for Hosts.
