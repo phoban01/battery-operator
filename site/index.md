@@ -81,6 +81,42 @@ kubectl -n demo wait --for=jsonpath={.status.available}=2 pool/demo
 The [demo manifests](https://github.com/phoban01/battery-operator/tree/main/examples/demo)
 say what each object is for.
 
+## Claims are resources
+
+Every claim is a `MicroVMClaim` in the cluster, so `kubectl get` shows which
+MicroVMs are held, on which Node, and until when:
+
+```yaml
+apiVersion: battery.liquidmetal-x.dev/v1alpha1
+kind: MicroVMClaim
+metadata:
+  name: build-1
+  namespace: demo
+spec:
+  poolRef:
+    name: demo
+  serviceAccountName: demo-holder   # the Holder: only it can use the MicroVM
+```
+
+```console
+$ kubectl -n demo get microvmclaims
+NAME      POOL   PHASE   NODE        EXPIRES                AGE
+build-1   demo   Bound   bo-host-1   2026-09-27T20:46:09Z   6s
+$ kubectl -n demo get microvmclaim build-1 -o jsonpath='{.status}' | jq '{phase, microVM, host, leaseExpiresAt}'
+{
+  "phase": "Bound",
+  "microVM": { "uid": "01M3J9T8R6826GNNC6PJ3TDTSC" },
+  "host": { "agentAddress": "192.168.5.15:10270", "nodeName": "bo-host-1" },
+  "leaseExpiresAt": "2026-09-27T20:46:09Z"
+}
+```
+
+`EXPIRES` is the time the claim's Lease runs out. The Lease lasts the Pool's
+`lease.expiryThreshold`. The holder renews it by setting `spec.renewTime`,
+and the Client Library does this for its claims. A claim nobody renews goes
+`Expired`, and battery deletes its MicroVM. Deleting a claim releases its
+MicroVM at once.
+
 ## Claim a MicroVM from Go
 
 A Consumer uses the Client Library,

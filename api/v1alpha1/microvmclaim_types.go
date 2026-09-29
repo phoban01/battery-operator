@@ -227,7 +227,9 @@ type MicroVMClaimStatus struct {
 // +kubebuilder:printcolumn:name="Pool",type=string,JSONPath=`.spec.poolRef.name`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:printcolumn:name="Node",type=string,JSONPath=`.status.host.nodeName`
-// +kubebuilder:printcolumn:name="Expires",type=date,JSONPath=`.status.leaseExpiresAt`
+// Expires is a string column, so kubectl prints the timestamp. kubectl prints
+// a date column as an age, and a Lease that has not expired has none (#161).
+// +kubebuilder:printcolumn:name="Expires",type=string,JSONPath=`.status.leaseExpiresAt`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // MicroVMClaim is one consumer's hold on one warm MicroVM from a Pool:
