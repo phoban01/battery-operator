@@ -59,6 +59,9 @@ var (
 	// ErrNoAgentAddress is wrapped by the error of Dial when the claim's
 	// status names no Exec Agent address yet.
 	ErrNoAgentAddress = errors.New("the claim names no exec agent address")
+	// ErrHostNotReady is wrapped by Claim.HostErr once a held claim's Host
+	// has been reported not ready (CC-013). The Lease is still held.
+	ErrHostNotReady = errors.New("the host is not ready")
 )
 
 // Config configures a Client.

@@ -30,6 +30,7 @@ import (
 	authenticationv1 "k8s.io/api/authentication/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
@@ -67,11 +68,15 @@ type Claim struct {
 	token  string
 	err    error
 	lost   chan struct{}
+	// hostErr and hostNotReady report the first time the claim's Host was
+	// seen not ready.
+	hostErr      error
+	hostNotReady chan struct{}
 }
 
 func newClaim(c *Client, obj *batteryv1alpha1.MicroVMClaim, secret *corev1.Secret, interval time.Duration) *Claim {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Claim{
+	cl := &Claim{
 		c:        c,
 		name:     obj.Name,
 		uid:      obj.UID,
@@ -84,7 +89,11 @@ func newClaim(c *Client, obj *batteryv1alpha1.MicroVMClaim, secret *corev1.Secre
 		done:     make(chan struct{}),
 		status:   *obj.Status.DeepCopy(),
 		lost:     make(chan struct{}),
+
+		hostNotReady: make(chan struct{}),
 	}
+	cl.checkHost(obj.Status.Conditions)
+	return cl
 }
 
 // Name is the claim's name, in the Client's namespace.
@@ -133,6 +142,24 @@ func (cl *Claim) Err() error {
 	cl.mu.Lock()
 	defer cl.mu.Unlock()
 	return cl.err
+}
+
+// HostNotReady is closed the first time the Client reads the claim with
+// its HostReady condition false: the Host's Node report says the Host is
+// not ready, or the Host has no Node or no report. HostErr then says why.
+// The Client goes on holding the claim, and it is the Consumer's choice
+// whether to release it. The Client reads the claim when it renews it, so
+// this comes at most one heartbeat interval after the condition changes.
+// A claim with no HostReady condition never closes it.
+func (cl *Claim) HostNotReady() <-chan struct{} { return cl.hostNotReady }
+
+// HostErr is nil until the claim's Host is first reported not ready, and
+// then wraps ErrHostNotReady with the condition's reason and message. It
+// stays set if the Host is ready again later.
+func (cl *Claim) HostErr() error {
+	cl.mu.Lock()
+	defer cl.mu.Unlock()
+	return cl.hostErr
 }
 
 // Release stops renewing the claim and deletes it, which releases the
@@ -313,7 +340,29 @@ func (cl *Claim) observe(obj *batteryv1alpha1.MicroVMClaim) {
 		cl.mu.Lock()
 		cl.status = *obj.Status.DeepCopy()
 		cl.mu.Unlock()
+		cl.checkHost(obj.Status.Conditions)
 	}
+}
+
+// checkHost reports the claim's Host as not ready, once, when conditions
+// hold a false HostReady.
+func (cl *Claim) checkHost(conditions []metav1.Condition) {
+	//= docs/requirements/07-client.md#holding
+	//# When the Client Library first reads a held claim with the
+	//# condition `HostReady` false, the Client Library SHALL report the Host as
+	//# not ready to the Consumer, with the condition's reason and message, and
+	//# SHALL keep holding the claim.
+	cond := meta.FindStatusCondition(conditions, batteryv1alpha1.ConditionHostReady)
+	if cond == nil || cond.Status != metav1.ConditionFalse {
+		return
+	}
+	cl.mu.Lock()
+	defer cl.mu.Unlock()
+	if cl.hostErr != nil {
+		return
+	}
+	cl.hostErr = fmt.Errorf("%w: claim %s: %s: %s", ErrHostNotReady, cl.name, cond.Reason, cond.Message)
+	close(cl.hostNotReady)
 }
 
 // lose records the Lease as lost, once.

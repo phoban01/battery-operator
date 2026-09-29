@@ -96,6 +96,25 @@ const (
 	ReasonNoAgentAddress = "NoAgentAddress"
 )
 
+// ConditionHostReady is the condition type that says whether the Host of a
+// Bound MicroVMClaim is ready, as the Exec Agent reports it in the Host's
+// Node report. While it is false, the MicroVM may no longer run commands,
+// and a Holder can give up on it without reading Nodes. The claim stays
+// Bound: the Lease is battery's.
+const ConditionHostReady = "HostReady"
+
+// Reasons for the HostReady condition. Otherwise the condition carries the
+// reason of the Node report, such as "Ready" or "KVMUnavailable".
+const (
+	// ReasonNodeNotFound means the claim's Host has no Node.
+	ReasonNodeNotFound = "NodeNotFound"
+	// ReasonNoNodeReport means the Host's Node carries no Node report.
+	ReasonNoNodeReport = "NoNodeReport"
+	// ReasonHostNotReady means the Node report says the Host is not ready,
+	// with a reason that is not a valid condition reason, or with none.
+	ReasonHostNotReady = "HostNotReady"
+)
+
 // PoolReference names a Pool in the claim's own namespace.
 type PoolReference struct {
 	// name is the name of the Pool.
@@ -214,8 +233,8 @@ type MicroVMClaimStatus struct {
 	// +optional
 	ObservedRenewTime *metav1.MicroTime `json:"observedRenewTime,omitempty"`
 
-	// conditions hold the claim's Bound, Synced and AgentAvailable
-	// conditions.
+	// conditions hold the claim's Bound, Synced, AgentAvailable and
+	// HostReady conditions.
 	// +listType=map
 	// +listMapKey=type
 	// +optional

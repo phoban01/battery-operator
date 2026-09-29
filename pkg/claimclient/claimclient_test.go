@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -214,8 +215,8 @@ func (e *env) setPending(name, reason string) {
 	})
 }
 
-func (e *env) setBound(name, agentAddress string) {
-	e.setStatus(name, func(s *batteryv1alpha1.MicroVMClaimStatus) {
+func (e *env) setBound(agentAddress string) {
+	e.setStatus(testClaim, func(s *batteryv1alpha1.MicroVMClaimStatus) {
 		s.Phase = batteryv1alpha1.MicroVMClaimBound
 		s.MicroVM = &batteryv1alpha1.MicroVMReference{UID: "vm-uid"}
 		s.Host = &batteryv1alpha1.HostReference{NodeName: "host-a", AgentAddress: agentAddress}
@@ -232,7 +233,7 @@ func (e *env) held(agentAddress string) *Claim {
 	e.t.Helper()
 	res := e.claimAsync(testCtx(e.t), e.request())
 	e.waitTimers(1)
-	e.setBound(testClaim, agentAddress)
+	e.setBound(agentAddress)
 	e.clk.Advance(pollInterval)
 	r := e.result(res)
 	if r.err != nil {
@@ -387,7 +388,7 @@ func TestClaimReturnsOnlyOnceBound(t *testing.T) {
 		default:
 		}
 	}
-	e.setBound(testClaim, "10.0.0.1:9443")
+	e.setBound("10.0.0.1:9443")
 	e.clk.Advance(pollInterval)
 	r := e.result(res)
 	if r.err != nil {
@@ -465,7 +466,7 @@ func TestClaimDeletesClaimWhenTheTokenIsRefused(t *testing.T) {
 	e.tokenErr = apierrors.NewForbidden(corev1.Resource("serviceaccounts/token"), testHolder, errors.New("no"))
 	res := e.claimAsync(testCtx(t), e.request())
 	e.waitTimers(1)
-	e.setBound(testClaim, "")
+	e.setBound("")
 	e.clk.Advance(pollInterval)
 	if r := e.result(res); !apierrors.IsForbidden(r.err) {
 		t.Errorf("Claim error = %v, want the refusal", r.err)
@@ -611,6 +612,113 @@ func TestHeldClaimReportsALostLease(t *testing.T) {
 				t.Errorf("Release: %v", err)
 			}
 		})
+	}
+}
+
+//= docs/requirements/07-client.md#holding
+//= type=test
+//# When the Client Library first reads a held claim with the
+//# condition `HostReady` false, the Client Library SHALL report the Host as
+//# not ready to the Consumer, with the condition's reason and message, and
+//# SHALL keep holding the claim.
+
+func TestHeldClaimReportsAHostNotReady(t *testing.T) {
+	e := newEnv(t, nil)
+	cl := e.held("")
+	t.Cleanup(func() { _ = cl.Release(context.Background()) })
+
+	setHostReady := func(status metav1.ConditionStatus, reason, message string) {
+		e.setStatus(testClaim, func(s *batteryv1alpha1.MicroVMClaimStatus) {
+			meta.SetStatusCondition(&s.Conditions, metav1.Condition{
+				Type: batteryv1alpha1.ConditionHostReady, Status: status, Reason: reason, Message: message,
+			})
+		})
+	}
+
+	// A ready Host is not reported.
+	setHostReady(metav1.ConditionTrue, "Ready", "ready")
+	e.clk.Advance(testHeartbeat)
+	e.waitTimers(2)
+	select {
+	case <-cl.HostNotReady():
+		t.Fatal("HostNotReady closed while the Host is ready")
+	default:
+	}
+	if err := cl.HostErr(); err != nil {
+		t.Fatalf("HostErr = %v while the Host is ready", err)
+	}
+
+	setHostReady(metav1.ConditionFalse, "KVMUnavailable", "the Host has no KVM device")
+	e.clk.Advance(testHeartbeat)
+	select {
+	case <-cl.HostNotReady():
+	case <-time.After(testTimeout):
+		t.Fatal("the Host was not reported not ready")
+	}
+	err := cl.HostErr()
+	if !errors.Is(err, ErrHostNotReady) {
+		t.Fatalf("HostErr = %v, want ErrHostNotReady", err)
+	}
+	for _, want := range []string{"KVMUnavailable", "the Host has no KVM device"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("HostErr = %q, want it to say %q", err, want)
+		}
+	}
+
+	// The claim is still held: the Lease is not lost, and it is renewed.
+	e.waitTimers(2)
+	if cl.Err() != nil {
+		t.Errorf("Err = %v, want the Lease held", cl.Err())
+	}
+	before := e.claim(testClaim).Spec.RenewTime
+	e.clk.Advance(testHeartbeat)
+	e.waitTimers(2)
+	if after := e.claim(testClaim).Spec.RenewTime; after == nil || before == nil || !after.After(before.Time) {
+		t.Errorf("renewTime = %v after %v, want the claim still renewed", after, before)
+	}
+}
+
+func TestClaimReportsAHostAlreadyNotReady(t *testing.T) {
+	e := newEnv(t, nil)
+	res := e.claimAsync(testCtx(t), e.request())
+	e.waitTimers(1)
+	e.setBound("")
+	e.setStatus(testClaim, func(s *batteryv1alpha1.MicroVMClaimStatus) {
+		meta.SetStatusCondition(&s.Conditions, metav1.Condition{
+			Type: batteryv1alpha1.ConditionHostReady, Status: metav1.ConditionFalse,
+			Reason: batteryv1alpha1.ReasonNodeNotFound, Message: "gone",
+		})
+	})
+	e.clk.Advance(pollInterval)
+	r := e.result(res)
+	if r.err != nil {
+		t.Fatalf("Claim: %v", r.err)
+	}
+	t.Cleanup(func() { _ = r.cl.Release(context.Background()) })
+	select {
+	case <-r.cl.HostNotReady():
+	default:
+		t.Fatal("HostNotReady is open for a claim returned with its Host not ready")
+	}
+	if !errors.Is(r.cl.HostErr(), ErrHostNotReady) {
+		t.Errorf("HostErr = %v, want ErrHostNotReady", r.cl.HostErr())
+	}
+}
+
+func TestClaimWithoutHostReadyIsNotReported(t *testing.T) {
+	// An Operator older than the HostReady condition sets none.
+	e := newEnv(t, nil)
+	cl := e.held("")
+	t.Cleanup(func() { _ = cl.Release(context.Background()) })
+	e.clk.Advance(testHeartbeat)
+	e.waitTimers(2)
+	select {
+	case <-cl.HostNotReady():
+		t.Fatal("HostNotReady closed for a claim with no HostReady condition")
+	default:
+	}
+	if err := cl.HostErr(); err != nil {
+		t.Errorf("HostErr = %v, want nil", err)
 	}
 }
 

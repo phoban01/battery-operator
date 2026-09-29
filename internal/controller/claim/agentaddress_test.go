@@ -225,6 +225,12 @@ func TestAgentAddressReturnsAFailedNodeRead(t *testing.T) {
 	}
 }
 
+//= docs/requirements/02-claims.md#host-readiness
+//= type=test
+//# When a Node is created or deleted, or the readiness, reason,
+//# message or Exec Agent address in its Node report changes, the Claim
+//# Controller SHALL reconcile every claim bound on that Node.
+
 func TestClaimsOnNodeMapsANodeToTheClaimsBoundOnIt(t *testing.T) {
 	c := newFakeClient(t,
 		aBoundClaim("bound-1", nodeA, ""),
@@ -247,10 +253,25 @@ func TestClaimsOnNodeMapsANodeToTheClaimsBoundOnIt(t *testing.T) {
 	}
 }
 
-func TestAgentAddressChangedPassesOnlyReportAddressChanges(t *testing.T) {
-	p := AgentAddressChanged()
+//= docs/requirements/02-claims.md#host-readiness
+//= type=test
+//# When a Node is created or deleted, or the readiness, reason,
+//# message or Exec Agent address in its Node report changes, the Claim
+//# Controller SHALL reconcile every claim bound on that Node.
+
+func TestNodeReportChangedPassesOnlyReportChanges(t *testing.T) {
+	p := NodeReportChanged()
 	relabelled := aNode(agentAddr)
 	relabelled.Labels = map[string]string{"x": "y"}
+	notReady := aNode(agentAddr)
+	notReady.Annotations[execagent.AnnotationReady] = reportNotReady
+	notReady.Annotations[execagent.AnnotationReason] = execagent.ReasonKVMUnavailable
+	otherMessage := aNode(agentAddr)
+	otherMessage.Annotations[execagent.AnnotationMessage] = "something else"
+	noReport := aNode(agentAddr)
+	delete(noReport.Annotations, execagent.AnnotationReady)
+	emptyReport := aNode(agentAddr)
+	emptyReport.Annotations[execagent.AnnotationReady] = ""
 	for _, tc := range []struct {
 		name     string
 		old, new *corev1.Node
@@ -259,6 +280,11 @@ func TestAgentAddressChangedPassesOnlyReportAddressChanges(t *testing.T) {
 		{"address published", aNode(""), aNode(agentAddr), true},
 		{"address changed", aNode(agentAddr), aNode("10.0.0.8:7443"), true},
 		{"address dropped", aNode(agentAddr), aNode(""), true},
+		{"Host went not ready", aNode(agentAddr), notReady, true},
+		{"Host ready again", notReady, aNode(agentAddr), true},
+		{"message changed", aNode(agentAddr), otherMessage, true},
+		{"report dropped", aNode(agentAddr), noReport, true},
+		{"empty readiness published", noReport, emptyReport, true},
 		{"something else changed", aNode(agentAddr), relabelled, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

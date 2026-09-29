@@ -116,7 +116,7 @@ way to meet them, not the only one (ADR 0007). EA-033 is the not ready
 reason contract, from flintlock-runner, which lets a Host Image report
 reasons of its own, such as a gate that refused to start `flintlockd`. The
 Node report is the contract the Inventory Controller (IN-001) and the Claim
-Controller (CL-005) read. EA-035 gives the Inventory Controller the address
+Controller (CL-005, CL-050) read. EA-035 gives the Inventory Controller the address
 battery reaches `flintlockd` at (IN-003).
 
 EA-031 checks that the Host has a KVM device, from the Host's own `/dev` and

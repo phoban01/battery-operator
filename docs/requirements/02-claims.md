@@ -275,3 +275,44 @@ ready (DP-012), and every claim whose next step needs battery shows `Synced`
 false once it tries. A Bound claim that needs no call keeps the status of
 battery's last answer until the connection is restored and CL-030
 reconciles it.
+
+## Host readiness {#host-readiness}
+
+- **CL-050** While a claim is Bound and the Node report of its Host says
+  the Host is ready, the Claim Controller SHALL set the claim's condition
+  `HostReady` true with the reason and message of the Node report.
+- **CL-051** While a claim is Bound and the Node report of its Host says
+  the Host is not ready, the Claim Controller SHALL keep the claim Bound and
+  set the condition `HostReady` false with the reason and message of the
+  Node report.
+- **CL-052** If a Bound claim's Host has no Node, or its Node carries no
+  Node report, then the Claim Controller SHALL keep the claim Bound and set
+  the condition `HostReady` false with the reason `NodeNotFound` or
+  `NoNodeReport`.
+- **CL-053** When a Node is created or deleted, or the readiness, reason,
+  message or Exec Agent address in its Node report changes, the Claim
+  Controller SHALL reconcile every claim bound on that Node.
+
+A Holder with a command running in a MicroVM wants to give up on it soon
+after the Host goes bad (#186). The Exec Agent says so in the Node report
+(EA-030 to EA-034), but a Holder may not read Nodes. The Inventory
+Controller removes such a Host from battery's Hosts only after the settle
+time, the restart window and the drain timeout (IN-011 to IN-013), and even
+then claims Bound on it keep their Leases. `HostReady` puts the Node report
+on the claim, which the Holder already reads.
+
+The condition does not change the phase, nor the condition `Bound`. battery
+is the authority over Leases, and a Host that is not ready may be ready
+again soon, with its MicroVMs intact. Whether to give up is the Holder's
+choice, and the Client Library reports the change to it (CC-013).
+
+The Node report says the Host is ready only while its ready annotation is
+`true`, as for the Inventory Controller (IN-001); any other value is not
+ready. The Exec Agent's reasons are valid condition reasons. A reason in the
+report that is not one, or no reason at all, becomes `HostNotReady`, so a
+bad annotation can never make the API server refuse the claim's status.
+
+The Claim Controller learns of a change through its watch of Nodes, the
+same watch that keeps the Exec Agent's address current (CL-005). CL-053
+keeps it from reconciling claims on every change of a Node's status, which
+comes far more often than a change of its report.

@@ -207,6 +207,22 @@ func placementFeature(ns string) features.Feature {
 				t.Fatalf("the claim's agent address is %q, want %q from the Node report of %s",
 					st.Host.AgentAddress, want, node.Name)
 			}
+
+			//= docs/requirements/02-claims.md#host-readiness
+			//= type=test
+			//# While a claim is Bound and the Node report of its Host says
+			//# the Host is ready, the Claim Controller SHALL set the claim's condition
+			//# `HostReady` true with the reason and message of the Node report.
+			//
+			// The Claim Controller sets the agent address and HostReady in
+			// the same reconcile, so the claim waited for above has both.
+			hostReady := meta.FindStatusCondition(st.Conditions, batteryv1alpha1.ConditionHostReady)
+			if hostReady == nil || hostReady.Status != metav1.ConditionTrue ||
+				hostReady.Reason != node.Annotations[execagent.AnnotationReason] ||
+				hostReady.Message != node.Annotations[execagent.AnnotationMessage] {
+				t.Fatalf("the claim's HostReady is %+v, want it true with the reason and message of the Node report of %s",
+					hostReady, node.Name)
+			}
 			return ctx
 		}).
 		Assess("a deleted Pool whose MicroVM a claim holds waits for the claim", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
