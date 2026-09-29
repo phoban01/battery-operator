@@ -190,6 +190,15 @@ host-image-ami: ## Publish HOST_IMG as an AMI with bootc-image-builder; needs po
 capi-check: kustomize kubeconform ## Render config/capi and validate it against the pinned Cluster API and CAPA CRDs.
 	KUSTOMIZE="$(KUSTOMIZE)" KUBECONFORM="$(KUBECONFORM)" hack/capi-check.sh
 
+# The base of the Host Image is a copy of quay.io/fedora/fedora-bootc on
+# ghcr.io, which `dagger call mirror-host-image-base` makes, and which the
+# manual workflow mirror-host-image-base.yml runs. It prints this target
+# with MIRROR and SOURCE set (hostimage/README.md, "Updating the base image").
+.PHONY: host-image-base-pin
+host-image-base-pin: ## Pin the copy of the Host Image's base in hostimage/Containerfile: MIRROR=<repo>:<tag>@sha256:... SOURCE=<repo>:<tag>@sha256:...
+	@test -n "$(MIRROR)" -a -n "$(SOURCE)" || { echo "set MIRROR and SOURCE, as mirror-host-image-base prints them" >&2; exit 2; }
+	hostimage/pin-base.sh "$(MIRROR)" "$(SOURCE)"
+
 .PHONY: build-installer
 build-installer: manifests generate kustomize ## Generate a consolidated YAML with CRDs and deployment.
 	mkdir -p dist

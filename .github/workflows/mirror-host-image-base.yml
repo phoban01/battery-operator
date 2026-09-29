@@ -1,0 +1,60 @@
+name: mirror host image base
+
+# Copies the Host Image's bootc base, quay.io/fedora/fedora-bootc:44 as it
+# is now, to ghcr.io/phoban01/battery-operator/fedora-bootc, with the index
+# of every architecture (#174). quay.io deletes an old digest within days of
+# a rebuild, so the Containerfile pins the copy instead. A person runs this
+# on purpose to update the base; it never runs on a schedule, a push or a
+# pull request. The job summary has the make command that pins the copy
+# (hostimage/README.md, "Updating the base image").
+
+on:
+  workflow_dispatch:
+    inputs:
+      source:
+        description: the base image to copy, by tag
+        required: true
+        default: quay.io/fedora/fedora-bootc:44
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mirror-host-image-base
+  cancel-in-progress: false
+
+env:
+  # matches DAGGER_VERSION in devbox.json, engineVersion in dagger.json and
+  # ci.yml.
+  DAGGER_VERSION: 0.21.9
+  DAGGER_NO_NAG: 1
+
+jobs:
+  mirror:
+    name: mirror
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - name: install dagger
+        uses: ./.github/actions/setup-dagger
+        with:
+          version: ${{ env.DAGGER_VERSION }}
+      - name: mirror
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+          SOURCE: ${{ inputs.source }}
+        run: |
+          dagger --progress=plain call mirror-host-image-base \
+            --source="$SOURCE" --username="$ACTOR" --password=env://GITHUB_TOKEN | tee out.txt
+          {
+            echo '## Host Image base mirrored'
+            echo
+            echo '```'
+            cat out.txt
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
