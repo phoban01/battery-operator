@@ -32,6 +32,18 @@ token dies with the claim (see `05-exec-agent.md#authorization`).
 - **CC-012** If a held claim's phase becomes `Expired`, or the claim is
   deleted by anyone but the Client Library, then the Client Library SHALL
   report the Lease as lost to the Consumer.
+- **CC-013** When the Client Library first reads a held claim with the
+  condition `HostReady` false, the Client Library SHALL report the Host as
+  not ready to the Consumer, with the condition's reason and message, and
+  SHALL keep holding the claim.
+
+CC-013 lets a Consumer fail a command soon after its Host goes bad, with no
+permission on Nodes (CL-051). The Client Library reads the claim when it
+renews it, so the report comes at most one heartbeat interval after the
+condition changes. It reports only the first time: the Consumer decides
+whether to give up, and the Lease stays held until it releases the claim.
+A claim with no `HostReady` condition, from an Operator older than the
+condition, is never reported.
 
 ## Using and releasing {#using}
 

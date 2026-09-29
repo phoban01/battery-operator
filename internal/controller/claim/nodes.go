@@ -43,9 +43,14 @@ func NodeName(obj client.Object) []string {
 	return []string{c.Status.Host.NodeName}
 }
 
+//= docs/requirements/02-claims.md#host-readiness
+//# When a Node is created or deleted, or the readiness, reason,
+//# message or Exec Agent address in its Node report changes, the Claim
+//# Controller SHALL reconcile every claim bound on that Node.
+
 // ClaimsOnNode maps an event on a Node to a request for every MicroVMClaim
-// bound on it, so that a change to the Node's report reaches AgentAddress.
-// It needs the NodeNameField index on c.
+// bound on it, so that a change to the Node's report reaches AgentAddress
+// and HostReady. It needs the NodeNameField index on c.
 func ClaimsOnNode(c client.Reader) func(context.Context, client.Object) []reconcile.Request {
 	return func(ctx context.Context, node client.Object) []reconcile.Request {
 		var claims batteryv1alpha1.MicroVMClaimList
@@ -63,20 +68,33 @@ func ClaimsOnNode(c client.Reader) func(context.Context, client.Object) []reconc
 	}
 }
 
-// AgentAddressChanged passes a Node's creation and deletion, and an update
-// only when it changes the Exec Agent's address in the Node's report. A
-// Node's status changes far more often than the report, and none of those
-// changes matter to a claim.
-func AgentAddressChanged() predicate.Predicate {
+// reportAnnotations are the annotations of a Node report that a claim
+// mirrors: the Exec Agent's address (AgentAddress) and the Host's
+// readiness (HostReady).
+var reportAnnotations = []string{
+	execagent.AnnotationAddress,
+	execagent.AnnotationReady,
+	execagent.AnnotationReason,
+	execagent.AnnotationMessage,
+}
+
+// NodeReportChanged passes a Node's creation and deletion, and an update
+// only when it changes the Exec Agent's address or the Host's readiness,
+// reason or message in the Node's report. A Node's status changes far more
+// often than the report, and none of those changes matter to a claim.
+func NodeReportChanged() predicate.Predicate {
 	return predicate.Funcs{
 		UpdateFunc: func(e event.UpdateEvent) bool {
-			return agentAddressOf(e.ObjectOld) != agentAddressOf(e.ObjectNew)
+			o, n := e.ObjectOld.GetAnnotations(), e.ObjectNew.GetAnnotations()
+			for _, k := range reportAnnotations {
+				ov, oldHas := o[k]
+				nv, newHas := n[k]
+				if ov != nv || oldHas != newHas {
+					return true
+				}
+			}
+			return false
 		},
 		GenericFunc: func(event.GenericEvent) bool { return false },
 	}
-}
-
-// agentAddressOf is the Exec Agent's address in a Node's report.
-func agentAddressOf(obj client.Object) string {
-	return obj.GetAnnotations()[execagent.AnnotationAddress]
 }

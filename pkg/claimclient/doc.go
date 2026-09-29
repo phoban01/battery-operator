@@ -50,18 +50,24 @@ limitations under the License.
 //	defer conn.Close()
 //	exec := execv1.NewMicroVMExecClient(conn)
 //
-//	// While the command runs, watch for the Lease being lost.
+//	// While the command runs, watch for the Lease being lost, and for
+//	// the Host going bad.
 //	select {
 //	case <-done:
 //	case <-claim.Lost():
 //		return claim.Err() // wraps ErrLeaseLost
+//	case <-claim.HostNotReady():
+//		return claim.HostErr() // wraps ErrHostNotReady
 //	}
 //
 // Between Claim and Release, the Client renews the claim's Lease by setting
 // spec.renewTime at the Pool's heartbeat interval, and requests a new claim
 // token when two thirds of the current one's lifetime have passed. It
 // reports the Lease as lost, through Lost and Err, when the claim becomes
-// Expired or when someone else deletes or replaces it.
+// Expired or when someone else deletes or replaces it. It reports the Host
+// as not ready, through HostNotReady and HostErr, the first time it reads
+// the claim with its HostReady condition false; the claim is still held
+// then, and the Consumer decides whether to release it.
 //
 // # Tokens
 //

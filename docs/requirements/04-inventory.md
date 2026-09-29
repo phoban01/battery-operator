@@ -26,7 +26,8 @@ A cordoned Host leaves battery's list so that battery places nothing new
 there, once the change has settled and its restart window has closed
 (IN-011, IN-012); until then battery can still place MicroVMs on it. Claims
 already Bound on it keep running, and the Exec Agent holds the Node's drain
-open until they end (EA-040).
+open until they end (EA-040). A claim on a Host whose report says not ready
+shows it at once, in its condition `HostReady` (CL-051).
 
 ## Applying the list {#applying}
 

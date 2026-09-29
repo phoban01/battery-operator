@@ -145,9 +145,10 @@ func (r *MicroVMClaimReconciler) chain() reconcile.Chain[*claimscope.Scope] {
 			claim.Recover{Leases: r.recovered},
 			claim.Renew{Backoff: backoff},
 			claim.CheckExpiry{Backoff: backoff},
-			// Last, so that a Node it cannot read never holds up a
+			// Last, so that a Node they cannot read never holds up a
 			// renewal (CL-018).
 			claim.AgentAddress{},
+			claim.HostReady{},
 		},
 		Finally: []reconcile.SubReconciler[*claimscope.Scope]{
 			claim.Synced{},
@@ -157,8 +158,8 @@ func (r *MicroVMClaimReconciler) chain() reconcile.Chain[*claimscope.Scope] {
 
 // SetupWithManager sets up the controller with the Manager.
 // Besides its claims, it watches Nodes: a change to the Exec Agent's
-// address in a Node's report reconciles every claim bound on that Node
-// (claim.AgentAddress). It also registers its side of Events, battery's
+// address or the Host's readiness in a Node's report reconciles every
+// claim bound on that Node (claim.AgentAddress, claim.HostReady). It also registers its side of Events, battery's
 // Events stream (CL-013), whose claims come in through a channel source;
 // after each subscription that side recovers every Bound claim, on start
 // and on reconnecting to battery (CL-030, claimRecovery).
@@ -215,7 +216,7 @@ func (r *MicroVMClaimReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&batteryv1alpha1.MicroVMClaim{}).
 		Watches(&corev1.Node{},
 			handler.EnqueueRequestsFromMapFunc(claim.ClaimsOnNode(mgr.GetClient())),
-			builder.WithPredicates(claim.AgentAddressChanged())).
+			builder.WithPredicates(claim.NodeReportChanged())).
 		WatchesRawSource(source.Channel(deletions, &handler.EnqueueRequestForObject{})).
 		WithOptions(controller.Options{MaxConcurrentReconciles: n}).
 		Named("microvmclaim").
