@@ -45,6 +45,13 @@ data:
   additionalSecurityGroups:
     - id: sg-REPLACE
   #= docs/requirements/12-host-pool.md#host-pool
+  #/ The Host Pool Templates SHALL set the size of every Host's
+  #/ root volume, in GiB, from the pool's settings.
+  # The size of each Host's root volume, in GiB. It holds the operating
+  # system, containerd's images, and the emptyDir volumes of the Host's
+  # pods. The thin pool is on the instance-store disk, not here.
+  rootVolumeGiB: "100"
+  #= docs/requirements/12-host-pool.md#host-pool
   #/ The Host Pool Templates SHALL default a Host pool's Kubernetes
   #/ version to the version that the Host Image pins.
   # The Kubernetes version of the Host Image the AMI was made from: its
