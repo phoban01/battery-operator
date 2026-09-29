@@ -11,6 +11,10 @@
 #   MIRROR  ghcr.io/phoban01/battery-operator/fedora-bootc:44-20260929-f59997f5@sha256:f59997f5...
 #   SOURCE  quay.io/fedora/fedora-bootc:44@sha256:f59997f5...
 #
+# The digest is that of the base's multi-architecture index, which the
+# mirror copies whole, so one pin serves every architecture the image is
+# built for.
+#
 # `make host-image-base-pin MIRROR=... SOURCE=...` runs it. See
 # hostimage/README.md, "Updating the base image".
 set -euo pipefail
@@ -67,7 +71,7 @@ awk -v anchor="$anchor" -v ref="$mirror_repo@$digest" \
   -v c2="# $source_ref made on $date, whose digest was" \
   -v c3="# $digest." \
   -v c4="# The digest is that of the multi-architecture index; --platform selects" \
-  -v c5="# x86_64 from it. hostimage/README.md says how to update it." '
+  -v c5="# the target's image from it. hostimage/README.md says how to update it." '
   done == 0 && $0 == anchor { print; print c1; print c2; print c3; print c4; print c5; print "#"; skip = 1; done = 1; next }
   skip == 1 && /^#= / { skip = 0 }
   skip == 1 { next }
@@ -78,7 +82,7 @@ awk -v anchor="$anchor" -v ref="$mirror_repo@$digest" \
 ' "$containerfile" >"$tmp"
 cat "$tmp" >"$containerfile"
 
-n=$(grep -cxF -e "FROM --platform=linux/amd64 $mirror_repo@$digest AS base" \
+n=$(grep -cxF -e "FROM --platform=\$TARGETPLATFORM $mirror_repo@$digest AS base" \
   -e "FROM --platform=\$BUILDPLATFORM $mirror_repo@$digest AS fetch" "$containerfile" || true)
 [ "$n" -eq 2 ] || fail "pinned $n of the 2 FROM lines; check $containerfile"
 echo "pinned $mirror_repo@$digest in both FROM lines of $containerfile"

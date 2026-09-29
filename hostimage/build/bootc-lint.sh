@@ -4,8 +4,9 @@
 # being unable to run at
 # all under user-mode emulation, where the kernel interface it opens files
 # with (openat2) does not exist and it stops with ENOSYS before looking at
-# anything. That happens when an arm64 machine builds this x86_64 image; an
-# x86_64 builder, CI's included, runs the linter for real.
+# anything. That happens when a machine builds the image for another
+# architecture; a builder of the image's own architecture, CI's included,
+# runs the linter for real.
 set -uo pipefail
 out=$(bootc container lint --fatal-warnings 2>&1)
 status=$?

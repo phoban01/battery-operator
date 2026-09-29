@@ -16,20 +16,25 @@
 # quay.io/fedora/fedora-bootc:44 made on 2026-09-29, whose digest was
 # sha256:f59997f5b4925af2875e2bdef6753bbd58ed44257400fedeb1f41c50734a9e0d.
 # The digest is that of the multi-architecture index; --platform selects
-# x86_64 from it. hostimage/README.md says how to update it.
+# the target's image from it. hostimage/README.md says how to update it.
 #
 #= docs/requirements/11-host-image.md#image-build
-#/ The Host Image SHALL be built for the `x86_64` architecture.
-FROM --platform=linux/amd64 ghcr.io/phoban01/battery-operator/fedora-bootc@sha256:f59997f5b4925af2875e2bdef6753bbd58ed44257400fedeb1f41c50734a9e0d AS base
+#/ The Host Image SHALL be built for the `x86_64` and `aarch64`
+#/ architectures.
+# The builder's target platform is linux/amd64 or linux/arm64, and the
+# Dagger module builds each. No stage names a fixed platform.
+FROM --platform=$TARGETPLATFORM ghcr.io/phoban01/battery-operator/fedora-bootc@sha256:f59997f5b4925af2875e2bdef6753bbd58ed44257400fedeb1f41c50734a9e0d AS base
 
 # ---------------------------------------------------------------------------
 # fetch: download and verify every binary that does not come from a signed
-# package repository (HI-004). It reads the versions file and nothing else,
-# and runs nothing it downloads, so it runs on the build machine's own
-# architecture: the same pinned index, without emulation.
+# package repository (HI-004), for the target architecture. It reads the
+# versions file and nothing else, and runs nothing it downloads, so it runs
+# on the build machine's own architecture: the same pinned index, without
+# emulation.
 FROM --platform=$BUILDPLATFORM ghcr.io/phoban01/battery-operator/fedora-bootc@sha256:f59997f5b4925af2875e2bdef6753bbd58ed44257400fedeb1f41c50734a9e0d AS fetch
+ARG TARGETARCH
 COPY versions.env build/fetch.sh /build/
-RUN bash /build/fetch.sh /build/versions.env
+RUN bash /build/fetch.sh /build/versions.env "$TARGETARCH"
 
 # ---------------------------------------------------------------------------
 # selinux: compile the policy module against the base image's own policy.

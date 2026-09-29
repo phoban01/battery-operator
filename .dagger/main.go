@@ -25,7 +25,7 @@
 //	dagger call fake-flintlockd-image export-image --name=fake-flintlockd:dev
 //	dagger call publish --repository=ttl.sh/battery-operator-dev --tags=1h
 //	dagger call host-image-lint
-//	dagger call host-image-check
+//	dagger call host-image-check --platform=linux/arm64
 //	dagger call host-image export-image --name=battery-host-image:dev
 //	dagger call host-image-publish --repository=ttl.sh/battery-host-image-dev --tags=1h
 //
@@ -84,15 +84,16 @@ const (
 	// Containerfile (HI-001), not here, so that the Containerfile is the
 	// image's one definition.
 	hostImageDir = "hostimage"
-	// hostImagePlatform is the one platform the Host Image is built for
-	// (HI-002).
-	hostImagePlatform dagger.Platform = "linux/amd64"
 	// hostImageRepository is where HostImagePublish pushes by default.
 	hostImageRepository = "ghcr.io/phoban01/battery-operator/host-image"
 )
 
 // platforms are what every image is built and published for.
 var platforms = []dagger.Platform{"linux/amd64", "linux/arm64"}
+
+// hostImagePlatforms are what the Host Image is built and published for
+// (HI-002): x86_64 and aarch64.
+var hostImagePlatforms = []dagger.Platform{"linux/amd64", "linux/arm64"}
 
 // component is one of the two images.
 type component struct {

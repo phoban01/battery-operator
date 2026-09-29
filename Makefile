@@ -150,25 +150,30 @@ docker-push: ## Build both images for linux/amd64 and linux/arm64 with Dagger an
 
 # The Host Image (hostimage/, docs/requirements/11-host-image.md) is a bootc
 # image built from its Containerfile by the Dagger module, for linux/amd64
-# only (ADR 0007). Building it runs its check stage. It is large: CI builds
-# it on every pull request that changes it, and publishes it on a tag.
+# and linux/arm64 (HI-002). Building it runs its check stage. It is large:
+# CI builds it on every pull request that changes it, and publishes it on a
+# tag. host-image and host-image-check build for HOST_IMAGE_PLATFORM, by
+# default the Dagger engine's platform: another platform runs under
+# emulation, which is slow. host-image-push builds both platforms and
+# pushes one multi-architecture image.
 HOST_IMAGE_REPO ?= $(IMAGE_REPO)/host-image
 HOST_IMG ?= $(HOST_IMAGE_REPO):$(IMAGE_TAG)
+HOST_IMAGE_PLATFORM ?=
 
 .PHONY: host-image
-host-image: ## Build the Host Image, check stage included, with Dagger and load it into Docker as HOST_IMG.
-	$(DAGGER) call host-image export-image --name=${HOST_IMG}
+host-image: ## Build the Host Image for HOST_IMAGE_PLATFORM, check stage included, with Dagger and load it into Docker as HOST_IMG.
+	$(DAGGER) call host-image $(if $(HOST_IMAGE_PLATFORM),--platform=$(HOST_IMAGE_PLATFORM)) export-image --name=${HOST_IMG}
 
 .PHONY: host-image-check
-host-image-check: ## Build the Host Image with Dagger, run its checks again in it, and compare its labels with hostimage/versions.env.
-	$(DAGGER) call host-image-check
+host-image-check: ## Build the Host Image for HOST_IMAGE_PLATFORM with Dagger, run its checks again in it, and compare its labels with hostimage/versions.env.
+	$(DAGGER) call host-image-check $(if $(HOST_IMAGE_PLATFORM),--platform=$(HOST_IMAGE_PLATFORM))
 
 .PHONY: host-image-lint
 host-image-lint: ## Lint the Host Image sources with Dagger, without building it: shellcheck, nft syntax and the check cases.
 	$(DAGGER) call host-image-lint
 
 .PHONY: host-image-push
-host-image-push: ## Build the Host Image with Dagger and push it to HOST_IMAGE_REPO at IMAGE_TAG.
+host-image-push: ## Build the Host Image for linux/amd64 and linux/arm64 with Dagger and push one image of both to HOST_IMAGE_REPO at IMAGE_TAG.
 	$(DAGGER) call host-image-publish --repository=${HOST_IMAGE_REPO} --tags=${IMAGE_TAG}
 
 # host-image-ami turns a published Host Image into an AMI for the Cluster API

@@ -32,29 +32,46 @@ and use the host pool templates in [config/capi](../config/capi/README.md).
 ## Building
 
 The Dagger module builds the image (ADR 0005 and ADR 0007), for
-linux/amd64:
+linux/amd64 (x86_64) and linux/arm64 (aarch64), from the one Containerfile
+(HI-002):
 
 ```sh
 make host-image         # build it; the check stage is part of the build
 make host-image-check   # build it, run the checks again in it, and compare its labels
 make host-image-lint    # bash -n, shellcheck, the digest pin, the check cases and nft syntax; no build
+make host-image HOST_IMAGE_PLATFORM=linux/arm64   # build for a named platform
 ```
 
 Each target calls a function of the Dagger module: `dagger call
-host-image`, `host-image-check` and `host-image-lint`. `host-image` passes
-every `*_VERSION` of `versions.env` as a build argument, so that the
+host-image`, `host-image-check` and `host-image-lint`. `host-image` and
+`host-image-check` build for the Dagger engine's platform, unless
+`--platform` (`HOST_IMAGE_PLATFORM`) names the other one. `host-image`
+passes every `*_VERSION` of `versions.env` as a build argument, so that the
 Containerfile can make OCI labels of them. A build without those
 arguments, or with one that disagrees with the file, fails.
 
-CI runs `host-image-lint` and `host-image-check` on every pull request that
-changes `hostimage/`, the Dagger module or the workflow. On a version tag it
-publishes the image as `ghcr.io/phoban01/battery-operator/host-image`,
-tagged with the commit and the version.
+CI runs `host-image-lint` once, and `host-image-check` for each platform on
+a runner of that architecture, on every pull request that changes
+`hostimage/`, the Dagger module or the workflow. On a version tag it builds
+each platform again on its own runner, pushes it alone as
+`<commit>-amd64` and `<commit>-arm64`, and `dagger call host-image-index`
+joins the two into one multi-architecture image. That image is
+`ghcr.io/phoban01/battery-operator/host-image`, tagged with the commit and
+the version, and a Host of either architecture pulls its own image from
+it. `make host-image-push` builds both platforms on one machine, one of them
+under emulation, and pushes the same kind of image.
 
 The build needs network access to quay.io, github.com, pkgs.k8s.io and the
-Fedora mirrors. It needs neither `/dev/kvm` nor a cloud account. On a
-machine that is not x86_64 it runs under emulation, except for the `fetch`
-stage, which only downloads and therefore runs natively.
+Fedora mirrors. It needs neither `/dev/kvm` nor a cloud account. A build for
+a platform that is not the machine's runs under emulation, except for the
+`fetch` stage, which only downloads and therefore runs natively. It takes
+the target's binaries, by the target's name and checksum. Under emulation
+`bootc container lint` cannot run, and the build skips it with a warning; CI
+builds each platform natively, so CI runs it for both.
+
+The AMI of [Publishing an AMI](#publishing-an-ami) is x86_64 only, so a
+host pool that boots it takes an x86_64 instance type, such as the
+example's `m6id.metal`.
 
 The published image depends on a file that only the check stage produces, so
 no builder can skip that stage: an image that fails its checks does not
@@ -62,10 +79,14 @@ exist.
 
 ### Changing a version
 
-Edit `versions.env`, and only there. Every download has a `*_SHA256` beside
-its version; take it from the checksum file the project publishes with the
-release, or compute it from the downloaded artifact, and never from anywhere
-else. A version bumped without its checksum fails the build.
+Edit `versions.env`, and only there. Every download has two checksums beside
+its version, one for each architecture: `*_SHA256_AMD64` and
+`*_SHA256_ARM64`. Take each from the checksum file the project publishes
+with the release, or compute it from the downloaded artifact of that
+architecture, and never from anywhere else. A version bumped without both
+checksums fails the build of the architecture it missed, and
+`make host-image-lint` fails when either one is absent. The Kubernetes
+repository key is one file for every architecture, so it has one checksum.
 
 The kubelet and `kubeadm` are RPMs from pkgs.k8s.io, verified by dnf against
 the repository key, and the key is the pinned download. cloud-init is a
@@ -83,8 +104,7 @@ keeps only the moving tag `44`, and deletes an old digest within days of a
 rebuild. A pin of quay.io therefore breaks the build soon after it is made
 (#174). So the Containerfile pins a copy of the base in this repository's
 registry, `ghcr.io/phoban01/battery-operator/fedora-bootc`, which keeps
-every copy. Until the first copy exists, the Containerfile still pins
-quay.io.
+every copy.
 
 To update the base:
 
@@ -97,6 +117,9 @@ To update the base:
 2. Take the `make host-image-base-pin` command from the job summary, and run
    it on a new branch. It puts the digest in both `FROM` lines, and writes
    the source tag, the source digest and the date in the comment above them.
+   The digest is that of the multi-architecture index, so one pin serves
+   linux/amd64 and linux/arm64; `mirror-host-image-base` fails when the
+   index lacks either.
 3. Open a pull request. CI builds the image on the new base and runs its
    checks.
 
@@ -572,7 +595,8 @@ make host-image-ami HOST_IMG=ghcr.io/phoban01/battery-operator/host-image:v0.2.0
   HOST_IMAGE_AMI_ARGS="--bucket my-import-bucket --region eu-west-1"
 ```
 
-The script pulls the image into root's podman storage. It then runs
+The script pulls the image's x86_64 platform into root's podman storage,
+because the AMI is x86_64 only. It then runs
 `bootc-image-builder --type ami`, pinned by digest. The builder uploads the
 disk image to the S3 bucket, imports it as a snapshot through the
 `vmimport` service role, and registers the AMI. The script then tags the
