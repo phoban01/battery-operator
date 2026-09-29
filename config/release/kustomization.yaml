@@ -1,0 +1,19 @@
+# The Manifests as a release ships them: the Operator with battery as its
+# sidecar (config/default) and the Exec Agent (config/exec-agent), in one
+# rendering. config/exec-agent stays out of config/default, whose namePrefix
+# would rename its ServiceAccount, so this kustomization sets no namePrefix
+# and no namespace of its own.
+#
+# hack/manifests-artifact.sh renders it into install.yaml with the release's
+# images, and CI publishes that file as an OCI artifact on a version tag.
+# `make build-installer` writes the same file to dist/install.yaml.
+#
+#= docs/requirements/06-deployment.md#manifests-artifact
+#/ The artifact of DP-030 SHALL hold one file, `install.yaml`,
+#/ which is `config/release` rendered by kustomize: `config/default` and
+#/ `config/exec-agent` together.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../default
+  - ../exec-agent

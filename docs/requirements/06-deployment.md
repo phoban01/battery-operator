@@ -104,3 +104,42 @@ one.
 
 DP-021 follows from consumers creating their claims' Secrets themselves
 (ADR 0001, decision 8).
+
+## The Manifests artifact {#manifests-artifact}
+
+- **DP-030** When a version tag is pushed, the Manifests SHALL be published
+  as an OCI artifact at `ghcr.io/phoban01/battery-operator/manifests`,
+  tagged with the version and with the commit's full SHA.
+- **DP-031** The artifact of DP-030 SHALL hold one file, `install.yaml`,
+  which is `config/release` rendered by kustomize: `config/default` and
+  `config/exec-agent` together.
+- **DP-032** In the artifact of DP-030, the Manifests SHALL name the
+  Operator's and the Exec Agent's images by the version's tag and the digest
+  published for it, and battery's image by the battery version that
+  `go.mod` requires.
+- **DP-033** The artifact of DP-030 SHALL have a config of media type
+  `application/vnd.cncf.flux.config.v1+json` and a single layer of media
+  type `application/vnd.cncf.flux.content.v1.tar+gzip`, the media types that
+  `flux push artifact` gives.
+- **DP-034** The artifact of DP-030 SHALL carry the annotation
+  `org.opencontainers.image.source`, the repository's URL, and the
+  annotation `org.opencontainers.image.revision`, the version and the
+  commit's full SHA as `<version>@sha1:<commit>`.
+
+A cluster that runs Flux installs a release from this artifact with an
+`OCIRepository` and a `Kustomization`, and a cluster without Flux applies
+`install.yaml` with `kubectl`. The images in it are fixed, so the
+`Kustomization` needs no `images` override, and a release always runs the
+images CI built and checked for it. battery's image is the one whose
+protos the Operator was built against.
+
+source-controller extracts the first layer of an artifact when its
+`OCIRepository` has no `layerSelector`. The artifact has one layer, of the
+media type `flux push artifact` gives, so an `OCIRepository` needs no
+`layerSelector`, and one that selects Flux's media type gets the same
+layer. The revision annotation is what Flux shows as the source's revision.
+
+cert-manager is not in the artifact. The Manifests need its CRDs and its
+controller, and a cluster installs it once for every workload that uses it.
+
+The site's install page (`site/install.md`) shows both ways in.

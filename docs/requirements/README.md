@@ -20,7 +20,7 @@ The design these requirements specify is recorded in
 | `03-pools.md` | `PO` | The Pool Controller: declaring Pools to battery, placement and status |
 | `04-inventory.md` | `IN` | The Inventory Controller: which Nodes are Hosts, and telling battery |
 | `05-exec-agent.md` | `EA` | The Exec Agent: exec relay, authorization, Host checks and the Node report |
-| `06-deployment.md` | `DP` | The Operator process, battery as its sidecar, the battery connection and the Manifests |
+| `06-deployment.md` | `DP` | The Operator process, battery as its sidecar, the battery connection, the Manifests and their OCI artifact |
 | `07-client.md` | `CC` | The Client Library that consumers use to claim and use a MicroVM |
 | `08-test-doubles.md` | `TD` | The fake battery and fake `flintlockd` that stand in for KVM and battery during development |
 | `09-certificates.md` | `CT` | The Operator as approver and signer of the Hosts' certificates, and the SPIFFE identities they carry |
@@ -118,7 +118,8 @@ its Containerfile, shell scripts, systemd units, configuration files and
 SELinux module all take `#` comments. Its checks are shell scripts, and a
 check cites a requirement with a `#= type=test` line. Inside a heredoc, a
 quote with backticks would run as a command, so put such a citation above
-the heredoc.
+the heredoc. The scripts that render and push the Manifests' OCI artifact,
+`hack/manifests-artifact*.sh`, cite requirements the same way.
 
 Other annotation types: `type=exception` with a `reason=` line for a
 requirement deliberately not met, `type=implication` for one satisfied by

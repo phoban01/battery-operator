@@ -78,7 +78,7 @@ func build(t *testing.T, dirs ...string) objects {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	var out objects
+	out := make(objects, 0, len(dirs))
 	for _, dir := range dirs {
 		cmd := exec.Command(kustomize, "build", filepath.Join(root, dir))
 		var stderr bytes.Buffer
@@ -87,17 +87,26 @@ func build(t *testing.T, dirs ...string) objects {
 		if err != nil {
 			t.Fatalf("kustomize build %s: %v\n%s", dir, err, stderr.String())
 		}
-		for doc := range strings.SplitSeq(string(rendered), "\n---\n") {
-			if strings.TrimSpace(doc) == "" {
-				continue
-			}
-			var o object
-			if err := yaml.Unmarshal([]byte(doc), &o); err != nil {
-				t.Fatalf("%s: %v", dir, err)
-			}
-			o.raw = []byte(doc)
-			out = append(out, o)
+		out = append(out, parse(t, dir, rendered)...)
+	}
+	return out
+}
+
+// parse splits rendered, a multi-document YAML stream from name, into its
+// objects.
+func parse(t *testing.T, name string, rendered []byte) objects {
+	t.Helper()
+	var out objects
+	for doc := range strings.SplitSeq(string(rendered), "\n---\n") {
+		if strings.TrimSpace(doc) == "" {
+			continue
 		}
+		var o object
+		if err := yaml.Unmarshal([]byte(doc), &o); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		o.raw = []byte(doc)
+		out = append(out, o)
 	}
 	return out
 }

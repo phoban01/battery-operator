@@ -5,6 +5,9 @@ title: battery-operator
 
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/asciinema-player@3.10.0/dist/bundle/asciinema-player.css">
 
+**Home** · [Install]({{ "/install.html" | relative_url }}) · Hosts (coming with
+[#192](https://github.com/phoban01/battery-operator/issues/192))
+
 battery-operator is a Kubernetes operator for
 [battery](https://github.com/liquidmetal-dev/battery), which keeps warm
 pools of [flintlock](https://github.com/liquidmetal-dev/flintlock)
@@ -82,6 +85,9 @@ kubectl -n demo wait --for=jsonpath={.status.available}=2 pool/demo
 
 The [demo manifests](https://github.com/phoban01/battery-operator/tree/main/examples/demo)
 say what each object is for.
+
+To install a release on your own cluster, with Flux or with `kubectl`, see
+[Install]({{ "/install.html" | relative_url }}).
 
 ## Claims are resources
 

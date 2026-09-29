@@ -33,6 +33,13 @@ comment-style = { meta = "#=", content = "#/" }
 pattern = "config/**/*.yaml"
 comment-style = { meta = "#=", content = "#/" }
 
+# The Manifests' OCI artifact (06-deployment.md#manifests-artifact): the
+# script that renders and pushes it, and the check that pushes it to a
+# registry of its own and runs internal/manifests' TestManifestsArtifact.
+[[source]]
+pattern = "hack/manifests-artifact*.sh"
+comment-style = { meta = "#=", content = "#/" }
+
 # The Host Image (11-host-image.md) is not Go. Its Containerfile, shell
 # scripts, systemd units, configuration files and SELinux module all take
 # `#` comments, so they cite requirements with `#=` and `#/`.

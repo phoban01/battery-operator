@@ -28,6 +28,8 @@
 //	dagger call host-image-check --platform=linux/arm64
 //	dagger call host-image export-image --name=battery-host-image:dev
 //	dagger call host-image-publish --repository=ttl.sh/battery-host-image-dev --tags=1h
+//	dagger call manifests --operator-image=<ref> --exec-agent-image=<ref> export --path=dist/manifests
+//	dagger call manifests-check
 //
 // The two images, the Operator's and the Exec Agent's, and the e2e suite's
 // fake flintlockd image are defined here and nowhere else. There is no
