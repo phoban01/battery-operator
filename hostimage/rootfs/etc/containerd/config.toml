@@ -1,11 +1,12 @@
-# containerd for both flintlockd and the kubelet. Ported from
-# write_containerd_config in flintlock's provision.sh, plus the CRI settings
-# the kubelet needs.
+# containerd for both flintlockd and the kubelet, in containerd v2's
+# configuration format (version 3). The devmapper snapshotter is as
+# write_containerd_config in flintlock's provision.sh sets it; the CRI
+# settings are the ones the kubelet needs.
 #
 #= docs/requirements/11-host-image.md#image-storage
 #/ The Host Image SHALL keep all `flintlockd` and containerd state under
 #/ `/var`.
-version = 2
+version = 3
 
 root = "/var/lib/containerd"
 state = "/run/containerd"
@@ -18,36 +19,57 @@ state = "/run/containerd"
 
 [plugins]
   # The thin pool battery-thin-pool.service creates: volume group "flintlock",
-  # logical volume "thinpool". flintlockd puts MicroVM volumes on it.
+  # logical volume "thinpool". flintlockd puts MicroVM volumes on it, in its
+  # own containerd namespace, "flintlock" (flintlockd's --containerd-ns
+  # default). A namespace needs no configuration here.
   [plugins."io.containerd.snapshotter.v1.devmapper"]
     pool_name = "flintlock-thinpool"
     root_path = "/var/lib/containerd/snapshotter/devmapper"
     base_image_size = "10GB"
     discard_blocks = true
 
-  # The kubelet's pods stay on overlayfs and use the systemd cgroup driver,
-  # which is kubeadm's default for the kubelet.
-  [plugins."io.containerd.grpc.v1.cri"]
+  # containerd v2 splits the CRI plugin in three: images, runtime, and the
+  # gRPC service (io.containerd.grpc.v1.cri), which keeps only the streaming
+  # server and is left at its defaults. The kubelet's pods, in namespace
+  # k8s.io, stay on overlayfs.
+  [plugins."io.containerd.cri.v1.images"]
+    snapshotter = "overlayfs"
+
+    #= docs/requirements/11-host-image.md#image-flintlockd
+    #/ The Host Image SHALL configure `flintlockd` and the container
+    #/ runtime interface of containerd to read per-registry configuration
+    #/ from `/etc/containerd/certs.d`, and SHALL ship no registry
+    #/ configuration there.
+    # containerd v2 would read /etc/containerd/certs.d:/etc/docker/certs.d by
+    # default. One directory, the one flintlockd reads, keeps the kubelet's
+    # pulls and flintlockd's alike. The image ships no hosts.toml, so a
+    # registry is reached over https with no credential, as before.
+    [plugins."io.containerd.cri.v1.images".registry]
+      config_path = "/etc/containerd/certs.d"
+
+  # The pods use the systemd cgroup driver, which is kubeadm's default for
+  # the kubelet.
+  [plugins."io.containerd.cri.v1.runtime"]
     #= docs/requirements/11-host-image.md#kernel-and-kvm
     #/ The Host Image SHALL configure the container runtime interface
     #/ of containerd to run every unprivileged container of a Kubernetes pod under
     #/ SELinux confinement, in the container domain the base image's policy
     #/ assigns or the one the pod names, rather than unconfined.
-    # PluginConfig.EnableSelinux of containerd v1.7's CRI plugin, false by
-    # default, when containerd disables go-selinux for the CRI plugin and no
-    # pod gets a label. With it the CRI plugin labels each pod from the
+    # RuntimeConfig.EnableSelinux of containerd v2's CRI runtime plugin, false
+    # by default, when containerd disables go-selinux for the CRI plugin and
+    # no pod gets a label. With it the CRI plugin labels each pod from the
     # policy's container contexts (lxc_contexts): container_t with categories
     # of the pod's own, or what the pod's seLinuxOptions ask for. It is
     # the CRI plugin's alone: flintlockd uses containerd for images,
     # snapshots and leases and starts Firecracker and Cloud Hypervisor
     # itself, so the MicroVMs are untouched.
     enable_selinux = true
-    [plugins."io.containerd.grpc.v1.cri".containerd]
-      snapshotter = "overlayfs"
-      [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc]
+    [plugins."io.containerd.cri.v1.runtime".containerd]
+      default_runtime_name = "runc"
+      [plugins."io.containerd.cri.v1.runtime".containerd.runtimes.runc]
         runtime_type = "io.containerd.runc.v2"
-        [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc.options]
+        [plugins."io.containerd.cri.v1.runtime".containerd.runtimes.runc.options]
           SystemdCgroup = true
-    [plugins."io.containerd.grpc.v1.cri".cni]
-      bin_dir = "/opt/cni/bin"
+    [plugins."io.containerd.cri.v1.runtime".cni]
+      bin_dirs = ["/opt/cni/bin"]
       conf_dir = "/etc/cni/net.d"

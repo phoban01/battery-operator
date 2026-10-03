@@ -50,11 +50,23 @@ ConditionPathExists=/etc/battery/flintlockd/client-ca.crt
 #/ client CA bundle that the Exec Agent writes to `/etc/battery/flintlockd`.
 # --tls-client-validate makes flintlockd's TLS configuration
 # RequireAndVerifyClientCert, against the pool --tls-client-ca names
-# (pkg/auth/tls.go of flintlock v0.15.2). No token: the certificate is the
+# (pkg/auth/tls.go of flintlock v0.16.0). No token: the certificate is the
 # credential, and the Host firewall decides who may try (HI-069, HI-070).
 #
 #= docs/requirements/11-host-image.md#image-flintlockd
 #/ The Host Image SHALL enable the `flintlockd` exec API.
+#
+#= docs/requirements/11-host-image.md#image-flintlockd
+#/ The Host Image SHALL configure `flintlockd` and the container
+#/ runtime interface of containerd to read per-registry configuration
+#/ from `/etc/containerd/certs.d`, and SHALL ship no registry
+#/ configuration there.
+# flintlockd pulls images itself, with containerd's client library, and
+# reads <host>/hosts.toml under --containerd-hosts-dir for each registry
+# (flintlock v0.16.0). The directory is flintlockd's default and the CRI
+# plugin's config_path in /etc/containerd/config.toml; it is named here so
+# that the check stage can see it. With no hosts.toml for a registry,
+# flintlockd pulls from it over https with no credential.
 EnvironmentFile=/run/battery/flintlockd.env
 ExecStartPre=/usr/libexec/battery/flintlockd-certs started
 ExecStart=/usr/bin/flintlockd run \
@@ -66,6 +78,7 @@ ExecStart=/usr/bin/flintlockd run \
     --enable-exec-api \
     --bridge-name flbr0 \
     --containerd-socket /run/containerd/containerd.sock \
+    --containerd-hosts-dir /etc/containerd/certs.d \
     --state-dir /var/lib/flintlock \
     --firecracker-bin /usr/bin/firecracker \
     --cloudhypervisor-bin /usr/bin/cloud-hypervisor-static

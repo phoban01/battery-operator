@@ -282,6 +282,10 @@ and ids by default; here the settings are generic and empty by default.
 - **HI-073** When the Host Image stops or restarts `flintlockd`, it SHALL
   stop the `flintlockd` process alone and SHALL leave every hypervisor
   process that `flintlockd` started running.
+- **HI-081** The Host Image SHALL configure `flintlockd` and the container
+  runtime interface of containerd to read per-registry configuration from
+  `/etc/containerd/certs.d`, and SHALL ship no registry configuration
+  there.
 
 battery creates and deletes MicroVMs by calling every Host's `flintlockd`
 from the Operator's pod, so `flintlockd` serves on the Host's internal
@@ -320,7 +324,7 @@ network namespace, and each connection it lets through must present a
 certificate from the client CA.
 
 HI-071 exists because `flintlockd` reads its certificate, key and client CA
-once, when it starts (`pkg/auth/tls.go:18-48` of flintlock v0.15.2), and
+once, when it starts (`pkg/auth/tls.go:18-48` of flintlock v0.16.0), and
 reloads nothing until flintlock#1235. So the Host Image does not start it
 before the Exec Agent has written them, and restarts it when the Exec Agent
 renews the serving certificate or the client CA bundle changes. Until then
@@ -333,9 +337,9 @@ renews the serving certificate, and a restart must not end the MicroVMs on
 the Host. The trial on a real Host (`hack/real-hosts`) saw a MicroVM keep
 running through a restart of `flintlockd` with `KillMode=process`.
 
-A restart leaves the MicroVMs running. In flintlock v0.15.2, the version the
+A restart leaves the MicroVMs running. In flintlock v0.16.0, the version the
 Host Image pins, Firecracker and Cloud Hypervisor are started detached by
-default (`pkg/defaults/defaults.go:28` and `:38`), in a session of their own
+default (`pkg/defaults/defaults.go:32` and `:42`), in a session of their own
 (`pkg/process/process.go:16-24`, called from
 `infrastructure/microvm/firecracker/create.go:97` and
 `infrastructure/microvm/cloudhypervisor/create.go:116`), with nothing tying
@@ -345,8 +349,8 @@ the unit's cgroup. When `flintlockd` starts again it resyncs every MicroVM
 spec (`internal/command/run/run.go:262`,
 `infrastructure/controllers/microvm_controller.go:56-63`). A MicroVM whose
 hypervisor process named in its pid file is alive is reported as running
-(`infrastructure/microvm/firecracker/provider.go:127-166`;
-`infrastructure/microvm/cloudhypervisor/provider.go:76-149`), so the plan
+(`infrastructure/microvm/firecracker/provider.go:138-177`;
+`infrastructure/microvm/cloudhypervisor/provider.go:95-168`), so the plan
 neither creates it again (`core/steps/microvm/create.go:45`) nor starts it
 (`core/steps/microvm/start.go:52`), and its tap device is left alone because
 it exists (`core/steps/network/interface_create.go:61`). Its sockets are
@@ -367,6 +371,14 @@ Firecracker processes are children of `flintlockd`; inside a pod they would
 share its cgroup, and a pod restart or an eviction would kill every MicroVM
 on the Host. Kubernetes manages the Node, and systemd manages what runs the
 MicroVMs.
+
+HI-081 exists because from flintlock v0.16.0 `flintlockd` pulls with
+containerd v2's client library and reads a `hosts.toml` per registry, by
+default under `/etc/containerd/certs.d`. containerd's CRI plugin reads the
+same layout. With one directory named for both, one file sets a mirror, a
+CA or a credential for every pull on the Host. The image ships none, so by
+default every pull goes to the registry over https with no credential, as
+it did before.
 
 ## Host configuration {#host-configuration}
 

@@ -112,7 +112,7 @@ reports() {
   out=$("$@" 2>&1 | head -n 5)
   got=$(printf '%s\n' "$out" | grep -Eo 'v?[0-9]+\.[0-9]+(\.[0-9]+)?[0-9A-Za-z.+-]*' | head -n1)
   got=${got#v}
-  # cloud-hypervisor reports one more component than its tag: v41.0 is 41.0.0.
+  # cloud-hypervisor reports one more component than its tag: v48.0 is 48.0.0.
   if [ -n "$got" ] && { [ "$got" = "$want" ] || [ "$got" = "$want.0" ]; }; then
     ok "$name reports $got, pinned ${want}"
   elif printf '%s' "$out" | grep -q 'Function not implemented' && [ -n "${BATTERY_CHECK_BINARY:-}" ] &&
@@ -326,10 +326,13 @@ expect "container-selinux is installed" rpm -q container-selinux
 # The effective value, as the pinned containerd reads its configuration:
 # `config dump` merges the file over the defaults without starting the
 # daemon. Where it cannot run, the file itself is read.
-# cri_selinux prints enable_selinux of the CRI plugin's own table.
+# cri_selinux prints enable_selinux of containerd v2's CRI runtime plugin
+# table. The file quotes the plugin's name with double quotes, and
+# `config dump` with single ones.
 cri_selinux() {
-  awk '/^\[/ { t = $0 } t ~ /^\[plugins\."io\.containerd\.grpc\.v1\.cri"\]$/ && $1 == "enable_selinux" { print $3 }' "$1"
+  awk '/^\[/ { t = $0 } t ~ /^\[plugins\.["'\'']io\.containerd\.cri\.v1\.runtime["'\'']\]$/ && $1 == "enable_selinux" { print $3 }' "$1"
 }
+expect "containerd's configuration is in containerd v2's format, version 3" has /etc/containerd/config.toml '^version = 3$'
 if containerd --config /etc/containerd/config.toml config dump >"$work/containerd-dump.toml" 2>"$work/containerd-dump.err"; then
   sed -i 's/^[[:space:]]*//' "$work/containerd-dump.toml"
   got=$(cri_selinux "$work/containerd-dump.toml")
@@ -475,7 +478,7 @@ expect "tmpfiles.d creates the state directories" has /usr/lib/tmpfiles.d/batter
 # The kubelet's CNI plugins are state too: a CNI DaemonSet such as
 # Flannel's writes its own plugin into containerd's bin_dir, /opt/cni/bin.
 # The base's /opt is read-only, so /opt/cni is a link into /var.
-expect "containerd looks for CNI plugins in /opt/cni/bin" has /etc/containerd/config.toml '^ *bin_dir = "/opt/cni/bin"$'
+expect "containerd looks for CNI plugins in /opt/cni/bin" has /etc/containerd/config.toml '^ *bin_dirs = \["/opt/cni/bin"\]$'
 expect "/opt/cni is a link to /var/opt/cni" test "$(readlink /opt/cni)" = /var/opt/cni
 expect "tmpfiles.d copies the CNI plugins into /var/opt/cni/bin" has /usr/lib/tmpfiles.d/battery.conf '^C /var/opt/cni/bin .* /usr/libexec/cni$'
 expect "the CNI plugins are in the image" test -x /usr/libexec/cni/bridge
@@ -751,6 +754,27 @@ fi
 #= type=test
 #/ The Host Image SHALL enable the `flintlockd` exec API.
 expect "the exec API is enabled" has "$fl" '--enable-exec-api '
+
+#= docs/requirements/11-host-image.md#image-flintlockd
+#= type=test
+#/ The Host Image SHALL configure `flintlockd` and the container
+#/ runtime interface of containerd to read per-registry configuration
+#/ from `/etc/containerd/certs.d`, and SHALL ship no registry
+#/ configuration there.
+# The CRI half as containerd reads it, from the `config dump` of the kernel
+# and KVM section, or from the file where that could not run.
+expect "flintlockd reads registry configuration from /etc/containerd/certs.d" has "$fl" '--containerd-hosts-dir /etc/containerd/certs\.d '
+cri_registry() {
+  awk '/^\[/ { t = $0 } t ~ /^\[plugins\.["'\'']io\.containerd\.cri\.v1\.images["'\'']\.registry\]$/ && $1 == "config_path" { print $3 }' "$1" | tr -d "\"'"
+}
+if [ -s "$work/containerd-dump.toml" ]; then
+  src=$work/containerd-dump.toml what="containerd's effective CRI configuration"
+else
+  src=$work/containerd-file.toml what=/etc/containerd/config.toml
+fi
+got=$(cri_registry "$src")
+if [ "$got" = /etc/containerd/certs.d ]; then ok "$what reads registry configuration from /etc/containerd/certs.d alone"; else fail "$what reads registry configuration from '$got'"; fi
+refute "the image ships no registry configuration" sh -c "find /etc/containerd/certs.d /etc/docker/certs.d -type f 2>/dev/null | grep -q ."
 # Every flag the unit passes has to exist in the pinned flintlockd.
 help=$(flintlockd run --help 2>&1)
 # shellcheck disable=SC2013

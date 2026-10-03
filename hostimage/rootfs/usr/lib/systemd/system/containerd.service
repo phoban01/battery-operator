@@ -1,6 +1,8 @@
-# containerd's upstream unit, with the binary under /usr/bin because
-# /usr/local is a link into /var on a bootc host, and ordered after the thin
-# pool so that the devmapper snapshotter finds it. One containerd serves
+# containerd's upstream unit of v2.2.9, with the binary under /usr/bin
+# because /usr/local is a link into /var on a bootc host, and ordered after
+# the thin pool so that the devmapper snapshotter finds it. Like upstream's
+# v2 unit it sets no LimitNOFILE: containers inherit containerd's limits,
+# and containerd v2 recommends systemd's default. One containerd serves
 # both the kubelet (namespace k8s.io, overlayfs) and flintlockd (namespace
 # flintlock, devmapper). When the thin pool is missing containerd still
 # starts, without the devmapper snapshotter, so the Host's Node stays
@@ -13,7 +15,7 @@
 [Unit]
 Description=containerd container runtime
 Documentation=https://containerd.io
-After=network.target local-fs.target battery-thin-pool.service
+After=network.target dbus.service local-fs.target battery-thin-pool.service
 Wants=battery-thin-pool.service
 
 [Service]
@@ -26,7 +28,6 @@ Restart=always
 RestartSec=5
 LimitNPROC=infinity
 LimitCORE=infinity
-LimitNOFILE=infinity
 TasksMax=infinity
 OOMScoreAdjust=-999
 
