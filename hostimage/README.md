@@ -94,8 +94,14 @@ Fedora RPM, verified by signature; the build asks for exactly
 `CLOUD_INIT_VERSION` and fails when the Fedora repositories no longer carry
 it, which is the moment to bump it.
 
-Kubernetes is pinned to the v1.35 line because it is the last that supports
-containerd 1.x.
+Kubernetes stays on the v1.35 line. It was held there because v1.35 is the
+last line that supports containerd 1.x. With containerd v2 a later line is
+possible, as a change of its own.
+
+containerd is v2, and `rootfs/etc/containerd/config.toml` is in its
+configuration format, version 3. A version 2 file still loads, but
+containerd v2 converts it at every start and names the CRI plugin's tables
+differently, so the check stage would no longer find what it checks.
 
 ### Updating the base image
 
@@ -148,9 +154,9 @@ updates it on purpose, and a pull request shows the change.
 | `battery-network` | bridge `flbr0`, forwarding, NAT, guest firewall, `flintlockd`'s endpoint and who may connect to it | HI-030, HI-032 to HI-037, HI-067, HI-069, HI-070, HI-075 to HI-080 |
 | `battery-dnsmasq` | DHCP and DNS on the bridge | HI-031 |
 | `battery-flintlockd-certs` | makes `/etc/battery/flintlockd` for the Exec Agent, owned by its user id and labelled for its container | HI-072 |
-| `containerd` | one containerd for the kubelet and for `flintlockd` | HI-040 |
+| `containerd` | one containerd for the kubelet and for `flintlockd` | HI-040, HI-066, HI-081 |
 | `flintlockd.path` | starts `flintlockd` once the Exec Agent has written its certificates | HI-071 |
-| `flintlockd` | `Requires=` the KVM gate, the thin pool, the bridge, the certificate directory and containerd; serves mutual TLS on the Host's internal address; a stop or restart leaves the MicroVMs running | HI-040, HI-041, HI-043, HI-067, HI-068, HI-073 |
+| `flintlockd` | `Requires=` the KVM gate, the thin pool, the bridge, the certificate directory and containerd; serves mutual TLS on the Host's internal address; reads registry configuration from `/etc/containerd/certs.d`; a stop or restart leaves the MicroVMs running | HI-040, HI-041, HI-043, HI-067, HI-068, HI-073, HI-081 |
 | `battery-flintlockd-restart.path` | restarts `flintlockd` when its serving certificate or client CA bundle changes | HI-071, HI-072 |
 | `battery-kubelet-config` | writes the kubelet's labels, the Host label among them, and its reservation | HI-060, HI-061, HI-074 |
 | `kubelet` | started by `kubeadm join` from the bootstrap configuration | |
@@ -361,6 +367,31 @@ configuration and is untouched.
 Agent's DaemonSet selects it, so every Host runs an Exec Agent, which then
 checks the Host and reports it ready or not.
 
+### Registry configuration
+
+`flintlockd` pulls each MicroVM's kernel and volume images itself, with
+containerd's client library, not through the containerd daemon. From
+flintlock v0.16.0 it reads per-registry settings the way containerd does:
+`<host>/hosts.toml` under its `--containerd-hosts-dir`. The image sets that
+to `/etc/containerd/certs.d`, and sets the same directory as the CRI
+plugin's `config_path` in `/etc/containerd/config.toml` (HI-081). One
+`hosts.toml` there then applies to the kubelet's pulls and to
+`flintlockd`'s. containerd v2 would also read `/etc/docker/certs.d` by
+default; the image names one directory so that the two cannot differ.
+
+The image ships no `hosts.toml`. Without one, both pull from the registry
+itself over https with no credential, as a Host did before. The check
+stage reads both settings, the CRI one from `containerd config dump`, and
+fails on any file in either `certs.d` directory.
+
+To use a mirror, a private CA or a registry credential, write
+`/etc/containerd/certs.d/<host>/hosts.toml` in containerd's
+[hosts format](https://github.com/containerd/containerd/blob/main/docs/hosts.md).
+Both read it when they pull, so neither needs a restart, and a bootc
+upgrade keeps it with the rest of `/etc`. A file with a credential is a
+secret: keep it root's, mode 0600, and do not deliver it in user-data,
+which the Host Image treats as not secret (HI-052).
+
 ## Not ready reasons
 
 A unit that refuses to let `flintlockd` start says why in a file:
@@ -500,20 +531,22 @@ containerd labels a pod only when its CRI plugin is told to; without it
 every container the kubelet starts is unlabelled and runs unconfined, and an
 enforcing Host enforces nothing between its pods and itself.
 `/etc/containerd/config.toml` sets `enable_selinux = true` in
-`[plugins."io.containerd.grpc.v1.cri"]`, the `PluginConfig.EnableSelinux`
-of containerd v1.7.22's CRI plugin (`pkg/cri/config/config.go`; false by
-default, when the plugin calls `selinux.SetDisabled()`). With it, every
+`[plugins."io.containerd.cri.v1.runtime"]`, the
+`RuntimeConfig.EnableSelinux` of containerd v2.2.9's CRI runtime plugin
+(`internal/cri/config/config.go`; false by default, when the plugin calls
+`selinux.SetDisabled()`). containerd v2 moved it there from v1.7's
+`io.containerd.grpc.v1.cri`. With it, every
 container of every pod the kubelet starts on a Host runs in the domain the
 base policy's `lxc_contexts` names, `container_t`, at a level with
 categories of its own, unless the pod's `seLinuxOptions` ask for another
 level or type. That covers the Exec Agent, the CNI and kube-proxy
 DaemonSets, and anything else scheduled onto a Host. The one exception is
 containerd's own: a container with `privileged: true` gets no label
-(`pkg/cri/sbserver/container_create.go`) and runs unconfined, as a
+(`internal/cri/server/container_create.go`) and runs unconfined, as a
 privileged container is meant to. kube-proxy and most CNI agents are
 privileged; the Exec Agent is not.
 
-The MicroVMs are not affected. `flintlockd` v0.15.2 talks to containerd's
+The MicroVMs are not affected. `flintlockd` v0.16.0 talks to containerd's
 own API for its content store, images, snapshots and leases only; it never
 creates a containerd container or task (`NewContainer` appears only in its
 client interface and mock), and it starts Firecracker and Cloud Hypervisor
