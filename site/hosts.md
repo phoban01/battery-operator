@@ -214,8 +214,16 @@ The Nodes go `Ready` when the CNI runs. The CNI and kube-proxy DaemonSets
 must tolerate the Host taint, `battery.liquidmetal-x.dev/host=true:NoSchedule`.
 Calico's and kube-proxy's tolerate every `NoSchedule` taint. On a Host,
 SELinux is enforcing: a CNI pod that is not privileged and writes to host
-paths needs its own `seLinuxOptions`. See
+paths needs its own `seLinuxOptions`. Calico's pods are privileged, so
+they need nothing more. See
 [Pods run confined](https://github.com/phoban01/battery-operator/blob/v0.3.0/hostimage/README.md#pods-run-confined-hi-066).
+
+Calico's manifest encapsulates pod traffic between Nodes in IP-in-IP (IP
+protocol 4) and peers over BGP (TCP port 179). CAPA's node security group
+admits both. Calico takes a Node's address from the first interface it
+finds; a Host also has its guest bridge, `flbr0`. To pin the address to
+the Node's own, set `IP_AUTODETECTION_METHOD=kubernetes-internal-ip` on
+the `calico-node` DaemonSet.
 
 Note the cluster's address ranges. You need them for the security group
 and the Host pool. With CAPA's defaults they are:

@@ -26,6 +26,10 @@ got.
 - At boot the image makes the thin pool on the second disk, the guest
   bridge and the firewall, and labels the Node with its image digest and
   the Firecracker and Cloud Hypervisor versions.
+- Calico runs on the Host with SELinux enforcing. A pod on the Host that
+  does not use the host's network gets a pod address, reaches a pod on the
+  control plane and a ClusterIP Service, and resolves the Service's name
+  through the cluster's DNS.
 - The Exec Agent gets its certificates through CSRs the Operator signs,
   `flintlockd` starts with them, and the agent reports the Host ready.
 - The trial's smoke steps pass on the Host: a Pool of two MicroVMs becomes
@@ -33,6 +37,9 @@ got.
   MicroVM reaches `https://github.com` through the guest network; a
   MicroVM survives a restart of `flintlockd`; and deleting the Pool
   deletes its MicroVMs.
+- With Calico running, a MicroVM reaches no pod and no Service: not a pod
+  on the control plane, not a pod on its own Host, not a ClusterIP
+  Service and not the API server's Service (HI-035, HI-075, HI-076).
 
 It does not prove the AWS side of the templates: the AWSMachineTemplate,
 the MachineDeployment and the MachineHealthCheck are rendered but not used.
@@ -42,12 +49,12 @@ Only the KubeadmConfigTemplate is.
 
 | Piece | What |
 |---|---|
-| Control plane | A Lima VM, `bo-kubeadm-cp`: Ubuntu 24.04, 2 CPUs, 3 GiB. containerd, `kubeadm init` at the Host Image's `KUBERNETES_VERSION` (`hostimage/versions.env`), Flannel, and local-path storage. Its taint is removed, so it runs the Operator and cert-manager. |
+| Control plane | A Lima VM, `bo-kubeadm-cp`: Ubuntu 24.04, 2 CPUs, 3 GiB. containerd, `kubeadm init` at the Host Image's `KUBERNETES_VERSION` (`hostimage/versions.env`), Calico v3.32.2 from the manifest the [Hosts page](../../site/hosts.md) applies, and local-path storage. Its taint is removed, so it runs the Operator and cert-manager. |
 | Host Image | Built from this checkout with `make host-image` for linux/arm64, and loaded into Docker. |
 | Disk | `bootc install to-disk`, run from the image itself in a privileged container, onto a sparse 20 GiB raw file. A blank 20 GiB file is the thin pool's disk. |
 | Host | A [vfkit](https://github.com/crc-org/vfkit) VM, `bo-kubeadm-host-1`, 4 CPUs, 8 GiB, with nested virtualization, EFI, the two disks, and the user-data as a NoCloud seed. |
 | User-data | `pool/` is a Host pool like `config/capi/pools/example`: it builds `config/capi/host-pool` with the `host-pool-params` Component. `userdata/main.go` turns its KubeadmConfigTemplate into cloud-config the way CABPK does: the `files` and `users`, the join configuration as a kubeadm v1beta4 `JoinConfiguration` with a bootstrap token, and `kubeadm join` in `runcmd`. It fails on any template field it does not map. |
-| images, deploy, smoke | The trial's own steps (`../real-hosts/up.sh images deploy` and `../real-hosts/smoke.sh`), with the trial's `ssh` driver pointed at the Host. The trial's registry runs on the Host in podman, on `127.0.0.1:5000`. |
+| images, deploy, smoke | The trial's own steps (`../real-hosts/up.sh images deploy` and `../real-hosts/smoke.sh`), with the trial's `ssh` driver pointed at the Host. The trial's registry runs on the Host in podman, on `127.0.0.1:5000`. `smoke.sh` adds two steps of its own: `pods` and `isolation`. |
 
 The pool differs from a real one in these ways, each for the Mac and not
 for the templates:
@@ -62,6 +69,19 @@ for the templates:
   reach each other directly. The Mac routes between them. `up.sh` adds the
   route back on the control plane.
 
+Calico differs from the Hosts page's in three settings, each for the Mac:
+
+- Its IP pool is `POD_CIDR`, `10.244.0.0/16`. Calico's default,
+  `192.168.0.0/16`, overlaps the Mac's networks. The pod and Service
+  ranges also stay clear of the Host's guest subnet, `10.220.0.0/16`.
+- The pool encapsulates in VXLAN, not IP-in-IP. The Mac routes TCP and UDP
+  between the VMs but not IP protocol 4: each Node sent IP-in-IP packets
+  and neither received one. A cloud network that admits protocol 4
+  between Nodes needs no change.
+- `IP_AUTODETECTION_METHOD` is `can-reach=` the shared network's gateway.
+  Calico's default takes the first interface it finds, and on a Lima VM
+  that is Lima's user-mode network, whose address every Lima VM shares.
+
 Two more things stand in for what a cloud cluster has:
 
 - The template starts the kubelet with `--cloud-provider=external`. The
@@ -70,9 +90,9 @@ Two more things stand in for what a cloud cluster has:
   controller manager initializes it. There is none here, so `up.sh` sets
   the Node's `InternalIP` and removes the taint, as the AWS cloud
   controller manager would.
-- Flannel's two init containers run as `spc_t`. They are unprivileged and
-  write to `/opt/cni/bin` and `/etc/cni/net.d`, which a `container_t`
-  process may not write on the Host (HI-066). See "Pods run confined" in
+- Nothing changes how calico-node runs on the Host. It and its init
+  containers are privileged, so they run as `spc_t` and may write
+  `/opt/cni/bin` and `/etc/cni/net.d` (HI-066). See "Pods run confined" in
   the Host Image README.
 
 ## What it needs
@@ -100,7 +120,7 @@ the Mac. `console.log` there is the Host's serial console.
 
 ```sh
 hack/kubeadm-host/up.sh      # or: up.sh controlplane image disk host join images deploy
-hack/kubeadm-host/smoke.sh   # or: smoke.sh pool claim network restart delete
+hack/kubeadm-host/smoke.sh   # or: smoke.sh pods pool claim network isolation restart delete
 export KUBECONFIG=hack/kubeadm-host/.state/kubeconfig
 hack/kubeadm-host/down.sh    # stops the Host, deletes bo-kubeadm-cp and the Host's disks
 ```
@@ -116,6 +136,14 @@ Go and `kubectl` on the `PATH`.
 | `host` | Renders the user-data and starts vfkit. |
 | `join` | Waits for the Host's address in the Mac's DHCP leases, adds the route to it, waits for the Node, initializes it as above, and waits for it to be Ready. |
 | `images`, `deploy` | Starts the registry on the Host, then the trial's steps. |
+
+`smoke.sh` runs the trial's steps (`pool`, `claim`, `network`, `restart`,
+`delete`) and two of its own:
+
+| Step | What it checks |
+|---|---|
+| `pods` | An echo pod on the Host, which tolerates the Host taint, selects the Host label and does not use the host's network, gets an address in `POD_CIDR`. From it, `curl` reaches an echo pod on the control plane by its address and through a ClusterIP Service, and `nslookup` resolves the Service's name. |
+| `isolation` | The Host itself reaches the control plane's echo pod, the Host's echo pod, the ClusterIP Service and the API server's Service. A claimed MicroVM then tries each, and each attempt must time out: the Host drops it. It needs the `pods` step's pods and the `claim` step's Consumer. |
 
 `up.sh` is idempotent: each step does only what is missing. The Host
 boots only once from its user-data: to boot it again from new user-data,
@@ -141,3 +169,30 @@ On an M4 Mac, macOS 26.5, at `main` of 29 September 2026:
   as `container_t` with categories of its own, `flintlockd` as
   `unconfined_service_t`, and battery reached `flintlockd` through the
   `flintlockd_clients` rule.
+
+## What the Calico run found
+
+The first runs used Flannel. Its main container runs as `container_t` and
+cannot write `/run/flannel`, so no pod on the Host without the host's
+network got a sandbox (#210). The proof now runs Calico, as the Hosts page
+does. On an M4 Mac, at `main` of 5 October 2026, with SELinux enforcing:
+
+- calico-node and its three init containers (`upgrade-ipam`,
+  `install-cni`, `ebpf-bootstrap`) are privileged and ran as `spc_t`, as
+  did BIRD and kube-proxy. v3.32.2 installs no flex-volume driver.
+  `install-cni` wrote its plugins to `/opt/cni/bin`, that is
+  `/var/opt/cni/bin` (`bin_t`), and its configuration to `/etc/cni/net.d`.
+  `/run/calico` was `container_var_run_t`, `/var/lib/calico`
+  `container_var_lib_t`, and `/var/log/calico` `container_log_t`, from the
+  base policy.
+- The journal had no AVC denial from Calico. The Host Image needed no
+  change. It had two other kinds, neither from Calico: `bootc` probing
+  SELinux at boot (`chcon` with a test label), and the test pod's
+  `nslookup` trying `io_uring`, which `container_t` may not use. It then
+  resolved the name without it.
+- Felix chose iptables in its nftables backend, in the `ip filter`, `ip
+  nat`, `ip mangle` and `ip raw` tables. The Host's `inet battery` chains
+  hook at priority `filter - 10`, before Calico's and kube-proxy's, and a
+  drop there is final. No Calico rule names `flbr0` or the guest subnet.
+- IP-in-IP between the VMs did not pass the Mac, so the proof uses VXLAN
+  (see above).

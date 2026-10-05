@@ -23,9 +23,10 @@ data:
   unhealthySeconds: "300"
   # - THIN_POOL_DEVICE: vfkit's second disk. A virtio disk has no
   #   "Instance Storage" model, so the Host Image does not detect it.
-  # - FLINTLOCKD_CLIENT_CIDRS: Flannel masquerades pod traffic to another
-  #   Node's address, so battery reaches flintlockd from the control plane
-  #   Node's address; the pod range is listed as well.
+  # - FLINTLOCKD_CLIENT_CIDRS: Calico's IP pool masquerades pod traffic to
+  #   addresses outside the pool, a Node's among them, so battery reaches
+  #   flintlockd from the control plane Node's address; the pod range is
+  #   listed as well.
   # - PROTECTED_CIDRS: the Nodes, pods and Services.
   # - HOST_RESERVE_MEMORY_MB: the VM has 8 GiB; half is for the MicroVMs.
   host.conf: |

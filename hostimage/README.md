@@ -602,12 +602,32 @@ policy's container process context is `container_t`.
 
 The kubeadm Host proof (`hack/kubeadm-host`) booted the image with
 SELinux enforcing. containerd started with the setting, and `ps -eZ` showed
-the Exec Agent and Flannel as `container_t` with categories of their own.
-An unprivileged CNI or storage DaemonSet that writes host paths needs its
-own `seLinuxOptions`: Flannel's init containers could not write
-`/opt/cni/bin` until they ran as `spc_t`. Not yet checked: that no other
-AVC denials follow (`ausearch -m avc -ts boot`; the image does not run
-`auditd`).
+the Exec Agent and a test pod as `container_t` with categories of their
+own. An unprivileged CNI or storage DaemonSet that writes host paths needs
+its own `seLinuxOptions`. Flannel is one: its init containers could not
+write `/opt/cni/bin`, and its main container could not write
+`/run/flannel` (`container_var_run_t`), so pods on the Host got no
+network.
+
+Calico needs nothing on a Host. Its manifest (v3.32.2, as the
+[Hosts page](../site/hosts.md) applies it) runs calico-node and its init
+containers privileged, so they run as `spc_t`, as do BIRD and kube-proxy.
+It installs its CNI plugins into `/opt/cni/bin` and its configuration into
+`/etc/cni/net.d`, and keeps state in `/run/calico`, `/var/lib/calico` and
+`/var/log/calico`, which the base policy labels for containers. It
+installs no flex-volume driver. The proof found no AVC denial from Calico.
+The image does not run `auditd`, so denials are in the journal
+(`journalctl -b | grep 'avc:  denied'`), not in `ausearch`.
+
+The same proof showed how Calico's rules meet the guest firewall. Felix
+writes iptables rules through the nftables backend, into the `ip filter`,
+`ip nat`, `ip mangle` and `ip raw` tables, as kube-proxy does. The
+`inet battery` chains hook at priority `filter - 10`, so they see a
+guest's packet before Calico's and kube-proxy's filter chains, and a drop
+there is final whatever those chains accept. No Calico rule names the
+bridge or the guest subnet. With Calico running, a MicroVM still reached
+the internet, and reached no pod on either Node, no ClusterIP Service and
+not the API server's Service.
 
 ## Networking notes
 
