@@ -57,7 +57,7 @@ data:
   # The Kubernetes version of the Host Image the AMI was made from: its
   # battery.liquidmetal-x.dev/kubernetes-version tag, and KUBERNETES_VERSION
   # in hostimage/versions.env.
-  kubernetesVersion: v1.35.8
+  kubernetesVersion: v1.36.3
   # At least the Exec Agent's --drain-timeout, one hour by default (EA-040),
   # with room to spare.
   nodeDrainTimeoutSeconds: "4500"

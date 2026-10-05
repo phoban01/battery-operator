@@ -94,9 +94,12 @@ Fedora RPM, verified by signature; the build asks for exactly
 `CLOUD_INIT_VERSION` and fails when the Fedora repositories no longer carry
 it, which is the moment to bump it.
 
-Kubernetes stays on the v1.35 line. It was held there because v1.35 is the
-last line that supports containerd 1.x. With containerd v2 a later line is
-possible, as a change of its own.
+Kubernetes is on the v1.36 line. The image held v1.35 while it ran
+containerd 1.x, and moved to v1.36 with containerd v2. The build takes the
+pkgs.k8s.io repository from the minor version, so a new line needs the new
+version and the checksum of that line's repository key. Check the line's
+release notes for the kubelet flags and `kubeadm` configuration that the
+image and the Host pool templates set.
 
 containerd is v2, and `rootfs/etc/containerd/config.toml` is in its
 configuration format, version 3. A version 2 file still loads, but

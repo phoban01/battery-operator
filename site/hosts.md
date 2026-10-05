@@ -144,8 +144,17 @@ has more on each step.
 ## Make a workload cluster
 
 The workload cluster runs battery-operator and the Hosts. Give it the
-Kubernetes version of the Host Image, `v1.35.8` for `v0.2.0`, so that the
-Hosts' kubelet is not newer than the control plane.
+Kubernetes version of the Host Image, so that the Hosts' kubelet is not
+newer than the control plane. The AMI's Kubernetes version tag has it, and
+so does this table, with the AWS cloud controller manager for that version:
+
+| Release | Kubernetes | AWS cloud controller manager |
+|---------|------------|------------------------------|
+| `v0.2.0`, `v0.2.1` | `v1.35.8` | `v1.35.2` |
+| Later releases | `v1.36.3` | `v1.36.1` |
+
+The examples on this page use `v0.2.0`, so they use `v1.35.8` and
+`v1.35.2`. For a later release, use the versions of its row.
 
 It needs ordinary worker Nodes too. The Hosts have a taint that keeps
 ordinary pods off them, so the Operator and cert-manager run on the
@@ -154,8 +163,8 @@ workers.
 CAPA's default template gives a kubeadm control plane, one MachineDeployment
 of workers, and a ClusterResourceSet that installs the AWS cloud controller
 manager. The Hosts join with `--cloud-provider=external`, so they need the
-cloud controller manager to initialize their Nodes. Set its version to the
-Kubernetes minor version:
+cloud controller manager to initialize their Nodes. Set its version from
+the table:
 
 ```sh
 export AWS_REGION=eu-west-1
