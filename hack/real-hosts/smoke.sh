@@ -46,8 +46,14 @@ step_pool() {
 	wait_pool_ready 900s
 	# Not `tee /dev/stderr`: when stderr is a file, tee reopens and truncates
 	# it, which wipes the log of a run redirected to one.
-	local fcs n
-	fcs="$(firecrackers)"
+	# The Pool is Ready while its MicroVMs are still provisioning, so the
+	# Firecracker processes may start a little later.
+	local fcs n i
+	for i in $(seq 1 30); do
+		fcs="$(firecrackers)"
+		[[ "$(grep -c . <<<"${fcs}" || true)" -ge "${POOL_SIZE}" ]] && break
+		sleep 4
+	done
 	printf '%s\n' "${fcs}" >&2
 	n="$(grep -c . <<<"${fcs}" || true)"
 	[[ "${n}" -eq "${POOL_SIZE}" ]] || die "${n} Firecracker processes on the Host, want ${POOL_SIZE}"

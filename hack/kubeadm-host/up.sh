@@ -14,7 +14,7 @@ STEPS=(controlplane image disk host join images deploy)
 
 # ---------------------------------------------------------------------------
 # controlplane: a Lima VM on the Mac's shared network, with kubeadm and
-# Flannel.
+# Calico.
 
 step_controlplane() {
 	if ! cp_exists; then
@@ -40,7 +40,7 @@ step_controlplane() {
 	[[ -n "${ip}" && -n "${gw}" ]] || die "${CP_NAME} has no address on the shared network (lima0)"
 	log "Making the kubeadm control plane on ${ip}, Kubernetes ${KUBERNETES_VERSION}"
 	cp_root env KUBERNETES_VERSION="${KUBERNETES_VERSION}" NODE_IP="${ip}" GATEWAY_IP="${gw}" \
-		POD_CIDR="${POD_CIDR}" SERVICE_CIDR="${SERVICE_CIDR}" FLANNEL_VERSION="${FLANNEL_VERSION}" LOCAL_PATH_VERSION="${LOCAL_PATH_VERSION}" \
+		POD_CIDR="${POD_CIDR}" SERVICE_CIDR="${SERVICE_CIDR}" CALICO_VERSION="${CALICO_VERSION}" LOCAL_PATH_VERSION="${LOCAL_PATH_VERSION}" \
 		bash -s <"${KH_HERE}/controlplane/provision.sh"
 
 	# kubeadm's admin kubeconfig, which names the API server by its address

@@ -4,7 +4,7 @@
 #
 # Two VMs on an Apple silicon Mac, on the Mac's shared NAT network:
 #
-#   CP_NAME    a Lima VM with a kubeadm control plane and Flannel, which
+#   CP_NAME    a Lima VM with a kubeadm control plane and Calico, which
 #              also runs the Operator and cert-manager.
 #   NODE_NAME  the Host: a vfkit VM booted from a disk made of the Host
 #              Image, with nested virtualization and a second disk for the
@@ -33,9 +33,13 @@ CP_CPUS="${CP_CPUS:-2}"
 CP_MEMORY="${CP_MEMORY:-3GiB}"
 CP_DISK="${CP_DISK:-20GiB}"
 CP_TEMPLATE="${CP_TEMPLATE:-template:ubuntu-24.04}"
+# The pod and Service ranges stay clear of the Host's guest subnet
+# (10.220.0.0/16) and the Mac's networks, which are in 192.168.0.0/16:
+# Calico's default pool would overlap them.
 POD_CIDR="${POD_CIDR:-10.244.0.0/16}"
 SERVICE_CIDR="${SERVICE_CIDR:-10.96.0.0/12}"
-FLANNEL_VERSION="${FLANNEL_VERSION:-v0.27.4}"
+# Calico's version is the Hosts page's (site/hosts.md).
+CALICO_VERSION="${CALICO_VERSION:-v3.32.2}"
 LOCAL_PATH_VERSION="${LOCAL_PATH_VERSION:-v0.0.37}"
 
 # The Host VM.

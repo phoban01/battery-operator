@@ -2,14 +2,14 @@
 # Makes the kubeadm Host proof's control plane (../README.md), on Ubuntu
 # 24.04, as root: containerd, the kubelet, kubeadm and kubectl at
 # KUBERNETES_VERSION, `kubeadm init` on the address of the shared network
-# (NODE_IP), and Flannel. Idempotent: a second run skips what is there.
+# (NODE_IP), and Calico. Idempotent: a second run skips what is there.
 #
 # Run by up.sh through the VM's shell, with KUBERNETES_VERSION, NODE_IP,
-# POD_CIDR, SERVICE_CIDR, FLANNEL_VERSION, LOCAL_PATH_VERSION and GATEWAY_IP (the
+# POD_CIDR, SERVICE_CIDR, CALICO_VERSION, LOCAL_PATH_VERSION and GATEWAY_IP (the
 # shared network's gateway) in the environment.
 set -euo pipefail
 
-: "${KUBERNETES_VERSION:?}" "${NODE_IP:?}" "${POD_CIDR:?}" "${SERVICE_CIDR:?}" "${FLANNEL_VERSION:?}" "${LOCAL_PATH_VERSION:?}" "${GATEWAY_IP:?}"
+: "${KUBERNETES_VERSION:?}" "${NODE_IP:?}" "${POD_CIDR:?}" "${SERVICE_CIDR:?}" "${CALICO_VERSION:?}" "${LOCAL_PATH_VERSION:?}" "${GATEWAY_IP:?}"
 minor="$(echo "${KUBERNETES_VERSION}" | cut -d. -f1,2)"
 export DEBIAN_FRONTEND=noninteractive
 
@@ -66,22 +66,36 @@ export KUBECONFIG=/etc/kubernetes/admin.conf
 # One Node runs the Operator and cert-manager: the control plane's own.
 kubectl taint node --all node-role.kubernetes.io/control-plane:NoSchedule- >/dev/null 2>&1 || true
 
-# Flannel, on the shared network's interface on every Node: the one that
-# reaches the network's gateway.
-curl -fsSL "https://github.com/flannel-io/flannel/releases/download/${FLANNEL_VERSION}/kube-flannel.yml" |
-	sed -e "s#10.244.0.0/16#${POD_CIDR}#" \
-		-e "s#- --kube-subnet-mgr#- --kube-subnet-mgr\n        - --iface-can-reach=${GATEWAY_IP}#" |
-	kubectl apply -f - >/dev/null
-# The Host enforces SELinux and labels pods (HI-066). Flannel's two init
-# containers are unprivileged and copy its plugin into /opt/cni/bin and its
-# configuration into /etc/cni/net.d, which container_t may not write. So
-# they run as spc_t, the base policy's type for containers that manage the
-# host (hostimage/README.md, "Pods run confined").
-kubectl -n kube-flannel patch daemonset kube-flannel-ds --type=json -p '[
-  {"op": "add", "path": "/spec/template/spec/initContainers/0/securityContext", "value": {"seLinuxOptions": {"type": "spc_t"}}},
-  {"op": "add", "path": "/spec/template/spec/initContainers/1/securityContext", "value": {"seLinuxOptions": {"type": "spc_t"}}}
-]' >/dev/null
-kubectl -n kube-flannel rollout status daemonset/kube-flannel-ds --timeout=300s
+# Calico, from the manifest the Hosts page (site/hosts.md) applies, with
+# three settings for this network:
+# - CALICO_IPV4POOL_CIDR: Calico's default pool, 192.168.0.0/16, overlaps
+#   the Mac's networks. The pool is POD_CIDR, which kubeadm init was given.
+# - IP_AUTODETECTION_METHOD: Calico takes the first interface it finds by
+#   default. On a Lima VM that is eth0, Lima's user-mode network, which has
+#   the same address on every Lima VM. Each Node's address is instead the
+#   one that reaches the shared network's gateway.
+# - CALICO_IPV4POOL_IPIP and CALICO_IPV4POOL_VXLAN: the pool encapsulates
+#   in VXLAN, not IP-in-IP. The Mac routes between the VMs and passes TCP
+#   and UDP, but not IP protocol 4: each Node sent IP-in-IP packets and
+#   neither received one. VXLAN is UDP.
+# calico-node and its init containers are privileged, so they need no
+# seLinuxOptions on the Host (hostimage/README.md, "Pods run confined").
+curl -fsSL -o /tmp/calico.yaml "https://raw.githubusercontent.com/projectcalico/calico/${CALICO_VERSION}/manifests/calico.yaml"
+sed -i -e 's|^            # - name: CALICO_IPV4POOL_CIDR$|            - name: CALICO_IPV4POOL_CIDR|' \
+	-e "s|^            #   value: \"192.168.0.0/16\"\$|              value: \"${POD_CIDR}\"|" \
+	-e "/^              value: \"autodetect\"\$/a\\            - name: IP_AUTODETECTION_METHOD\\n              value: \"can-reach=${GATEWAY_IP}\"" \
+	-e '/^            - name: CALICO_IPV4POOL_IPIP$/{n;s|value: "Always"|value: "Never"|}' \
+	-e '/^            - name: CALICO_IPV4POOL_VXLAN$/{n;s|value: "Never"|value: "Always"|}' \
+	/tmp/calico.yaml
+if ! grep -q "value: \"${POD_CIDR}\"" /tmp/calico.yaml || ! grep -q "value: \"can-reach=${GATEWAY_IP}\"" /tmp/calico.yaml ||
+	! grep -A1 'name: CALICO_IPV4POOL_VXLAN$' /tmp/calico.yaml | grep -q 'value: "Always"'; then
+	echo "Calico ${CALICO_VERSION}'s manifest no longer has the lines this script changes" >&2
+	exit 1
+fi
+kubectl apply -f /tmp/calico.yaml >/dev/null
+rm -f /tmp/calico.yaml
+kubectl -n kube-system rollout status daemonset/calico-node --timeout=300s
+kubectl -n kube-system rollout status deployment/calico-kube-controllers --timeout=300s
 
 # A default StorageClass for battery's data volume, as k3s has in the real
 # hosts trial: local-path, on the control plane's disk.
