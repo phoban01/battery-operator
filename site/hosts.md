@@ -13,13 +13,13 @@ Pool keeps MicroVMs warm on the Hosts.
 
 The steps use these tools: `kind`, `kubectl`, `clusterctl`,
 `clusterawsadm`, `kustomize`, `podman` and the `aws` command line. The
-examples use release `v0.2.0`, the first release with the Host Image, and
-the AWS region `eu-west-1`. Use the release and region you want.
+examples use release `v0.3.0` and the AWS region `eu-west-1`. Use the
+release and region you want.
 
 The templates and the AMI script have not run against AWS yet. CI renders
 the templates and checks them against the Cluster API and CAPA schemas. A
 local proof boots the Host Image with the same kubeadm configuration
-([hack/kubeadm-host](https://github.com/phoban01/battery-operator/blob/v0.2.0/hack/kubeadm-host/README.md)).
+([hack/kubeadm-host](https://github.com/phoban01/battery-operator/blob/v0.3.0/hack/kubeadm-host/README.md)).
 If a step fails for you, please
 [open an issue](https://github.com/phoban01/battery-operator/issues).
 
@@ -29,7 +29,7 @@ A Host is a Kubernetes Node that runs MicroVMs. battery creates the
 MicroVMs through the Host's `flintlockd`, and the Exec Agent on the Host
 checks it and reports on its Node. The Operator gives a Node to battery as a
 Host only while that report says ready. The
-[Host prerequisites](https://github.com/phoban01/battery-operator/blob/v0.2.0/docs/host-prerequisites.md)
+[Host prerequisites](https://github.com/phoban01/battery-operator/blob/v0.3.0/docs/host-prerequisites.md)
 say what a Node needs.
 
 The Host Image is a bootc image that a Node boots from to become a Host. It
@@ -50,7 +50,7 @@ Each release publishes it for x86_64 and arm64:
 ghcr.io/phoban01/battery-operator/host-image:<version>
 ```
 
-The [Host Image README](https://github.com/phoban01/battery-operator/blob/v0.2.0/hostimage/README.md)
+The [Host Image README](https://github.com/phoban01/battery-operator/blob/v0.3.0/hostimage/README.md)
 has the detail.
 
 ## The steps
@@ -82,9 +82,9 @@ cluster. The AMI is x86_64 only, so the Hosts are x86_64 instances.
 Get a checkout of the release, and run the target:
 
 ```sh
-git clone --branch v0.2.0 --depth 1 https://github.com/phoban01/battery-operator.git
+git clone --branch v0.3.0 --depth 1 https://github.com/phoban01/battery-operator.git
 cd battery-operator
-make host-image-ami HOST_IMG=ghcr.io/phoban01/battery-operator/host-image:v0.2.0 \
+make host-image-ami HOST_IMG=ghcr.io/phoban01/battery-operator/host-image:v0.3.0 \
   HOST_IMAGE_AMI_ARGS="--bucket my-import-bucket --region eu-west-1"
 ```
 
@@ -92,7 +92,7 @@ The last line of the output is the AMI id, its name, the image digest and
 the Kubernetes version, for example:
 
 ```
-ami-0123456789abcdef0 battery-host-v1.35.8-<first 12 digits of the digest> sha256:<digest> v1.35.8
+ami-0123456789abcdef0 battery-host-v1.36.3-<first 12 digits of the digest> sha256:<digest> v1.36.3
 ```
 
 The script tags the AMI with the image digest and the Kubernetes version.
@@ -104,7 +104,7 @@ aws ec2 describe-images --region eu-west-1 --image-ids ami-0123456789abcdef0 \
 ```
 
 `--dry-run` in `HOST_IMAGE_AMI_ARGS` prints the commands and runs nothing.
-[Publishing an AMI](https://github.com/phoban01/battery-operator/blob/v0.2.0/hostimage/README.md#publishing-an-ami)
+[Publishing an AMI](https://github.com/phoban01/battery-operator/blob/v0.3.0/hostimage/README.md#publishing-an-ami)
 has the detail.
 
 ## Make a management cluster
@@ -151,10 +151,11 @@ so does this table, with the AWS cloud controller manager for that version:
 | Release | Kubernetes | AWS cloud controller manager |
 |---------|------------|------------------------------|
 | `v0.2.0`, `v0.2.1` | `v1.35.8` | `v1.35.2` |
-| Later releases | `v1.36.3` | `v1.36.1` |
+| `v0.3.0` | `v1.36.3` | `v1.36.1` |
 
-The examples on this page use `v0.2.0`, so they use `v1.35.8` and
-`v1.35.2`. For a later release, use the versions of its row.
+The examples on this page use `v0.3.0`, so they use `v1.36.3` and
+`v1.36.1`. For another release, use the versions of its row. The Host
+Image first came with `v0.2.0`.
 
 It needs ordinary worker Nodes too. The Hosts have a taint that keeps
 ordinary pods off them, so the Operator and cert-manager run on the
@@ -171,11 +172,11 @@ export AWS_REGION=eu-west-1
 export AWS_SSH_KEY_NAME=""        # or the name of an EC2 key pair
 export AWS_CONTROL_PLANE_MACHINE_TYPE=t3.large
 export AWS_NODE_MACHINE_TYPE=t3.large
-export KUBERNETES_AWS_CCM_VERSION=v1.35.2
+export KUBERNETES_AWS_CCM_VERSION=v1.36.1
 
 clusterctl generate cluster battery \
   --infrastructure aws:v2.13.0 \
-  --kubernetes-version v1.35.8 \
+  --kubernetes-version v1.36.3 \
   --control-plane-machine-count 1 \
   --worker-machine-count 2 \
   > battery-cluster.yaml
@@ -187,7 +188,7 @@ finds by Kubernetes version. To see if there is one for your version and
 region:
 
 ```sh
-clusterawsadm ami list --kubernetes-version v1.35.8 --region eu-west-1
+clusterawsadm ami list --kubernetes-version v1.36.3 --region eu-west-1
 ```
 
 If there is none, build one with
@@ -214,7 +215,7 @@ must tolerate the Host taint, `battery.liquidmetal-x.dev/host=true:NoSchedule`.
 Calico's and kube-proxy's tolerate every `NoSchedule` taint. On a Host,
 SELinux is enforcing: a CNI pod that is not privileged and writes to host
 paths needs its own `seLinuxOptions`. See
-[Pods run confined](https://github.com/phoban01/battery-operator/blob/v0.2.0/hostimage/README.md#pods-run-confined-hi-066).
+[Pods run confined](https://github.com/phoban01/battery-operator/blob/v0.3.0/hostimage/README.md#pods-run-confined-hi-066).
 
 Note the cluster's address ranges. You need them for the security group
 and the Host pool. With CAPA's defaults they are:
@@ -251,7 +252,7 @@ echo "$sg"
 
 The Host's own firewall admits only `FLINTLOCKD_CLIENT_CIDRS` from the
 Host pool, below, so set the same ranges there.
-[The security group](https://github.com/phoban01/battery-operator/blob/v0.2.0/config/capi/README.md#the-security-group)
+[The security group](https://github.com/phoban01/battery-operator/blob/v0.3.0/config/capi/README.md#the-security-group)
 has the detail.
 
 ## Fill in a Host pool
@@ -294,7 +295,7 @@ Then, in the checkout:
        - id: sg-0123456789abcdef0
      rootVolumeGiB: "100"
      # The AMI's battery.liquidmetal-x.dev/kubernetes-version tag.
-     kubernetesVersion: v1.35.8
+     kubernetesVersion: v1.36.3
      nodeDrainTimeoutSeconds: "4500"
      unhealthySeconds: "300"
      host.conf: |
@@ -314,7 +315,7 @@ Then, in the checkout:
 - `GUEST_SUBNET`: the MicroVMs' subnet. Keep it clear of the ranges above.
 
 Use only the keys that the
-[Host configuration file](https://github.com/phoban01/battery-operator/blob/v0.2.0/hostimage/README.md#host-configuration-file)
+[Host configuration file](https://github.com/phoban01/battery-operator/blob/v0.3.0/hostimage/README.md#host-configuration-file)
 section names. The Host skips any other key without an error.
 
 Look at what the pool renders, then apply it to the management cluster:
@@ -331,7 +332,7 @@ To change the number of Hosts later, change `replicas` and apply again. To
 add a pool, copy `pools/example` to `pools/<name>`, give its `name` and its
 ConfigMap names of their own, and add it to `resources` in
 `config/capi/kustomization.yaml`.
-[Cluster API host pools](https://github.com/phoban01/battery-operator/blob/v0.2.0/config/capi/README.md)
+[Cluster API host pools](https://github.com/phoban01/battery-operator/blob/v0.3.0/config/capi/README.md)
 says what each key sets, and what the templates set for you.
 
 ## Check that the Hosts joined
@@ -396,7 +397,7 @@ Host. If it says `false`, the reason names the first missing prerequisite:
 - `HostImageNotReady`: a unit of the Host Image failed, for example
   because the instance has no KVM or no free instance-store disk, or
   `host.conf` is not valid. The message says which. See
-  [Not ready reasons](https://github.com/phoban01/battery-operator/blob/v0.2.0/hostimage/README.md#not-ready-reasons).
+  [Not ready reasons](https://github.com/phoban01/battery-operator/blob/v0.3.0/hostimage/README.md#not-ready-reasons).
 - `KVMUnavailable`: the instance type has no KVM. Use a metal instance.
 - `ThinPoolMissing`: there is no thin pool.
 - `FlintlockdNotReady`: the Exec Agent cannot reach `flintlockd` yet.
