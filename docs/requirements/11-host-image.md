@@ -409,6 +409,11 @@ bootstrap configuration writes it, for example a kubeadm config template's
   an operating system update is applied only to a drained Host.
 - **HI-074** The Host Image SHALL register its kubelet with the label
   `battery.liquidmetal-x.dev/host` set to `true`.
+- **HI-082** The Host Image SHALL make `/opt`, `/usr/local` and
+  `/usr/libexec/kubernetes` links to `/var/opt`, `/var/usrlocal` and
+  `/var/libexec/kubernetes`, SHALL create each target at boot, and SHALL
+  label each target and every file in it as the base image's policy labels
+  the path that links to it.
 
 The version labels are facts about the image: a Firecracker snapshot
 restores only on the same CPU model, Firecracker version and host kernel,
@@ -421,6 +426,20 @@ HI-074 is the Host label. The Exec Agent runs only on Nodes with that label
 Host that boots this image has `flintlockd`, KVM and the thin pool that the
 Exec Agent checks for, so the image sets the label itself. The Exec Agent
 still reports a Host not ready when a check fails.
+
+HI-082 exists because a Host can write only to `/etc`, `/var`, `/run` and
+`/tmp`, and a Kubernetes node is expected to write in three more places. The kubelet makes its volume plugin directory,
+`/usr/libexec/kubernetes/kubelet-plugins/volume/exec`, at start, and CSI
+drivers and credential providers install there. A CNI DaemonSet installs its
+plugin into `/opt/cni/bin`, and charts such as local-path-provisioner keep
+data under `/opt`. Some DaemonSets install tools into `/usr/local/bin`. The
+links put all three on `/var`, as Fedora CoreOS does for `/opt` and
+`/usr/local`. The base policy already labels `/var/opt` and `/var/usrlocal`
+as it labels `/opt` and `/usr/local`. It labels `/usr/libexec/kubernetes`
+`bin_t` but `/var/libexec/kubernetes` `var_t`, from which the kubelet could
+not run a driver, so the Host Image's policy module labels that target.
+`/usr/lib/modules` stays read-only: a driver container cannot build a kernel
+module on a Host.
 
 In-place upgrade, draining a Host and then running `bootc upgrade` and
 rebooting, is the reason to build on bootc, but its orchestration is not

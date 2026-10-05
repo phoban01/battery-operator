@@ -476,12 +476,52 @@ expect "containerd keeps its state under /var" has /etc/containerd/config.toml '
 expect "the devmapper snapshotter keeps its state under /var" has /etc/containerd/config.toml 'root_path = "/var/lib/containerd/'
 expect "tmpfiles.d creates the state directories" has /usr/lib/tmpfiles.d/battery.conf '^d /var/lib/flintlock '
 # The kubelet's CNI plugins are state too: a CNI DaemonSet such as
-# Flannel's writes its own plugin into containerd's bin_dir, /opt/cni/bin.
-# The base's /opt is read-only, so /opt/cni is a link into /var.
+# Flannel's writes its own plugin into containerd's bin_dir, /opt/cni/bin,
+# which is /var/opt/cni/bin through HI-082's link.
 expect "containerd looks for CNI plugins in /opt/cni/bin" has /etc/containerd/config.toml '^ *bin_dirs = \["/opt/cni/bin"\]$'
-expect "/opt/cni is a link to /var/opt/cni" test "$(readlink /opt/cni)" = /var/opt/cni
 expect "tmpfiles.d copies the CNI plugins into /var/opt/cni/bin" has /usr/lib/tmpfiles.d/battery.conf '^C /var/opt/cni/bin .* /usr/libexec/cni$'
 expect "the CNI plugins are in the image" test -x /usr/libexec/cni/bridge
+
+#= docs/requirements/11-host-image.md#kubernetes-node
+#= type=test
+#/ The Host Image SHALL make `/opt`, `/usr/local` and
+#/ `/usr/libexec/kubernetes` links to `/var/opt`, `/var/usrlocal` and
+#/ `/var/libexec/kubernetes`, SHALL create each target at boot, and SHALL
+#/ label each target and every file in it as the base image's policy labels
+#/ the path that links to it.
+# Each link, the tmpfiles.d line that creates its target, and the target's
+# label in the policy the module was installed into. A label is what
+# systemd-tmpfiles gives a directory it creates, and what a file made under
+# it inherits.
+for lt in /opt=var/opt /usr/local=../var/usrlocal /usr/libexec/kubernetes=../../var/libexec/kubernetes; do
+  l=${lt%%=*} t=${lt#*=}
+  expect "$l is a link to $t" test "$(readlink "$l")" = "$t"
+done
+expect "/opt/cni resolves to /var/opt/cni" test "$(readlink -m /opt/cni)" = /var/opt/cni
+expect "tmpfiles.d creates /var/opt" sh -c "cat /usr/lib/tmpfiles.d/*.conf | grep -qE '^d /var/opt '"
+expect "tmpfiles.d creates /var/usrlocal" sh -c "cat /usr/lib/tmpfiles.d/*.conf | grep -qE '^d /var/usrlocal '"
+expect "tmpfiles.d creates /var/usrlocal/bin" has /usr/lib/tmpfiles.d/battery.conf '^d /var/usrlocal/bin '
+expect "tmpfiles.d creates /var/libexec/kubernetes" has /usr/lib/tmpfiles.d/battery.conf '^d /var/libexec/kubernetes '
+expect "tmpfiles.d creates the kubelet's volume plugin directory" has /usr/lib/tmpfiles.d/battery.conf '^d /var/libexec/kubernetes/kubelet-plugins/volume/exec '
+if ! command -v matchpathcon >/dev/null 2>&1; then
+  skip "labels of the link targets: matchpathcon is not installed"
+elif ! semodule -l 2>/dev/null | grep -qx battery; then
+  skip "labels of the link targets: the battery module is not installed here"
+else
+  # Each label is the one the base policy gives the path under the link
+  # (matchpathcon in the base: /opt usr_t, /opt/cni/bin and /usr/local/bin
+  # bin_t, /usr/libexec/kubernetes and everything under it bin_t). The
+  # lookup resolves links in a path that exists, so the targets are looked
+  # up by name.
+  for pl in /var/libexec/kubernetes=bin_t /var/libexec/kubernetes/kubelet-plugins/volume/exec=bin_t \
+    /var/libexec/kubernetes/kubelet-plugins/volume/exec/vendor~driver/driver=bin_t \
+    /var/opt=usr_t /var/opt/cni/bin=bin_t /var/opt/local-path-provisioner=container_file_t \
+    /var/usrlocal=usr_t /var/usrlocal/bin=bin_t /var/libexec=var_t; do
+    p=${pl%%=*} want=system_u:object_r:${pl#*=}:s0
+    got=$(matchpathcon -n "$p" 2>/dev/null)
+    if [ "$got" = "$want" ]; then ok "$p is labelled $want"; else fail "$p is labelled '$got', want $want"; fi
+  done
+fi
 
 # ---------------------------------------------------------------------------
 echo "== networking"
