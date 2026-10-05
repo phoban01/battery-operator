@@ -370,6 +370,31 @@ configuration and is untouched.
 Agent's DaemonSet selects it, so every Host runs an Exec Agent, which then
 checks the Host and reports it ready or not.
 
+### Where Kubernetes writes
+
+A Host can write only to `/etc`, `/var`, `/run` and `/tmp`. The base links
+`/home`, `/root`, `/srv` and `/mnt` into `/var`, and the image adds three
+more links (HI-082), as Fedora CoreOS does:
+
+| Path | Links to | Who writes there |
+|------|----------|------------------|
+| `/opt` | `/var/opt` | CNI DaemonSets (`/opt/cni/bin`), charts such as local-path-provisioner |
+| `/usr/local` | `/var/usrlocal` | DaemonSets that install tools into `/usr/local/bin`, the NVIDIA toolkit |
+| `/usr/libexec/kubernetes` | `/var/libexec/kubernetes` | the kubelet's volume plugin directory, CSI drivers, credential providers |
+
+The build moves the CNI plugins of the `kubernetes-cni` package to
+`/usr/libexec/cni`, and tmpfiles.d copies them to `/var/opt/cni/bin` at
+first boot. It fails if anything else is in `/opt` or `/usr/local`, since
+the link would hide it. The base's tmpfiles.d creates `/var/opt` and
+`/var/usrlocal`; `battery.conf` creates `/var/usrlocal/bin` and the
+kubelet's `/var/libexec/kubernetes/kubelet-plugins/volume/exec`. Each target
+carries the label the base policy gives the path that links to it (see
+[SELinux](#selinux)).
+
+`/usr/lib/modules` stays read-only. A driver container cannot build or
+install a kernel module on a Host; a module the Host needs belongs in the
+image.
+
 ### Registry configuration
 
 `flintlockd` pulls each MicroVM's kernel and volume images itself, with
@@ -478,6 +503,17 @@ argument, never calls `setenforce` and makes no domain permissive.
   directory's (0700) still require. A fixed `seLinuxOptions.level` on the
   Exec Agent's DaemonSet would make the relabelling unnecessary but not
   wrong.
+- **The link targets in `/var`** (HI-082). The base policy labels
+  `/var/opt` and `/var/usrlocal` as it labels `/opt` and `/usr/local`, so
+  `/var/opt/cni/bin` and `/var/usrlocal/bin` are `bin_t`. It labels
+  `/usr/libexec/kubernetes` `bin_t` but `/var/libexec/kubernetes` `var_t`,
+  and the kubelet could not run a driver from `var_t`. One line in
+  `selinux/battery.fc` labels `/var/libexec/kubernetes(/.*)?` `bin_t`.
+  It is a file context in the module, not a `semanage fcontext -e`
+  equivalence, because the module is where the image keeps all its labels:
+  `semodule -n` installs them in one step, and the check stage looks them
+  up with `matchpathcon`. systemd-tmpfiles applies the label when it creates
+  the directories at boot.
 
 ### Why these labels
 

@@ -55,13 +55,42 @@ dnf -y --enablerepo=kubernetes --setopt=install_weak_deps=False install \
   conntrack-tools socat ethtool iptables-nft jq util-linux \
   container-selinux policycoreutils
 
+#= docs/requirements/11-host-image.md#kubernetes-node
+#/ The Host Image SHALL make `/opt`, `/usr/local` and
+#/ `/usr/libexec/kubernetes` links to `/var/opt`, `/var/usrlocal` and
+#/ `/var/libexec/kubernetes`
+# A Host can write only to /etc, /var, /run and /tmp, and a Kubernetes node
+# writes in three more places. A CNI DaemonSet installs its plugin into
+# /opt/cni/bin (Flannel's does), and containerd looks there; charts keep data
+# under /opt. Some DaemonSets install into /usr/local/bin. The kubelet makes
+# its volume plugin directory under /usr/libexec/kubernetes, and drivers
+# install there. Each becomes a link into /var, as on Fedora CoreOS.
+# tmpfiles.d creates the targets at boot: the base's own drop-in makes
+# /var/opt and /var/usrlocal, and battery.conf the rest.
+#
 # The CNI plugins move to /usr, which an upgrade replaces; tmpfiles.d copies
-# them to /var/opt/cni/bin at boot. The base's /opt is a directory of the
-# read-only image, not a link to /var/opt, so /opt/cni becomes a link to
-# /var/opt/cni: a CNI DaemonSet installs its own plugin into /opt/cni/bin
-# (Flannel's does), and containerd looks there.
+# them to /var/opt/cni/bin at boot. Nothing else may be in /opt, and
+# /usr/local may hold only the base's empty directories: anything else would
+# be lost behind the link.
 mkdir -p /usr/libexec/cni
 cp -a /opt/cni/bin/. /usr/libexec/cni/
 rm -rf /opt/cni /var/opt/cni
-ln -s /var/opt/cni /opt/cni
+left=$(
+  find /opt -mindepth 1 -print -quit
+  find /usr/local -mindepth 1 ! -type d -print -quit
+)
+[ -z "$left" ] || {
+  echo "/opt or /usr/local is not empty: $left" >&2
+  exit 1
+}
+[ ! -e /usr/libexec/kubernetes ] || {
+  echo "a package installs into /usr/libexec/kubernetes, which the link would hide" >&2
+  exit 1
+}
+# Replacing these system directories with links is the point here.
+# shellcheck disable=SC2114
+rm -rf /opt /usr/local
+ln -s var/opt /opt
+ln -s ../var/usrlocal /usr/local
+ln -s ../../var/libexec/kubernetes /usr/libexec/kubernetes
 dnf clean all

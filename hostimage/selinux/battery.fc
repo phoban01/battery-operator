@@ -3,3 +3,13 @@
 /run/battery/\.host\.env\.[^/]+	--	gen_context(system_u:object_r:container_ro_file_t,s0)
 /run/battery/not-ready\.d(/.*)?		gen_context(system_u:object_r:container_ro_file_t,s0)
 /etc/battery/flintlockd(/.*)?		gen_context(system_u:object_r:container_file_t,s0)
+#= docs/requirements/11-host-image.md#kubernetes-node
+#/ SHALL
+#/ label each target and every file in it as the base image's policy labels
+#/ the path that links to it.
+# /usr/libexec/kubernetes is a link to /var/libexec/kubernetes. The base
+# policy labels the link's own path bin_t and the target var_t, which the
+# kubelet could not run a driver from, so the target takes the link's label.
+# /var/opt and /var/usrlocal need no line: the base policy already labels
+# them as it labels /opt and /usr/local.
+/var/libexec/kubernetes(/.*)?		gen_context(system_u:object_r:bin_t,s0)
