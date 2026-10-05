@@ -60,8 +60,8 @@ for Hosts.
 
 ## Install with Flux
 
-The examples use `v0.2.1`, the first release that publishes the Manifests
-as an OCI artifact. Use the release you want from the
+The examples use `v0.3.0`. The first release that publishes the Manifests
+as an OCI artifact is `v0.2.1`. Use the release you want from the
 [releases page](https://github.com/phoban01/battery-operator/releases).
 
 ### cert-manager
@@ -148,7 +148,7 @@ spec:
   interval: 10m
   url: oci://ghcr.io/phoban01/battery-operator/manifests
   ref:
-    tag: v0.2.1
+    tag: v0.3.0
 ---
 apiVersion: kustomize.toolkit.fluxcd.io/v1
 kind: Kustomization
@@ -177,7 +177,7 @@ Commit and push. Flux applies cert-manager first, then battery-operator.
 Notes:
 
 - `ref.tag` pins one release. To take patch releases as they come, use
-  `ref.semver` in its place, for example `semver: "0.2.x"`. Flux then
+  `ref.semver` in its place, for example `semver: "0.3.x"`. Flux then
   ignores the commit SHA tags, because they are not versions.
 - `interval` on the `OCIRepository` is how often Flux looks for a new
   artifact. `interval` on the `Kustomization` is how often Flux corrects
@@ -205,7 +205,7 @@ Notes:
 
   ```sh
   flux create source oci battery-operator \
-    --url=oci://ghcr.io/phoban01/battery-operator/manifests --tag=v0.2.1 --interval=10m
+    --url=oci://ghcr.io/phoban01/battery-operator/manifests --tag=v0.3.0 --interval=10m
   flux create kustomization battery-operator \
     --source=OCIRepository/battery-operator --path=./ --prune=true --wait=true \
     --depends-on=cert-manager --interval=1h
@@ -219,7 +219,7 @@ flux get kustomizations battery-operator
 ```
 
 The source shows the revision it pulled, for example
-`v0.2.1@sha256:...`. The `Kustomization` is `Ready` when every object is
+`v0.3.0@sha256:...`. The `Kustomization` is `Ready` when every object is
 ready. If it is not, `flux events --for Kustomization/battery-operator`
 says why.
 
@@ -241,7 +241,7 @@ Get `install.yaml` from the artifact. The flux CLI does this without a
 cluster:
 
 ```sh
-flux pull artifact oci://ghcr.io/phoban01/battery-operator/manifests:v0.2.1 \
+flux pull artifact oci://ghcr.io/phoban01/battery-operator/manifests:v0.3.0 \
   --output ./battery-operator
 ```
 
@@ -250,7 +250,7 @@ and `jq`:
 
 ```sh
 ref=ghcr.io/phoban01/battery-operator/manifests
-layer=$(crane manifest "$ref:v0.2.1" | jq -r '.layers[0].digest')
+layer=$(crane manifest "$ref:v0.3.0" | jq -r '.layers[0].digest')
 mkdir -p battery-operator
 crane blob "$ref@$layer" | tar -xzf - -C battery-operator
 ```
