@@ -224,7 +224,7 @@ Calico's manifest encapsulates pod traffic between Nodes in IP-in-IP (IP
 protocol 4) and peers over BGP (TCP port 179). CAPA's node security group
 admits both. Calico takes a Node's address from the first interface it
 finds that is not on its exclude list. A Host also has its guest bridge,
-`br-battery`. The list has `^br-.*`, so Calico skips the bridge and takes
+`virbr-battery`. The list has `^virbr.*`, so Calico skips the bridge and takes
 the Host's own address. Calico's default needs no change.
 
 Note the cluster's address ranges. You need them for the security group

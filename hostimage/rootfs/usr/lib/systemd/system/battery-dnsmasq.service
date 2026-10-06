@@ -6,7 +6,7 @@
 # stays disabled: this one reads only the file battery-network.service wrote and
 # so serves only the bridge.
 [Unit]
-Description=Host Image: DHCP and DNS for guests on br-battery
+Description=Host Image: DHCP and DNS for guests on virbr-battery
 Documentation=https://github.com/phoban01/battery-operator/blob/main/hostimage/README.md
 Requires=battery-network.service
 After=battery-network.service

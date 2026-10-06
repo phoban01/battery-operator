@@ -1,19 +1,19 @@
-# The bridge br-battery: flintlockd refuses to start without --bridge-name or
+# The bridge virbr-battery: flintlockd refuses to start without --bridge-name or
 # --parent-iface, and puts each MicroVM's tap device on it. The bridge has
 # the Host's address on the guests' subnet, 10.220.0.1/24, and no uplink:
 # bo-dnsmasq.service gives the guests their addresses, and
 # bo-guest-nat.service routes them out through the Host.
 [Unit]
-Description=Bridge br-battery for flintlockd's tap devices
+Description=Bridge virbr-battery for flintlockd's tap devices
 After=network.target
 Before=flintlockd.service
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/bin/sh -c 'ip link show br-battery >/dev/null 2>&1 || ip link add br-battery type bridge'
-ExecStart=/bin/sh -c 'ip addr show dev br-battery | grep -q 10.220.0.1/24 || ip addr add 10.220.0.1/24 dev br-battery'
-ExecStart=/sbin/ip link set br-battery up
+ExecStart=/bin/sh -c 'ip link show virbr-battery >/dev/null 2>&1 || ip link add virbr-battery type bridge'
+ExecStart=/bin/sh -c 'ip addr show dev virbr-battery | grep -q 10.220.0.1/24 || ip addr add 10.220.0.1/24 dev virbr-battery'
+ExecStart=/sbin/ip link set virbr-battery up
 
 [Install]
 WantedBy=multi-user.target

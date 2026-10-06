@@ -10,7 +10,7 @@
 # The network: flintlock gives the guest eth0 for its metadata service
 # (MMDS), and the Pool's interfaces after it, from eth1. systemd-networkd
 # leaves eth0 alone and configures every other Ethernet interface by DHCP;
-# on the trial's Host, dnsmasq on br-battery answers. systemd-resolved takes the
+# on the trial's Host, dnsmasq on virbr-battery answers. systemd-resolved takes the
 # DNS servers from the lease. Boot does not wait for the network: the guest
 # agent needs only network.target, and systemd-networkd-wait-online gives
 # up after 10 seconds for anything that waits for network-online.target.

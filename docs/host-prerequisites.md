@@ -32,7 +32,7 @@ the glossary's *Host prerequisites* is the short form.
 | KVM: a KVM device, `/dev/kvm` | `flintlockd`'s hypervisor runs every MicroVM on it | the device in sysfs and `/dev/kvm` a character device, not opened (EA-031) | `KVMUnavailable` |
 | containerd's thin pool | `flintlockd` puts every MicroVM's volumes on containerd's devmapper snapshotter | looking the pool up in sysfs (EA-032) | `ThinPoolMissing` |
 | The label `battery.liquidmetal-x.dev/host=true` | the Exec Agent runs only on labelled Nodes (EA-004) | the DaemonSet's node selector | no Exec Agent, so no Node report |
-| Guest networking: DHCP and NAT on the bridge `br-battery`, and isolation from the cluster | a MicroVM gets its address from the Host and reaches the outside, and nothing of the cluster | not checked by the Exec Agent; the Host Image provides it (HI-030 to HI-037, HI-075 to HI-080, HI-083) | none: a MicroVM without it has no network, or too much |
+| Guest networking: DHCP and NAT on the bridge `virbr-battery`, and isolation from the cluster | a MicroVM gets its address from the Host and reaches the outside, and nothing of the cluster | not checked by the Exec Agent; the Host Image provides it (HI-030 to HI-037, HI-075 to HI-080, HI-083) | none: a MicroVM without it has no network, or too much |
 
 A Host Image can add reasons of its own through the not ready reason
 directory, `/run/battery/not-ready.d` (EA-033); the agent reports those as
@@ -127,8 +127,8 @@ A MicroVM needs an address, a way out, and a wall between it and the
 cluster. The Host provides this with flintlock's documented bridge option,
 without libvirt:
 
-- `flintlockd` puts each MicroVM's TAP device on the bridge `br-battery`
-  (`--bridge-name br-battery`). The name matches `^br-.*`, which Calico's
+- `flintlockd` puts each MicroVM's TAP device on the bridge `virbr-battery`
+  (`--bridge-name virbr-battery`). The name matches `^virbr.*`, which Calico's
   IP address autodetection skips, so Calico never takes the bridge's
   address as the Node's (HI-083).
 - The bridge has the first address of the guest subnet, and a DHCP and DNS

@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
-# Routes the MicroVMs on br-battery out through the Host (bo-guest-nat.service):
+# Routes the MicroVMs on virbr-battery out through the Host (bo-guest-nat.service):
 # IP forwarding on, and NAT (masquerade) for their subnet, 10.220.0.0/24,
 # out of whichever interface the Host routes to. Idempotent: a rule is added
 # only when it is not there.
 #
 # k3s keeps its own rules in its own chains (KUBE-*, FLANNEL-*), and adds
 # its jumps to the built-in chains beside these. The rules here match only
-# br-battery and its subnet, so they leave the pods' traffic alone. Each has the
+# virbr-battery and its subnet, so they leave the pods' traffic alone. Each has the
 # comment bo-trial, to find them.
 set -euo pipefail
 
 subnet=10.220.0.0/24
-bridge=br-battery
+bridge=virbr-battery
 
 # k3s turns forwarding on too; /etc/sysctl.d/90-bo-trial.conf keeps it on
 # from boot.

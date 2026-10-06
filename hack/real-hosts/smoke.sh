@@ -7,7 +7,7 @@
 #   2. The Client Library claims one, runs `uname -a` in it through the Exec
 #      Agent on the Host, and releases it (smoke/main.go, run on the Host).
 #   3. A claimed MicroVM reaches the outside: it has an address by DHCP on
-#      br-battery, a route out through the Host's NAT and DNS, and gets an HTTP
+#      virbr-battery, a route out through the Host's NAT and DNS, and gets an HTTP
 #      answer from https://github.com.
 #   4. A MicroVM survives a restart of the Host's flintlockd, and the Pool
 #      stays Ready and serves a claim afterwards.

@@ -154,7 +154,7 @@ updates it on purpose, and a pull request shows the change.
 | `battery-host-config` | validates the Host configuration file, writes `/run/battery/host.env`, labelled for containers | HI-050 to HI-052, HI-065 |
 | `battery-kvm` | refuses unless `/dev/kvm` opens for reading and writing | HI-011 |
 | `battery-thin-pool` | creates the thin pool once; leaves an existing one alone | HI-020 to HI-023 |
-| `battery-network` | bridge `br-battery`, forwarding, NAT, guest firewall, `flintlockd`'s endpoint and who may connect to it | HI-030, HI-032 to HI-037, HI-067, HI-069, HI-070, HI-075 to HI-080, HI-083 |
+| `battery-network` | bridge `virbr-battery`, forwarding, NAT, guest firewall, `flintlockd`'s endpoint and who may connect to it | HI-030, HI-032 to HI-037, HI-067, HI-069, HI-070, HI-075 to HI-080, HI-083 |
 | `battery-dnsmasq` | DHCP and DNS on the bridge | HI-031 |
 | `battery-flintlockd-certs` | makes `/etc/battery/flintlockd` for the Exec Agent, owned by its user id and labelled for its container | HI-072 |
 | `containerd` | one containerd for the kubelet and for `flintlockd` | HI-040, HI-066, HI-081 |
@@ -262,8 +262,8 @@ clients there are. The input chain's first rules, for connections from off
 the Host:
 
 ```
-iifname != { "lo", "br-battery" } tcp dport 9090 ip saddr @flintlockd_clients counter accept
-iifname != { "lo", "br-battery" } tcp dport 9090 counter drop
+iifname != { "lo", "virbr-battery" } tcp dport 9090 ip saddr @flintlockd_clients counter accept
+iifname != { "lo", "virbr-battery" } tcp dport 9090 counter drop
 ```
 
 `flintlockd_clients` is `FLINTLOCKD_CLIENT_CIDRS`: the Operator's pod
@@ -632,17 +632,17 @@ not the API server's Service.
 ## Networking notes
 
 - Guest networking is flintlock's documented bridge option: TAP devices on
-  `br-battery`, with DHCP and NAT, and no libvirt. The image adds isolation.
+  `virbr-battery`, with DHCP and NAT, and no libvirt. The image adds isolation.
   The bridge is the default rather than macvtap, because macvtap does not
   work on AWS, whose network drops unknown MAC addresses, and it would put
   guests on the cloud network.
-- The bridge's name matches `^br-.*`, an entry of the default exclude list
+- The bridge's name matches `^virbr.*`, an entry of the default exclude list
   of Calico's IP address autodetection (`DEFAULT_INTERFACES_TO_EXCLUDE` in
   `node/pkg/lifecycle/startup/autodetection/autodetection_linux.go`, the
   same in v3.31.2 and v3.32.2). Calico's default method, `first-found`,
   skips it, so calico-node never takes the gateway address as the Node's
   (HI-083). Until #212 the bridge was `flbr0`, which is not on the list. A
-  Host that boots this image has `br-battery` and no `flbr0`. Its MicroVMs
+  Host that boots this image has `virbr-battery` and no `flbr0`. Its MicroVMs
   do not survive the reboot in any case. `lib.sh` names the bridge
   (`BATTERY_BRIDGE`), and `battery-network` passes the name to
   `flintlockd` in `/run/battery/flintlockd.env`.

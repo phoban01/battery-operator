@@ -16,9 +16,9 @@
 # - Firecracker, and flintlockd with its exec API, serving with mutual TLS
 #   on the Host's address (FLINTLOCKD_IFACE) once the Exec Agent has
 #   written its certificates to /etc/battery/flintlockd (flintlockd.path).
-# - The bridge br-battery, which flintlockd requires one of (--bridge-name or
+# - The bridge virbr-battery, which flintlockd requires one of (--bridge-name or
 #   --parent-iface) to start, and puts each MicroVM's tap device on.
-# - A network for the MicroVMs on br-battery, 10.220.0.0/24: dnsmasq
+# - A network for the MicroVMs on virbr-battery, 10.220.0.0/24: dnsmasq
 #   (bo-dnsmasq.service) gives each guest an address, the bridge 10.220.0.1
 #   as its gateway, and the bridge as its DNS server, which forwards to the
 #   Host's resolvers. bo-guest-nat.service turns on IP forwarding and
@@ -113,13 +113,13 @@ log:
   level: warn
 EOF
 
-# DHCP and DNS for the MicroVMs, on br-battery alone. dnsmasq adds loopback to
+# DHCP and DNS for the MicroVMs, on virbr-battery alone. dnsmasq adds loopback to
 # the interfaces it serves unless told not to. The range leaves room for
 # addresses given by hand below .10 and above .250; a MicroVM gets a new
 # MAC address every time, so leases are short. DNS goes to the Host's
 # upstream resolvers, not to systemd-resolved's stub on 127.0.0.53.
 cat >/etc/bo-trial/dnsmasq.conf <<'EOF'
-interface=br-battery
+interface=virbr-battery
 except-interface=lo
 bind-interfaces
 no-hosts
@@ -156,4 +156,4 @@ dmsetup status flintlock-thinpool >/dev/null
 ctr version >/dev/null
 systemctl is-active --quiet bo-dnsmasq.service
 iptables -t nat -S POSTROUTING | grep -q bo-trial
-echo "$(hostname): thin pool, containerd $(containerd --version | awk '{print $3}'), $(firecracker --version | head -1), flintlockd $(flintlockd version --short 2>/dev/null), dnsmasq ${DNSMASQ_VERSION} on br-battery"
+echo "$(hostname): thin pool, containerd $(containerd --version | awk '{print $3}'), $(firecracker --version | head -1), flintlockd $(flintlockd version --short 2>/dev/null), dnsmasq ${DNSMASQ_VERSION} on virbr-battery"

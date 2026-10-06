@@ -538,8 +538,8 @@ dnsf=$work/net/dnsmasq.conf
 expect "network creates the bridge" has "$LIBEXEC/network" 'ip link add "\$bridge" type bridge'
 expect "the bridge takes the gateway address of the configured subnet" has "$LIBEXEC/network" 'ip addr add "\$BATTERY_GATEWAY/\$BATTERY_PREFIX" dev "\$bridge"'
 expect "flintlockd attaches TAP interfaces to the bridge battery-network names" has "$UNITS/flintlockd.service" '--bridge-name \$\{BATTERY_BRIDGE\} '
-expect "battery-network gives flintlockd the bridge's name" grep -qx 'BATTERY_BRIDGE=br-battery' "$work/net/flintlockd.env"
-expect "the bridge is named br-battery" has "$LIBEXEC/lib.sh" '^BATTERY_BRIDGE=br-battery$'
+expect "battery-network gives flintlockd the bridge's name" grep -qx 'BATTERY_BRIDGE=virbr-battery' "$work/net/flintlockd.env"
+expect "the bridge is named virbr-battery" has "$LIBEXEC/lib.sh" '^BATTERY_BRIDGE=virbr-battery$'
 
 #= docs/requirements/11-host-image.md#image-networking
 #= type=test
@@ -548,10 +548,10 @@ expect "the bridge is named br-battery" has "$LIBEXEC/lib.sh" '^BATTERY_BRIDGE=b
 # Calico's first-found method skips an interface whose name matches its
 # exclude list (DEFAULT_INTERFACES_TO_EXCLUDE in
 # node/pkg/lifecycle/startup/autodetection/autodetection_linux.go, the same
-# in v3.31.2 and v3.32.2). ^br-.* is the entry the bridge's name takes. A
+# in v3.31.2 and v3.32.2). ^virbr.* is the entry the bridge's name takes. A
 # name off the list lets calico-node take the gateway address as the Node's.
 bridge_name=$(sed -n 's/^BATTERY_BRIDGE=//p' "$LIBEXEC/lib.sh")
-expect "the bridge's name matches Calico's ^br-.* exclude" grep -qE '^br-' <<<"$bridge_name"
+expect "the bridge's name matches Calico's ^virbr.* exclude" grep -qE '^virbr' <<<"$bridge_name"
 expect "the bridge's name fits Linux's 15 characters" test "${#bridge_name}" -ge 4 -a "${#bridge_name}" -le 15
 
 #= docs/requirements/11-host-image.md#image-networking
@@ -559,7 +559,7 @@ expect "the bridge's name fits Linux's 15 characters" test "${#bridge_name}" -ge
 #/ The Host Image SHALL run a DHCP and DNS service bound to the
 #/ bridge so that guests obtain an address, gateway and resolver without
 #/ static configuration.
-expect "dnsmasq serves the bridge only" has "$dnsf" '^interface=br-battery$'
+expect "dnsmasq serves the bridge only" has "$dnsf" '^interface=virbr-battery$'
 expect "dnsmasq hands out the subnet" has "$dnsf" '^dhcp-range=10\.200\.4\.10,10\.200\.7\.254,255\.255\.252\.0,12h$'
 expect "dnsmasq hands out the gateway" has "$dnsf" '^dhcp-option=option:router,10\.200\.4\.1$'
 expect "dnsmasq hands out the resolver" has "$dnsf" '^dhcp-option=option:dns-server,10\.200\.4\.1$'
@@ -578,22 +578,22 @@ expect "guests are masqueraded out of the primary interface" has "$nftf" 'ip sad
 #= type=test
 #/ The Host Image SHALL drop traffic from the guest subnet to the instance
 #/ metadata service addresses.
-expect "the metadata service is dropped" has "$nftf" 'iifname "br-battery" ip daddr 169\.254\.169\.254 drop'
-expect "the IPv6 metadata service is dropped" has "$nftf" 'iifname "br-battery" ip6 daddr fd00:ec2::254 drop'
+expect "the metadata service is dropped" has "$nftf" 'iifname "virbr-battery" ip daddr 169\.254\.169\.254 drop'
+expect "the IPv6 metadata service is dropped" has "$nftf" 'iifname "virbr-battery" ip6 daddr fd00:ec2::254 drop'
 
 #= docs/requirements/11-host-image.md#image-networking
 #= type=test
 #/ The Host Image SHALL drop traffic from the guest subnet to the Host's own
 #/ `flintlockd`, kubelet, Exec Agent and metrics ports.
 expect "the kubelet, Exec Agent, flintlockd and metrics ports are dropped" \
-  has "$nftf" 'iifname "br-battery" tcp dport \{ 9090, 8090, 10248, 10250, 10255, 10256, 10270, 1338 \} drop'
+  has "$nftf" 'iifname "virbr-battery" tcp dport \{ 9090, 8090, 10248, 10250, 10255, 10256, 10270, 1338 \} drop'
 
 #= docs/requirements/11-host-image.md#image-networking
 #= type=test
 #/ The Host Image SHALL drop traffic from the guest subnet to every
 #/ protected CIDR listed in the Host configuration file.
 expect "the protected CIDRs are a set" has "$nftf" 'elements = \{ 10\.0\.0\.0/16, 192\.168\.0\.0/16 \}'
-expect "traffic to the protected set is dropped" has "$nftf" 'iifname "br-battery" ip daddr @protected drop'
+expect "traffic to the protected set is dropped" has "$nftf" 'iifname "virbr-battery" ip daddr @protected drop'
 drop_line=$(grep -n '@protected drop' "$nftf" | tail -n 1 | cut -d: -f1)
 accept_line=$(grep -n 'oifname "eth0" accept' "$nftf" | cut -d: -f1)
 expect "the drops come before guests are let out" test "${drop_line:-9999}" -lt "${accept_line:-0}"
@@ -603,15 +603,15 @@ expect "the drops come before guests are let out" test "${drop_line:-9999}" -lt 
 #/ The Host Image SHALL allow traffic from the guest subnet to the bridge
 #/ gateway address only on the DHCP and DNS ports and the gateway service
 #/ ports, and SHALL keep every other port on the gateway closed to guests.
-expect "DHCP is allowed, as a broadcast and on the gateway" has "$nftf" 'iifname "br-battery" ip daddr \{ 255\.255\.255\.255, 10\.200\.4\.1 \} udp dport 67 accept'
-expect "DNS is allowed on the gateway" has "$nftf" 'iifname "br-battery" ip daddr 10\.200\.4\.1 udp dport 53 accept'
-expect "DNS over TCP is allowed on the gateway" has "$nftf" 'iifname "br-battery" ip daddr 10\.200\.4\.1 tcp dport 53 accept'
+expect "DHCP is allowed, as a broadcast and on the gateway" has "$nftf" 'iifname "virbr-battery" ip daddr \{ 255\.255\.255\.255, 10\.200\.4\.1 \} udp dport 67 accept'
+expect "DNS is allowed on the gateway" has "$nftf" 'iifname "virbr-battery" ip daddr 10\.200\.4\.1 udp dport 53 accept'
+expect "DNS over TCP is allowed on the gateway" has "$nftf" 'iifname "virbr-battery" ip daddr 10\.200\.4\.1 tcp dport 53 accept'
 # DHCP's and DNS's are the only accepts for guests in the input chain.
-accepts=$(awk '/chain input/ { on = 1 } on && /^\t}/ { exit } on && /^[[:space:]]*iifname "br-battery".* accept$/ { n++ } END { print n + 0 }' "$nftf")
+accepts=$(awk '/chain input/ { on = 1 } on && /^\t}/ { exit } on && /^[[:space:]]*iifname "virbr-battery".* accept$/ { n++ } END { print n + 0 }' "$nftf")
 expect "no other port on the gateway is open to guests" test "$accepts" = 3
-expect "everything else from the bridge is dropped" has "$nftf" '^[[:space:]]*iifname "br-battery" drop$'
+expect "everything else from the bridge is dropped" has "$nftf" '^[[:space:]]*iifname "virbr-battery" drop$'
 last_input=$(awk '/chain input/ { on = 1 } on && /^\t}/ { exit } on && /(accept|drop)$/ { l = $0 } END { print l }' "$nftf")
-expect "the drop is the input chain's last rule" test "$(echo "$last_input" | xargs)" = 'iifname br-battery drop'
+expect "the drop is the input chain's last rule" test "$(echo "$last_input" | xargs)" = 'iifname virbr-battery drop'
 
 #= docs/requirements/11-host-image.md#image-networking
 #= type=test
@@ -778,7 +778,7 @@ fi
 expect "the rendered firewall admits only the Exec Agent's user id to flintlockd from the Host" \
   has "$nftf" '^[[:space:]]*oifname "lo" tcp dport 9090 meta skuid != 65532 counter reject with tcp reset$'
 expect "the rendered firewall drops flintlockd's port from off the Host outside the Operator's pod network" \
-  has "$nftf" '^[[:space:]]*iifname != \{ "lo", "br-battery" \} tcp dport 9090 counter drop$'
+  has "$nftf" '^[[:space:]]*iifname != \{ "lo", "virbr-battery" \} tcp dport 9090 counter drop$'
 expect "battery-network loads the rules before flintlockd starts" has "$UNITS/battery-network.service" '^Before=flintlockd\.service'
 
 #= docs/requirements/11-host-image.md#image-flintlockd
