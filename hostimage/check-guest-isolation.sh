@@ -67,6 +67,8 @@ outside=192.0.2.1
 pod=10.244.0.2
 service=10.96.0.10
 nftf=$C/net/guest-firewall.nft
+# The guest bridge, as lib.sh names it.
+bridge=$(sed -n 's/^BATTERY_BRIDGE=//p' "$libexec/lib.sh")
 
 # render CONF: host-config with CONF as the Host configuration file, then
 # the firewall into $nftf. Fails when host-config refuses CONF.
@@ -80,10 +82,10 @@ render() {
 }
 
 # chain NAME prints the rules of a rendered chain, one per line, without
-# comments or indentation.
+# comments or indentation, and with the bridge's name as BRIDGE.
 chain() {
   awk -v c="$1" '$0 ~ "^\tchain " c " \\{" { on = 1; next } on && /^\t\}/ { exit } on' "$nftf" |
-    sed -e 's/#.*//' -e 's/^[[:space:]]*//' -e '/^$/d'
+    sed -e 's/#.*//' -e 's/^[[:space:]]*//' -e '/^$/d' -e "s/\"$bridge\"/\"BRIDGE\"/g"
 }
 
 # HI-078: with no Host configuration file, the default opens no port on the
@@ -94,15 +96,15 @@ if render "$C.absent.conf"; then
   else
     fail "host.env lacks BATTERY_GATEWAY_SERVICE_PORTS="
   fi
-  accepts=$(chain input | grep '^iifname "flbr0".*accept$' | sed "s/10\\.220\\.0\\.1/GW/g")
-  want=$(printf '%s\n' 'iifname "flbr0" ip daddr { 255.255.255.255, GW } udp dport 67 accept' \
-    'iifname "flbr0" ip daddr GW udp dport 53 accept' 'iifname "flbr0" ip daddr GW tcp dport 53 accept')
+  accepts=$(chain input | grep '^iifname "BRIDGE".*accept$' | sed "s/10\\.220\\.0\\.1/GW/g")
+  want=$(printf '%s\n' 'iifname "BRIDGE" ip daddr { 255.255.255.255, GW } udp dport 67 accept' \
+    'iifname "BRIDGE" ip daddr GW udp dport 53 accept' 'iifname "BRIDGE" ip daddr GW tcp dport 53 accept')
   if [ "$accepts" = "$want" ]; then
     ok "by default guests reach only DHCP and DNS on the gateway"
   else
     fail "by default the input chain accepts from guests: $(printf '%s\n' "$accepts" | tr '\n' ';')"
   fi
-  if chain input | grep -q '^iifname != { "flbr0", "lo" }'; then
+  if chain input | grep -q '^iifname != { "BRIDGE", "lo" }'; then
     fail "by default the input chain has a rule for gateway service ports"
   else
     ok "by default the input chain has no rule for gateway service ports"
@@ -141,12 +143,12 @@ if grep -qx 'BATTERY_GATEWAY_SERVICE_PORTS=5000,3128' "$C/run/host.env"; then
 else
   fail "host.env's gateway service ports are: $(grep GATEWAY_SERVICE_PORTS "$C/run/host.env")"
 fi
-if printf '%s\n' "$input" | grep -qxF "iifname \"flbr0\" ip daddr $gateway tcp dport { 5000, 3128 } accept"; then
+if printf '%s\n' "$input" | grep -qxF "iifname \"BRIDGE\" ip daddr $gateway tcp dport { 5000, 3128 } accept"; then
   ok "guests may reach TCP ports 5000 and 3128 on the gateway"
 else
   fail "the input chain does not accept guests on ports 5000 and 3128 of the gateway: $(printf '%s\n' "$input" | tr '\n' ';')"
 fi
-if printf '%s\n' "$input" | grep -qxF "iifname != { \"flbr0\", \"lo\" } ip daddr $gateway tcp dport { 5000, 3128 } drop"; then
+if printf '%s\n' "$input" | grep -qxF "iifname != { \"BRIDGE\", \"lo\" } ip daddr $gateway tcp dport { 5000, 3128 } drop"; then
   ok "ports 5000 and 3128 on the gateway are dropped on every interface but the bridge and loopback"
 else
   fail "the input chain does not drop ports 5000 and 3128 of the gateway from other interfaces"
@@ -160,13 +162,13 @@ fi
 # HI-075: after the drops, a guest's packet leaves by the primary
 # interface or not at all.
 forward=$(chain forward)
-want=$(printf '%s\n' 'iifname "flbr0" oifname "eth0" accept' 'iifname "flbr0" drop')
-if printf '%s\n' "$forward" | grep -A1 -xF 'iifname "flbr0" oifname "eth0" accept' | diff -q - <(echo "$want") >/dev/null; then
+want=$(printf '%s\n' 'iifname "BRIDGE" oifname "eth0" accept' 'iifname "BRIDGE" drop')
+if printf '%s\n' "$forward" | grep -A1 -xF 'iifname "BRIDGE" oifname "eth0" accept' | diff -q - <(echo "$want") >/dev/null; then
   ok "the forward chain lets guests out of the primary interface and drops them towards every other"
 else
-  fail "the forward chain's rules for the bridge are: $(printf '%s\n' "$forward" | grep '^iifname "flbr0"' | tr '\n' ';')"
+  fail "the forward chain's rules for the bridge are: $(printf '%s\n' "$forward" | grep '^iifname "BRIDGE"' | tr '\n' ';')"
 fi
-bridge_accepts=$(printf '%s\n' "$forward" | grep '^iifname "flbr0"' | grep -c 'accept$')
+bridge_accepts=$(printf '%s\n' "$forward" | grep '^iifname "BRIDGE"' | grep -c 'accept$')
 if [ "$bridge_accepts" = 1 ]; then
   ok "the primary interface is the only way out the forward chain accepts for guests"
 else
@@ -174,8 +176,8 @@ else
 fi
 
 # HI-076: the destination the guest asked for, before kube-proxy's DNAT.
-original=$(printf '%s\n' "$forward" | grep -n -xF 'iifname "flbr0" ct original ip daddr @protected drop' | cut -d: -f1)
-accept=$(printf '%s\n' "$forward" | grep -n -xF 'iifname "flbr0" oifname "eth0" accept' | cut -d: -f1)
+original=$(printf '%s\n' "$forward" | grep -n -xF 'iifname "BRIDGE" ct original ip daddr @protected drop' | cut -d: -f1)
+accept=$(printf '%s\n' "$forward" | grep -n -xF 'iifname "BRIDGE" oifname "eth0" accept' | cut -d: -f1)
 if [ -n "$original" ] && [ -n "$accept" ] && [ "$original" -lt "$accept" ]; then
   ok "guest traffic whose original destination is protected is dropped before guests are let out"
 else
@@ -185,21 +187,21 @@ fi
 # HI-077: every rule of the input chain that accepts from the bridge names
 # the gateway, or is DHCP's broadcast, and the chain ends with a drop.
 input=$(chain input)
-stray=$(printf '%s\n' "$input" | grep '^iifname "flbr0".*accept$' |
+stray=$(printf '%s\n' "$input" | grep '^iifname "BRIDGE".*accept$' |
   grep -vE "ip daddr ($gateway|\\{ 255\\.255\\.255\\.255, $gateway \\}) " || true)
 if [ -z "$stray" ]; then
   ok "every input rule that accepts from guests names the gateway, or the broadcast address for DHCP"
 else
   fail "input rules accept guests on other addresses: $stray"
 fi
-if [ "$(printf '%s\n' "$input" | tail -n 1)" = 'iifname "flbr0" drop' ]; then
+if [ "$(printf '%s\n' "$input" | tail -n 1)" = 'iifname "BRIDGE" drop' ]; then
   ok "the input chain drops everything else from guests"
 else
   fail "the input chain's last rule is: $(printf '%s\n' "$input" | tail -n 1)"
 fi
 
 # Enforcement, where this machine allows it. A new user and network
-# namespace is the Host, with the rendered ruleset, a bridge flbr0 at the
+# namespace is the Host, with the rendered ruleset, the bridge at the
 # gateway, eth0 with the primary address, and cni0 to a pod. kube-proxy is
 # a DNAT rule that sends the Service to an address outside every protected
 # range. The guest, the outside and the pod are network namespaces of their
@@ -211,7 +213,7 @@ fi
 enforce() {
   unshare --user --map-root-user --net bash -c '
     set -u
-    nftf=$1 gateway=$2 guest=$3 primary=$4 outside=$5 pod=$6 service=$7
+    nftf=$1 gateway=$2 guest=$3 primary=$4 outside=$5 pod=$6 service=$7 bridge=$8
     ns() { unshare --net sleep 30 >/dev/null 2>&1 & echo $!; }
     inns() { local p=$1; shift; nsenter -t "$p" -n "$@"; }
     {
@@ -219,8 +221,8 @@ enforce() {
       sleep 0.3
       ip link set lo up &&
       sysctl -q -w net.ipv4.ip_forward=1 &&
-      ip link add flbr0 type bridge && ip addr add $gateway/22 dev flbr0 && ip link set flbr0 up &&
-      ip link add gh0 type veth peer name g0 && ip link set gh0 master flbr0 && ip link set gh0 up &&
+      ip link add "$bridge" type bridge && ip addr add $gateway/22 dev "$bridge" && ip link set "$bridge" up &&
+      ip link add gh0 type veth peer name g0 && ip link set gh0 master "$bridge" && ip link set gh0 up &&
       ip link set g0 netns "$g" &&
       ip link add eth0 type veth peer name o0 && ip addr add $primary/24 dev eth0 && ip link set eth0 up &&
       ip link set o0 netns "$o" &&
@@ -275,7 +277,7 @@ EOF
     [ "${n:-0}" = 0 ] || echo "pod forwarded"
     try service $service 80
     kill "$g" "$o" "$p" 2>/dev/null
-  ' _ "$nftf" $gateway $guest $primary $outside $pod $service 2>/dev/null
+  ' _ "$nftf" $gateway $guest $primary $outside $pod $service "$bridge" 2>/dev/null
 }
 if ! command -v nft >/dev/null 2>&1 || ! command -v ip >/dev/null 2>&1 || ! command -v nsenter >/dev/null 2>&1; then
   printf 'skip  enforcement: nft, ip or nsenter is not installed\n'

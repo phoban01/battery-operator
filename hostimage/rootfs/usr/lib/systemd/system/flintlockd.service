@@ -76,7 +76,7 @@ ExecStart=/usr/bin/flintlockd run \
     --tls-client-validate \
     --tls-client-ca /etc/battery/flintlockd/client-ca.crt \
     --enable-exec-api \
-    --bridge-name flbr0 \
+    --bridge-name ${BATTERY_BRIDGE} \
     --containerd-socket /run/containerd/containerd.sock \
     --containerd-hosts-dir /etc/containerd/certs.d \
     --state-dir /var/lib/flintlock \

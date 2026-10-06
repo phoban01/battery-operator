@@ -58,7 +58,7 @@ FIRECRACKER_VERSION="${FIRECRACKER_VERSION:-v1.12.1}"
 FLINTLOCK_VERSION="${FLINTLOCK_VERSION:-v0.15.2}"
 REGISTRY_VERSION="${REGISTRY_VERSION:-3.1.2}"
 # Ubuntu 24.04's dnsmasq-base, from noble-security, for the guests' DHCP and
-# DNS on flbr0. An apt version: when Ubuntu replaces it with a newer
+# DNS on virbr-battery. An apt version: when Ubuntu replaces it with a newer
 # security update, set the new one here.
 DNSMASQ_VERSION="${DNSMASQ_VERSION:-2.90-2ubuntu0.4}"
 GUEST_AGENT_VERSION="${GUEST_AGENT_VERSION:-0.4.0}"
@@ -101,7 +101,11 @@ limactl_() { mac_run limactl "$@"; }
 # the lima driver has a Mac to keep awake.
 keep_awake() {
 	[[ "${HOST_DRIVER}" == lima ]] || return 0
-	mac_run caffeinate -i -t "${KEEP_AWAKE_SECS:-7200}" >/dev/null 2>&1 &
+	# caffeinate, or `mac` on Linux, is the background process itself, not
+	# mac_run in a copy of this shell that looks like the script to pgrep -f.
+	local cmd=(caffeinate -i -t "${KEEP_AWAKE_SECS:-7200}")
+	[[ "$(uname -s)" == Darwin ]] || cmd=(mac sh -c "$(printf '%q ' "${cmd[@]}")")
+	"${cmd[@]}" >/dev/null 2>&1 &
 	disown
 }
 

@@ -206,9 +206,11 @@ Install a CNI. This page uses Calico, as the Cluster API quick start does:
 
 ```sh
 kubectl --kubeconfig battery.kubeconfig apply \
-  -f https://raw.githubusercontent.com/projectcalico/calico/v3.32.2/manifests/calico.yaml
+  -f https://raw.githubusercontent.com/projectcalico/calico/v3.31.2/manifests/calico.yaml
 kubectl --kubeconfig battery.kubeconfig get nodes
 ```
+
+Calico v3.32.2 works too.
 
 The Nodes go `Ready` when the CNI runs. The CNI and kube-proxy DaemonSets
 must tolerate the Host taint, `battery.liquidmetal-x.dev/host=true:NoSchedule`.
@@ -221,9 +223,9 @@ they need nothing more. See
 Calico's manifest encapsulates pod traffic between Nodes in IP-in-IP (IP
 protocol 4) and peers over BGP (TCP port 179). CAPA's node security group
 admits both. Calico takes a Node's address from the first interface it
-finds; a Host also has its guest bridge, `flbr0`. To pin the address to
-the Node's own, set `IP_AUTODETECTION_METHOD=kubernetes-internal-ip` on
-the `calico-node` DaemonSet.
+finds that is not on its exclude list. A Host also has its guest bridge,
+`virbr-battery`. The list has `^virbr.*`, so Calico skips the bridge and takes
+the Host's own address. Calico's default needs no change.
 
 Note the cluster's address ranges. You need them for the security group
 and the Host pool. With CAPA's defaults they are:

@@ -32,6 +32,8 @@ libexec=${2:-/usr/libexec/battery}
 defaults=${3:-/usr/share/battery/host.conf.defaults}
 unit=${4:-/usr/lib/systemd/system/flintlockd.service}
 C=$work/flintlockd-access-cases
+# The guest bridge, as lib.sh names it.
+bridge=$(sed -n 's/^BATTERY_BRIDGE=//p' "$libexec/lib.sh")
 failures=0
 ok() { printf 'ok    %s\n' "$*"; }
 fail() {
@@ -102,8 +104,8 @@ if render "$C.absent.conf"; then
     fail "the output chain for the default user id is: $(output_chain)"
   fi
   if grep -qx 'BATTERY_EXEC_AGENT_UID=65532' "$C/run/host.env"; then ok "host.env carries the default user id"; else fail "host.env lacks BATTERY_EXEC_AGENT_UID=65532"; fi
-  want=$(printf '%s\n' "iifname != { \"lo\", \"flbr0\" } tcp dport $port ip saddr @flintlockd_clients counter accept" \
-    "iifname != { \"lo\", \"flbr0\" } tcp dport $port counter drop")
+  want=$(printf '%s\n' "iifname != { \"lo\", \"$bridge\" } tcp dport $port ip saddr @flintlockd_clients counter accept" \
+    "iifname != { \"lo\", \"$bridge\" } tcp dport $port counter drop")
   if [ "$(client_rules)" = "$want" ]; then
     ok "connections to flintlockd from off the Host are accepted from the Operator's pod network and dropped from everywhere else"
   else

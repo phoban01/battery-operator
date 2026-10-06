@@ -6,7 +6,7 @@
 #
 # The flags follow flintlock-runner's Host Image unit
 # (image/rootfs/usr/lib/systemd/system/flintlockd.service) where they can:
-# the exec API on, the bridge flbr0, flintlockd's containerd and state
+# the exec API on, the bridge virbr-battery, flintlockd's containerd and state
 # directory. What differs is what battery-operator's ADR 0002 changes: the
 # endpoint is the Host's internal address, not loopback, and the transport
 # is TLS with client certificates validated against the flintlockd client
@@ -29,7 +29,7 @@ exec /usr/local/bin/flintlockd run \
 	--tls-client-validate \
 	--tls-client-ca "${dir}/client-ca.crt" \
 	--enable-exec-api \
-	--bridge-name flbr0 \
+	--bridge-name virbr-battery \
 	--containerd-socket /run/containerd/containerd.sock \
 	--state-dir /var/lib/flintlock \
 	--firecracker-bin /usr/local/bin/firecracker \

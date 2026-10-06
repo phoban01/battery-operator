@@ -38,8 +38,11 @@ CP_TEMPLATE="${CP_TEMPLATE:-template:ubuntu-24.04}"
 # Calico's default pool would overlap them.
 POD_CIDR="${POD_CIDR:-10.244.0.0/16}"
 SERVICE_CIDR="${SERVICE_CIDR:-10.96.0.0/12}"
-# Calico's version is the Hosts page's (site/hosts.md).
-CALICO_VERSION="${CALICO_VERSION:-v3.32.2}"
+# Calico's version is the Hosts page's (site/hosts.md), and the checksum is
+# that of its manifest, manifests/calico.yaml at the tag. Set both to use
+# another version.
+CALICO_VERSION="${CALICO_VERSION:-v3.31.2}"
+CALICO_MANIFEST_SHA256="${CALICO_MANIFEST_SHA256:-c74c5a073af478dc841c909de708bd93242d685a6543616638c8f81b5d8daa71}"
 LOCAL_PATH_VERSION="${LOCAL_PATH_VERSION:-v0.0.37}"
 
 # The Host VM.
@@ -134,7 +137,12 @@ use_host() {
 }
 
 # keep_mac_awake is keep_awake for this proof, whose Host is not a Lima VM.
+# It starts caffeinate, or `mac` on Linux, as the background process
+# itself, not mac_run in a copy of this shell, so a background job never
+# looks like up.sh or smoke.sh to `pgrep -f`.
 keep_mac_awake() {
-	mac_run caffeinate -i -t "${KEEP_AWAKE_SECS:-7200}" >/dev/null 2>&1 &
+	local cmd=(caffeinate -i -t "${KEEP_AWAKE_SECS:-7200}")
+	[[ "$(uname -s)" == Darwin ]] || cmd=(mac sh -c "$(printf '%q ' "${cmd[@]}")")
+	"${cmd[@]}" >/dev/null 2>&1 &
 	disown
 }

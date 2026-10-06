@@ -49,7 +49,7 @@ Only the KubeadmConfigTemplate is.
 
 | Piece | What |
 |---|---|
-| Control plane | A Lima VM, `bo-kubeadm-cp`: Ubuntu 24.04, 2 CPUs, 3 GiB. containerd, `kubeadm init` at the Host Image's `KUBERNETES_VERSION` (`hostimage/versions.env`), Calico v3.32.2 from the manifest the [Hosts page](../../site/hosts.md) applies, and local-path storage. Its taint is removed, so it runs the Operator and cert-manager. |
+| Control plane | A Lima VM, `bo-kubeadm-cp`: Ubuntu 24.04, 2 CPUs, 3 GiB. containerd, `kubeadm init` at the Host Image's `KUBERNETES_VERSION` (`hostimage/versions.env`), Calico v3.31.2 from the manifest the [Hosts page](../../site/hosts.md) applies, checked against its SHA-256, and local-path storage. Its taint is removed, so it runs the Operator and cert-manager. |
 | Host Image | Built from this checkout with `make host-image` for linux/arm64, and loaded into Docker. |
 | Disk | `bootc install to-disk`, run from the image itself in a privileged container, onto a sparse 20 GiB raw file. A blank 20 GiB file is the thin pool's disk. |
 | Host | A [vfkit](https://github.com/crc-org/vfkit) VM, `bo-kubeadm-host-1`, 4 CPUs, 8 GiB, with nested virtualization, EFI, the two disks, and the user-data as a NoCloud seed. |
@@ -78,9 +78,16 @@ Calico differs from the Hosts page's in three settings, each for the Mac:
   between the VMs but not IP protocol 4: each Node sent IP-in-IP packets
   and neither received one. A cloud network that admits protocol 4
   between Nodes needs no change.
-- `IP_AUTODETECTION_METHOD` is `can-reach=` the shared network's gateway.
-  Calico's default takes the first interface it finds, and on a Lima VM
-  that is Lima's user-mode network, whose address every Lima VM shares.
+- `IP` is empty, not `autodetect`, and the control plane's Node has its
+  address on the shared network in the annotation
+  `projectcalico.org/IPv4Address`. With `IP` empty, calico-node keeps a
+  Node's address when it has one, and autodetects it when it has none
+  (`configureIPsAndSubnets` in Calico's `startup.go`). Calico's default
+  method, `first-found`, takes the first interface it does not exclude, and
+  on a Lima VM that is Lima's user-mode network, whose address every Lima
+  VM shares. The Host has no annotation, so its calico-node runs
+  `first-found`, as on a cloud Node, and must skip the guest bridge
+  (HI-083).
 
 Two more things stand in for what a cloud cluster has:
 
@@ -193,6 +200,29 @@ does. On an M4 Mac, at `main` of 5 October 2026, with SELinux enforcing:
 - Felix chose iptables in its nftables backend, in the `ip filter`, `ip
   nat`, `ip mangle` and `ip raw` tables. The Host's `inet battery` chains
   hook at priority `filter - 10`, before Calico's and kube-proxy's, and a
-  drop there is final. No Calico rule names `flbr0` or the guest subnet.
+  drop there is final. No Calico rule names the guest bridge or the guest
+  subnet.
 - IP-in-IP between the VMs did not pass the Mac, so the proof uses VXLAN
   (see above).
+
+## What the first-found run found
+
+The Host Image's guest bridge was `flbr0`, which is not on Calico's
+interface exclude list (#212). It is now `virbr-battery`. The proof now
+runs Calico v3.31.2 with its default method, `first-found`, on the Host.
+On an M4 Mac, on 6 October 2026:
+
+- The Host had `enp0s1` (192.168.64.27/24), `virbr-battery`
+  (10.220.0.1/16) and `vxlan.calico`, and no `flbr0`. `flintlockd` ran
+  with `--bridge-name virbr-battery`.
+- The Host's calico-node logged `Using autodetected IPv4 address on
+  interface enp0s1: 192.168.64.27/24`. The Calico Node's BGP address was
+  192.168.64.27/24.
+- The control plane kept 192.168.64.26/24 from its annotation and
+  autodetected nothing.
+- Every smoke step passed: `pods`, `pool`, `claim`, `network`,
+  `isolation`, `restart` and `delete`.
+- `enp0s1` comes before the bridge in the Host's interface order, so on
+  this Host first-found takes it whatever the bridge's name. The proof
+  shows the image works with first-found. `hostimage/check.sh` checks the
+  name against Calico's list.

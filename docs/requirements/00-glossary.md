@@ -98,7 +98,7 @@ use. It contains no requirements.
   settings the Host Image reads at boot, which the Host's bootstrap
   configuration writes: the guest subnet, the thin pool device, the
   protected CIDRs, the Host reserve and who may reach `flintlockd`.
-- **guest subnet**: the IPv4 subnet of the bridge `flbr0` on a Host, from
+- **guest subnet**: the IPv4 subnet of the bridge `virbr-battery` on a Host, from
   which the MicroVMs on that Host get their addresses.
 - **not ready reason directory**: `/run/battery/not-ready.d` on a Host, where
   a Host Image writes one file per reason the Host is not ready, and which
