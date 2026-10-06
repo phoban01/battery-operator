@@ -101,7 +101,11 @@ limactl_() { mac_run limactl "$@"; }
 # the lima driver has a Mac to keep awake.
 keep_awake() {
 	[[ "${HOST_DRIVER}" == lima ]] || return 0
-	mac_run caffeinate -i -t "${KEEP_AWAKE_SECS:-7200}" >/dev/null 2>&1 &
+	# caffeinate, or `mac` on Linux, is the background process itself, not
+	# mac_run in a copy of this shell that looks like the script to pgrep -f.
+	local cmd=(caffeinate -i -t "${KEEP_AWAKE_SECS:-7200}")
+	[[ "$(uname -s)" == Darwin ]] || cmd=(mac sh -c "$(printf '%q ' "${cmd[@]}")")
+	"${cmd[@]}" >/dev/null 2>&1 &
 	disown
 }
 

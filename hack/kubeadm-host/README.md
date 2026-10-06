@@ -204,3 +204,25 @@ does. On an M4 Mac, at `main` of 5 October 2026, with SELinux enforcing:
   subnet.
 - IP-in-IP between the VMs did not pass the Mac, so the proof uses VXLAN
   (see above).
+
+## What the first-found run found
+
+The Host Image's guest bridge was `flbr0`, which is not on Calico's
+interface exclude list (#212). It is now `virbr-battery`. The proof now
+runs Calico v3.31.2 with its default method, `first-found`, on the Host.
+On an M4 Mac, on 6 October 2026:
+
+- The Host had `enp0s1` (192.168.64.27/24), `virbr-battery`
+  (10.220.0.1/16) and `vxlan.calico`, and no `flbr0`. `flintlockd` ran
+  with `--bridge-name virbr-battery`.
+- The Host's calico-node logged `Using autodetected IPv4 address on
+  interface enp0s1: 192.168.64.27/24`. The Calico Node's BGP address was
+  192.168.64.27/24.
+- The control plane kept 192.168.64.26/24 from its annotation and
+  autodetected nothing.
+- Every smoke step passed: `pods`, `pool`, `claim`, `network`,
+  `isolation`, `restart` and `delete`.
+- `enp0s1` comes before the bridge in the Host's interface order, so on
+  this Host first-found takes it whatever the bridge's name. The proof
+  shows the image works with first-found. `hostimage/check.sh` checks the
+  name against Calico's list.

@@ -137,7 +137,12 @@ use_host() {
 }
 
 # keep_mac_awake is keep_awake for this proof, whose Host is not a Lima VM.
+# It starts caffeinate, or `mac` on Linux, as the background process
+# itself, not mac_run in a copy of this shell, so a background job never
+# looks like up.sh or smoke.sh to `pgrep -f`.
 keep_mac_awake() {
-	mac_run caffeinate -i -t "${KEEP_AWAKE_SECS:-7200}" >/dev/null 2>&1 &
+	local cmd=(caffeinate -i -t "${KEEP_AWAKE_SECS:-7200}")
+	[[ "$(uname -s)" == Darwin ]] || cmd=(mac sh -c "$(printf '%q ' "${cmd[@]}")")
+	"${cmd[@]}" >/dev/null 2>&1 &
 	disown
 }
