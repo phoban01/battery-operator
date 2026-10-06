@@ -1,8 +1,8 @@
 #!/usr/bin/bash
 # battery-network.service: the guest bridge, forwarding, NAT, the guest firewall
 # and the configuration of the bridge's DHCP and DNS service. This is
-# flintlock's documented bridge option, TAP devices on flbr0 with DHCP and
-# NAT and no libvirt, with isolation added.
+# flintlock's documented bridge option, TAP devices on the bridge
+# (BATTERY_BRIDGE) with DHCP and NAT and no libvirt, with isolation added.
 #
 # `network render DIR` writes the firewall and dnsmasq files into DIR and
 # touches nothing else, so the build's check stage can parse them.
@@ -236,10 +236,13 @@ render_dnsmasq() {
 #/ API only with TLS, on port 9090 of the Host's internal address
 # flintlockd.service reads its endpoint from this file: the address found
 # above, which is the one the Exec Agent is given as
-# $(HOST_IP) and has the serving certificate name.
+# $(HOST_IP) and has the serving certificate name. It reads the bridge's
+# name (--bridge-name) from here too, so lib.sh is the one place that names
+# the bridge.
 render_flintlockd_env() {
   echo "# Written by battery-network.service at every boot. Do not edit."
   echo "BATTERY_FLINTLOCKD_ENDPOINT=$address:$BATTERY_FLINTLOCKD_PORT"
+  echo "BATTERY_BRIDGE=$bridge"
 }
 
 mkdir -p "$out"

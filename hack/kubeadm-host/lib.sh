@@ -38,8 +38,11 @@ CP_TEMPLATE="${CP_TEMPLATE:-template:ubuntu-24.04}"
 # Calico's default pool would overlap them.
 POD_CIDR="${POD_CIDR:-10.244.0.0/16}"
 SERVICE_CIDR="${SERVICE_CIDR:-10.96.0.0/12}"
-# Calico's version is the Hosts page's (site/hosts.md).
-CALICO_VERSION="${CALICO_VERSION:-v3.32.2}"
+# Calico's version is the Hosts page's (site/hosts.md), and the checksum is
+# that of its manifest, manifests/calico.yaml at the tag. Set both to use
+# another version.
+CALICO_VERSION="${CALICO_VERSION:-v3.31.2}"
+CALICO_MANIFEST_SHA256="${CALICO_MANIFEST_SHA256:-c74c5a073af478dc841c909de708bd93242d685a6543616638c8f81b5d8daa71}"
 LOCAL_PATH_VERSION="${LOCAL_PATH_VERSION:-v0.0.37}"
 
 # The Host VM.

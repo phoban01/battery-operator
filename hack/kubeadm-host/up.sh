@@ -39,8 +39,9 @@ step_controlplane() {
 	gw="$(shared_gateway)"
 	[[ -n "${ip}" && -n "${gw}" ]] || die "${CP_NAME} has no address on the shared network (lima0)"
 	log "Making the kubeadm control plane on ${ip}, Kubernetes ${KUBERNETES_VERSION}"
-	cp_root env KUBERNETES_VERSION="${KUBERNETES_VERSION}" NODE_IP="${ip}" GATEWAY_IP="${gw}" \
-		POD_CIDR="${POD_CIDR}" SERVICE_CIDR="${SERVICE_CIDR}" CALICO_VERSION="${CALICO_VERSION}" LOCAL_PATH_VERSION="${LOCAL_PATH_VERSION}" \
+	cp_root env KUBERNETES_VERSION="${KUBERNETES_VERSION}" NODE_IP="${ip}" \
+		POD_CIDR="${POD_CIDR}" SERVICE_CIDR="${SERVICE_CIDR}" CALICO_VERSION="${CALICO_VERSION}" \
+		CALICO_MANIFEST_SHA256="${CALICO_MANIFEST_SHA256}" LOCAL_PATH_VERSION="${LOCAL_PATH_VERSION}" \
 		bash -s <"${KH_HERE}/controlplane/provision.sh"
 
 	# kubeadm's admin kubeconfig, which names the API server by its address

@@ -3,7 +3,7 @@
 #/ guest subnet from the Host configuration file and SHALL configure
 #/ `flintlockd` to attach TAP interfaces to it.
 [Unit]
-Description=Host Image: guest bridge flbr0, NAT and guest firewall
+Description=Host Image: guest bridge br-battery, NAT and guest firewall
 Documentation=https://github.com/phoban01/battery-operator/blob/main/hostimage/README.md
 Requires=battery-host-config.service
 Wants=network-online.target

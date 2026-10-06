@@ -188,13 +188,27 @@ structures looks in use, and must not be refused for it.
   ids, which it reads from the Host configuration file, to the instance
   metadata service addresses and to the Host's own `flintlockd`, kubelet,
   Exec Agent and metrics ports.
+- **HI-083** The Host Image SHALL give the guest bridge a name that matches
+  the default interface exclude list of Calico's IP address autodetection.
 
 Guest networking follows flintlock's documented bridge option: `flintlockd`
-puts each MicroVM's TAP device on the bridge `flbr0`, and the Host gives
+puts each MicroVM's TAP device on the bridge `br-battery`, and the Host gives
 guests DHCP and NAT there, without libvirt. The Host Image adds isolation.
 The bridge is the default rather than macvtap, because macvtap does not
 work on AWS, whose network drops unknown MAC addresses, and it would put
 guests on the cloud network.
+
+The bridge is named `br-battery` for Calico (HI-083). calico-node finds a
+Node's address with its autodetection method, and the default,
+`first-found`, takes the first address on an interface whose name is not on
+its exclude list. A bridge off the list, as `flbr0` was, lets calico-node
+take the gateway address as the Node's, and then it peers and routes on the
+wrong address. The list is `DEFAULT_INTERFACES_TO_EXCLUDE` in Calico's
+`node/pkg/lifecycle/startup/autodetection/autodetection_linux.go`. It is
+the same in v3.31.2 and v3.32.2, and it has `^br-.*`, the prefix of
+Docker's bridges. `br-battery` matches it, so a cluster needs no
+`IP_AUTODETECTION_METHOD` for its Hosts. The name has 10 characters,
+within Linux's limit of 15.
 
 The default guest subnet is `10.220.0.0/16`. It clashes with neither the
 range of AWS's default VPC, `172.31.0.0/16`, nor flintlock's documented

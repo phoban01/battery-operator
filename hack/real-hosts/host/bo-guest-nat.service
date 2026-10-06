@@ -1,8 +1,8 @@
-# Routes the MicroVMs on flbr0 out through the Host (guest-nat.sh): IP
+# Routes the MicroVMs on br-battery out through the Host (guest-nat.sh): IP
 # forwarding, and NAT from 10.220.0.0/24. iptables rules do not survive a
 # reboot, so the script adds them again at every boot.
 [Unit]
-Description=IP forwarding and NAT for the MicroVMs on flbr0
+Description=IP forwarding and NAT for the MicroVMs on br-battery
 After=network.target bo-bridge.service
 Requires=bo-bridge.service
 Before=flintlockd.service

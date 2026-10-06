@@ -17,9 +17,17 @@ BATTERY_HOST_CONF=${BATTERY_HOST_CONF:-/etc/battery/host.conf}
 BATTERY_HOST_DEFAULTS=${BATTERY_HOST_DEFAULTS:-/usr/share/battery/host.conf.defaults}
 BATTERY_HOST_ENV=${BATTERY_HOST_ENV:-$BATTERY_RUN/host.env}
 
-# Fixed names. The bridge and the volume group are flintlock's defaults.
-# The scripts that source this file use them.
-BATTERY_BRIDGE=flbr0
+# Fixed names. The scripts that source this file use them. The volume group
+# is flintlock's default.
+#
+#= docs/requirements/11-host-image.md#image-networking
+#/ The Host Image SHALL give the guest bridge a name that matches the
+#/ default interface exclude list of Calico's IP address autodetection.
+# br-battery matches ^br-.*, so Calico's default first-found method skips
+# the bridge and never takes the gateway address as the Node's. The name is
+# 10 characters, within Linux's limit of 15. flintlockd.service reads it
+# from /run/battery/flintlockd.env, which battery-network writes.
+BATTERY_BRIDGE=br-battery
 BATTERY_VG=flintlock
 BATTERY_METADATA_V4=169.254.169.254
 BATTERY_METADATA_V6=fd00:ec2::254
