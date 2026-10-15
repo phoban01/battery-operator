@@ -315,15 +315,15 @@ ghcr.io/phoban01/battery-operator/guest-rootfs:<version>
 
 The kernel image holds Firecracker's CI kernel 6.1 at `boot/vmlinux`. The
 root filesystem image is Ubuntu 24.04 with systemd and flintlock's guest
-agent, and it configures the Pool's interfaces by DHCP. The release after
-`v0.3.2` is the first to publish them. Its job summary lists each image
+agent, and it configures the Pool's interfaces by DHCP. `v0.3.3` is the
+first release to publish them. Its job summary lists each image
 with its digest.
 
-Edit the Pool in `demo.yaml`. Replace `<version>` in `kernel.image` and
-`rootVolume.containerSource` with that release or a later one, or name
-your own images. `flintlockd` on your Hosts has to be able to pull them.
+The Pool in `demo.yaml` names `v0.3.3`. To use a later release, or your
+own images, change `kernel.image` and `rootVolume.containerSource`.
+`flintlockd` on your Hosts has to be able to pull them.
 The kernel has no virtio-pci, so it boots on Firecracker and not on Cloud
-Hypervisor. flintlock v0.15.2 needs at least 1024 MiB and one network
+Hypervisor. flintlock v0.16.0 needs at least 1024 MiB and one network
 interface per MicroVM. The Pool in it is:
 
 ```yaml
@@ -338,10 +338,10 @@ spec:
     vcpu: 1
     memoryInMb: 1024
     kernel:
-      image: ghcr.io/phoban01/battery-operator/guest-kernel:<version>
+      image: ghcr.io/phoban01/battery-operator/guest-kernel:v0.3.3
       filename: boot/vmlinux
     rootVolume:
-      containerSource: ghcr.io/phoban01/battery-operator/guest-rootfs:<version>
+      containerSource: ghcr.io/phoban01/battery-operator/guest-rootfs:v0.3.3
     interfaces:
       - deviceId: eth1
         type: Tap

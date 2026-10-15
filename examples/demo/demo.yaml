@@ -2,8 +2,8 @@
 # Client Library needs, and a Pool of two warm MicroVMs.
 #
 # The kernel and root filesystem images are the Guest Images
-# (guestimage/README.md). Replace <version> with a release that publishes
-# them: the first is the release after v0.3.2. The real hosts trial
+# (guestimage/README.md), from v0.3.3, the first release that publishes
+# them. A later release works too. The real hosts trial
 # (hack/real-hosts) names its own builds of them instead, which it pushes
 # to each Host's registry on 127.0.0.1:5000.
 apiVersion: v1
@@ -66,10 +66,10 @@ spec:
     vcpu: 1
     memoryInMb: 1024
     kernel:
-      image: ghcr.io/phoban01/battery-operator/guest-kernel:<version>
+      image: ghcr.io/phoban01/battery-operator/guest-kernel:v0.3.3
       filename: boot/vmlinux
     rootVolume:
-      containerSource: ghcr.io/phoban01/battery-operator/guest-rootfs:<version>
+      containerSource: ghcr.io/phoban01/battery-operator/guest-rootfs:v0.3.3
     interfaces:
       - deviceId: eth1
         type: Tap

@@ -10,16 +10,16 @@ spec:
   template:
     vcpu: 2
     memoryInMb: 4096
-    # The Guest Images (guestimage/README.md). Replace <version> with a
-    # release that publishes them: the first is the release after v0.3.2.
+    # The Guest Images (guestimage/README.md), from v0.3.3, the first
+    # release that publishes them. A later release works too.
     kernel:
-      image: ghcr.io/phoban01/battery-operator/guest-kernel:<version>
+      image: ghcr.io/phoban01/battery-operator/guest-kernel:v0.3.3
       filename: boot/vmlinux
       cmdline:
         console: ttyS0
         reboot: k
     rootVolume:
-      containerSource: ghcr.io/phoban01/battery-operator/guest-rootfs:<version>
+      containerSource: ghcr.io/phoban01/battery-operator/guest-rootfs:v0.3.3
     interfaces:
       - deviceId: eth1
         type: Macvtap
