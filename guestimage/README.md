@@ -25,6 +25,21 @@ A Pool names them like this:
       containerSource: ghcr.io/phoban01/battery-operator/guest-rootfs:<version>
 ```
 
+## Which guest images
+
+Use these for any Pool that does not run GitLab CI Jobs: the demo, a first
+try of a cluster, or your own commands through the Exec Agent. They hold
+only what battery and the Exec Agent need.
+
+A Pool that [flintlock-runner](https://github.com/phoban01/flintlock-runner)
+claims for GitLab CI Jobs needs flintlock-runner's guest images,
+`ghcr.io/phoban01/flintlock-runner/guest-kernel` and `guest-rootfs`
+([its guest README](https://github.com/phoban01/flintlock-runner/blob/main/guest/README.md)).
+Their root filesystem starts from this one and adds bash, git, curl and
+`gitlab-runner-helper`, which the Jobs use. Take their references from
+that release's `images.txt`, which pins them by digest. The kernel is the
+same in both projects.
+
 ## Build and check
 
 Each image has one Containerfile, built for linux/amd64 and linux/arm64.

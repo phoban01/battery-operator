@@ -319,6 +319,14 @@ agent, and it configures the Pool's interfaces by DHCP. `v0.3.3` is the
 first release to publish them. Its job summary lists each image
 with its digest.
 
+These images hold only what battery and the Exec Agent need. A Pool that
+[flintlock-runner](https://github.com/phoban01/flintlock-runner) claims for
+GitLab CI Jobs needs flintlock-runner's own guest images instead:
+`ghcr.io/phoban01/flintlock-runner/guest-kernel` and `guest-rootfs`. Their
+root filesystem adds bash, git, curl and `gitlab-runner-helper`, which the
+Jobs use. Take their references from that release's `images.txt`. The two
+projects use the same kernel.
+
 The Pool in `demo.yaml` names `v0.3.3`. To use a later release, or your
 own images, change `kernel.image` and `rootVolume.containerSource`.
 `flintlockd` on your Hosts has to be able to pull them.
