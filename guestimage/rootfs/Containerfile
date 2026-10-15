@@ -1,0 +1,122 @@
+# The Guest Images' root filesystem (docs/requirements/13-guest-image.md):
+# Ubuntu 24.04 with systemd and flintlock's guest agent, enabled at boot.
+# battery creates every Pool MicroVM with the guest agent allowed and waits
+# for it before the MicroVM is available; create hooks and exec reach the
+# guest only through it, over vsock. The build context is guestimage/rootfs.
+#
+# flintlockd unpacks this image onto containerd's devmapper snapshotter,
+# which gives the MicroVM an ext4 root block device, and Firecracker boots
+# the kernel with root=/dev/vda.
+#
+# The network: flintlock gives the guest eth0 for its metadata service
+# (MMDS), and the Pool's interfaces after it, from eth1. systemd-networkd
+# leaves eth0 alone and configures every other Ethernet interface by DHCP;
+# on a Host, dnsmasq on virbr-battery answers. systemd-resolved takes the
+# DNS servers from the lease. Boot does not wait for the network: the guest
+# agent needs only network.target, and systemd-networkd-wait-online gives
+# up after 10 seconds for anything that waits for network-online.target.
+#
+# The rootfs stage runs on the image's platform, under emulation on another
+# one. ubuntu:24.04 is pinned by the digest of its multi-platform index;
+# resolve a new one with
+# `docker buildx imagetools inspect mirror.gcr.io/library/ubuntu:24.04`.
+
+ARG GUEST_AGENT_VERSION=0.4.0
+
+#= docs/requirements/13-guest-image.md#guest-build
+#/ The Guest Images' Containerfiles SHALL pin every base image by
+#/ the digest of its multi-platform index.
+#
+#= docs/requirements/13-guest-image.md#guest-rootfs
+#/ The Guest Images' root filesystem image SHALL be Ubuntu 24.04,
+#/ with systemd as its init.
+FROM mirror.gcr.io/library/ubuntu:24.04@sha256:534baea6a22c03a63003dbc8dbe78fe34bc0d7e595d9a9dc9834884ff530eb55 AS rootfs
+ARG GUEST_AGENT_VERSION
+# From the release's checksums.txt.
+ARG GUEST_AGENT_SHA256_ARM64=c3c8bd3650d4725806f543fb8fe117ce75c42aa523441f426d71c42104e2f025
+ARG GUEST_AGENT_SHA256_AMD64=07bd0a393dc3416518154e8069705de247df642583f13a1f2983bf89b19ee933
+ARG TARGETARCH
+#= docs/requirements/13-guest-image.md#guest-rootfs
+#/ The Guest Images' root filesystem image SHALL enable
+#/ `systemd-networkd`, and SHALL configure every Ethernet interface except
+#/ `eth0` by DHCP for IPv4.
+#
+#= docs/requirements/13-guest-image.md#guest-rootfs
+#/ The Guest Images' root filesystem image SHALL leave `eth0`
+#/ unmanaged.
+COPY network/ /etc/systemd/network/
+#= docs/requirements/13-guest-image.md#guest-build
+#/ The Guest Images SHALL be a kernel image and a root filesystem
+#/ image, each defined by one Containerfile in `guestimage/` and built for
+#/ `linux/amd64` and `linux/arm64`.
+#
+#= docs/requirements/13-guest-image.md#guest-build
+#/ The Guest Images build SHALL verify the checksum of every file
+#/ it downloads against a checksum recorded in the image's Containerfile,
+#/ and SHALL fail when one does not match.
+#
+#= docs/requirements/13-guest-image.md#guest-rootfs
+#/ The Guest Images' root filesystem image SHALL contain
+#/ flintlock's guest agent at the version its Containerfile pins, and SHALL
+#/ enable the guest agent's `guest-agent.service` unit.
+#
+#= docs/requirements/13-guest-image.md#guest-rootfs
+#/ The Guest Images' root filesystem image SHALL hold an empty
+#/ `/etc/machine-id`.
+RUN apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        systemd systemd-sysv systemd-resolved udev iproute2 ca-certificates curl kmod procps && \
+    curl -fsSL -o /tmp/guest-agent.deb \
+        "https://github.com/liquidmetal-dev/guest-agent/releases/download/v${GUEST_AGENT_VERSION}/guest-agent_${GUEST_AGENT_VERSION}_linux_${TARGETARCH}.deb" && \
+    case "${TARGETARCH}" in arm64) sum="${GUEST_AGENT_SHA256_ARM64}" ;; amd64) sum="${GUEST_AGENT_SHA256_AMD64}" ;; *) exit 1 ;; esac && \
+    echo "${sum}  /tmp/guest-agent.deb" | sha256sum -c - && \
+    dpkg -i /tmp/guest-agent.deb && rm /tmp/guest-agent.deb && \
+    systemctl enable guest-agent.service systemd-networkd.service systemd-resolved.service && \
+    # A wait for the network ends when one interface has an IPv4 address,
+    # or after 10 seconds.
+    mkdir -p /etc/systemd/system/systemd-networkd-wait-online.service.d && \
+    printf '[Service]\nExecStart=\nExecStart=/usr/lib/systemd/systemd-networkd-wait-online --any --ipv4 --timeout=10\n' \
+        >/etc/systemd/system/systemd-networkd-wait-online.service.d/timeout.conf && \
+    # The build owns /etc/resolv.conf, so the link to resolved's stub is made
+    # at boot.
+    printf 'L+ /etc/resolv.conf - - - - ../run/systemd/resolve/stub-resolv.conf\n' \
+        >/etc/tmpfiles.d/resolv.conf && \
+    # timesyncd stays off: the guest has its clock from the Host, through
+    # Firecracker.
+    systemctl mask systemd-timesyncd.service && \
+    # A console on the serial port, logged in as root, for debugging.
+    mkdir -p /etc/systemd/system/serial-getty@ttyS0.service.d && \
+    printf '[Service]\nExecStart=\nExecStart=-/sbin/agetty --autologin root --noclear %%I 115200 linux\n' \
+        >/etc/systemd/system/serial-getty@ttyS0.service.d/autologin.conf && \
+    echo 'microvm' >/etc/hostname && \
+    # No machine ID in the image: each MicroVM makes its own at boot. With
+    # one ID for all, udev gives every guest the same MAC address (its
+    # MACAddressPolicy=persistent derives it from the ID), and DHCP the same
+    # address. An empty file is not a first boot, so systemd-firstboot does
+    # not run.
+    : >/etc/machine-id && \
+    ln -sf /etc/machine-id /var/lib/dbus/machine-id && \
+    : >/etc/fstab && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# check: the checks, run inside the built root filesystem, under emulation
+# on another platform. The image takes a file from this stage, so no
+# builder can skip it.
+FROM rootfs AS check
+ARG GUEST_AGENT_VERSION
+COPY check.sh /tmp/check.sh
+#= docs/requirements/13-guest-image.md#guest-build
+#/ The Guest Images build SHALL run a check stage for each image
+#/ that fails unless the image holds what this document requires of it.
+RUN bash /tmp/check.sh "${GUEST_AGENT_VERSION}" && \
+    mkdir -p /checked && dpkg-query -W guest-agent >/checked/guest-agent
+
+# The image.
+FROM rootfs
+ARG GUEST_AGENT_VERSION
+COPY --from=check /checked/guest-agent /usr/share/battery-guest/checked
+LABEL org.opencontainers.image.title="battery-operator guest root filesystem" \
+      org.opencontainers.image.description="Ubuntu 24.04 with systemd and flintlock's guest agent, for battery-operator's Pools" \
+      org.opencontainers.image.source="https://github.com/phoban01/battery-operator" \
+      org.opencontainers.image.version="24.04" \
+      dev.liquidmetal-x.battery.guest-agent="${GUEST_AGENT_VERSION}"

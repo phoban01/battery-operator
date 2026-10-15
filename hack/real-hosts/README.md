@@ -84,7 +84,7 @@ that commit instead of `latest`.
 | `machine` | `lima`: creates and starts `bo-host-1`, Lima `vz`, `--nested-virt`, 4 CPUs, 6 GiB, 40 GiB, Ubuntu 24.04, on Lima's default network, with no mounts. `ssh`: checks the machine answers and has sudo. | The Host has `/dev/kvm` and an address. |
 | `host` | Runs `host/provision.sh`: the thin pool `flintlock-thinpool` on loop devices (`bo-thin-pool.service`), containerd v1.7.22 with the devmapper snapshotter for `flintlockd` only, Firecracker v1.12.1, `flintlockd` v0.15.2 (checksum-verified), the bridge `virbr-battery` with a network for the MicroVMs on it (dnsmasq 2.90-2ubuntu0.4 for DHCP and DNS, IP forwarding and NAT), a registry on `127.0.0.1:5000`, and `/etc/battery/flintlockd` owned by 65532. | The Host prerequisites of `docs/host-prerequisites.md`, but for `flintlockd`'s certificates, which come in `deploy`. |
 | `k3s` | k3s v1.35.8 server, on the Host's address, with the Node named `bo-host-1` (`NODE_NAME`) and labelled `battery.liquidmetal-x.dev/host=true`. Writes `.state/kubeconfig`. | A Ready, schedulable Node whose InternalIP is where `flintlockd` and the Exec Agent serve. |
-| `images` | Builds the MicroVM kernel (Firecracker's CI 6.1 kernel) and root filesystem (Ubuntu 24.04, systemd, flintlock's guest-agent v0.4.0, DHCP on the Pool's interfaces with systemd-networkd, DNS with systemd-resolved, and curl) for the Host's architecture, and pushes both to the Host's registry. | Images `flintlockd` can pull on the Host. |
+| `images` | Builds the Guest Images (`guestimage/`) from this checkout for the Host's architecture: the MicroVM kernel (Firecracker's CI 6.1 kernel) and root filesystem (Ubuntu 24.04, systemd, flintlock's guest-agent v0.4.0, DHCP on the Pool's interfaces with systemd-networkd, DNS with systemd-resolved, and curl). Pushes both to the Host's registry. | Images `flintlockd` can pull on the Host. |
 | `deploy` | cert-manager v1.20.2, then `config/default` and `config/exec-agent` as they ship, at `IMAGE_TAG` (`manifests/`). Waits for the Host's Node report. | The Exec Agent gets its certificates through CSRs the Operator signs, writes `flintlockd`'s, `flintlockd.path` starts `flintlockd` with them, and the agent reports its Host ready: KVM, thin pool, and `ServerInfo` over mutual TLS with exec enabled. |
 
 ### `smoke.sh`
@@ -133,7 +133,7 @@ can, with what battery-operator's ADR 0002 and ADR 0003 change:
   pods' network are not changed.
 - In the guest, flintlock's `eth0` is for its metadata service, and the
   Pool's interfaces start at `eth1`. systemd-networkd leaves `eth0` alone
-  and configures the others by DHCP (`images/rootfs/network/`). Boot does
+  and configures the others by DHCP (`guestimage/rootfs/network/`). Boot does
   not wait for the network: the guest-agent starts after `network.target`
   only, and a wait for `network-online.target` ends after 10 seconds. Each
   guest makes its own machine ID at boot, since udev derives the

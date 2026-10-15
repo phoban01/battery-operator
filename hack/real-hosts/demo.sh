@@ -65,6 +65,17 @@ if [[ ! -x "${out}" ]]; then
 fi
 host_put "${out}" /usr/local/bin/bo-trial-smoke 0755
 kubectl delete namespace "${NS}" --ignore-not-found --wait >/dev/null
+
+# The demo's Pool names the published Guest Images; the trial's Host pulls
+# its own builds of them (up.sh images) from its registry instead. The demo
+# runs from a copy of examples/demo that names those.
+demo_dir="${STATE_DIR}/demo"
+mkdir -p "${demo_dir}"
+sed -e "s|ghcr.io/phoban01/battery-operator/guest-kernel:[^[:space:]]*|${KERNEL_IMAGE}|" \
+	-e "s|ghcr.io/phoban01/battery-operator/guest-rootfs:[^[:space:]]*|${ROOTFS_IMAGE}|" \
+	examples/demo/demo.yaml >"${demo_dir}/demo.yaml"
+cp examples/demo/claim.yaml "${demo_dir}/claim.yaml"
+cd "${demo_dir}"
 clear
 
 say "One Kubernetes Node with KVM, a Host for Firecracker MicroVMs"
@@ -72,8 +83,8 @@ run "kubectl get nodes"
 run "kubectl -n battery-operator-system get pods"
 
 say "A Pool asks for two warm MicroVMs; wait until both are available"
-run "grep -A 30 'kind: Pool' examples/demo/demo.yaml | head -30"
-run "kubectl apply -f examples/demo/demo.yaml"
+run "grep -A 30 'kind: Pool' demo.yaml | head -30"
+run "kubectl apply -f demo.yaml"
 run "kubectl -n ${NS} wait --for=jsonpath={.status.available}=2 pool/${POOL} --timeout=10m"
 run "kubectl -n ${NS} get pool ${POOL}"
 
@@ -88,8 +99,8 @@ run "kubectl -n ${NS} wait --for=jsonpath={.status.available}=2 pool/${POOL} --t
 run "kubectl -n ${NS} get pool ${POOL}"
 
 say "A claim is a resource too: claim a MicroVM with kubectl"
-run "grep -v '^#' examples/demo/claim.yaml"
-run "kubectl apply -f examples/demo/claim.yaml"
+run "grep -v '^#' claim.yaml"
+run "kubectl apply -f claim.yaml"
 run "kubectl -n ${NS} wait --for=jsonpath={.status.phase}=Bound microvmclaim/build-1 --timeout=2m"
 run "kubectl -n ${NS} get microvmclaim build-1 -o jsonpath='{.status}' | jq '{phase, microVM, host, leaseExpiresAt}'"
 

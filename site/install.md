@@ -305,10 +305,26 @@ make a namespace, a Holder and a Pool. Get `demo.yaml`:
 curl -fsSLO https://raw.githubusercontent.com/phoban01/battery-operator/main/examples/demo/demo.yaml
 ```
 
-Edit the Pool in it. Change `kernel.image` and `rootVolume.containerSource`
-to images that `flintlockd` on your Hosts can pull. flintlock v0.15.2 needs
-at least 1024 MiB and one network interface per MicroVM. The Pool in it
-is:
+The Pool in it boots its MicroVMs from the Guest Images, which a release
+publishes for x86_64 and arm64:
+
+```
+ghcr.io/phoban01/battery-operator/guest-kernel:<version>
+ghcr.io/phoban01/battery-operator/guest-rootfs:<version>
+```
+
+The kernel image holds Firecracker's CI kernel 6.1 at `boot/vmlinux`. The
+root filesystem image is Ubuntu 24.04 with systemd and flintlock's guest
+agent, and it configures the Pool's interfaces by DHCP. The release after
+`v0.3.2` is the first to publish them. Its job summary lists each image
+with its digest.
+
+Edit the Pool in `demo.yaml`. Replace `<version>` in `kernel.image` and
+`rootVolume.containerSource` with that release or a later one, or name
+your own images. `flintlockd` on your Hosts has to be able to pull them.
+The kernel has no virtio-pci, so it boots on Firecracker and not on Cloud
+Hypervisor. flintlock v0.15.2 needs at least 1024 MiB and one network
+interface per MicroVM. The Pool in it is:
 
 ```yaml
 apiVersion: battery.liquidmetal-x.dev/v1alpha1
@@ -322,10 +338,10 @@ spec:
     vcpu: 1
     memoryInMb: 1024
     kernel:
-      image: <your kernel image>
+      image: ghcr.io/phoban01/battery-operator/guest-kernel:<version>
       filename: boot/vmlinux
     rootVolume:
-      containerSource: <your root filesystem image>
+      containerSource: ghcr.io/phoban01/battery-operator/guest-rootfs:<version>
     interfaces:
       - deviceId: eth1
         type: Tap
