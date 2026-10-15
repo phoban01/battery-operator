@@ -30,6 +30,10 @@
 //	dagger call host-image-publish --repository=ttl.sh/battery-host-image-dev --tags=1h
 //	dagger call manifests --operator-image=<ref> --exec-agent-image=<ref> export --path=dist/manifests
 //	dagger call manifests-check
+//	dagger call guest-image-lint
+//	dagger call guest-image-check --platform=linux/arm64
+//	dagger call guest-image-publish-check
+//	dagger call guest-image-publish --prefix=ttl.sh/battery-guest-dev --tags=1h
 //
 // The two images, the Operator's and the Exec Agent's, and the e2e suite's
 // fake flintlockd image are defined here and nowhere else. There is no
@@ -37,7 +41,10 @@
 // docs/adr/0005-images-built-by-dagger.md. The Host Image is the one image
 // with a definition of its own, hostimage/Containerfile: it is a bootc
 // operating system image, not one binary, and this module builds it from
-// that file (docs/adr/0007-reference-host-image-and-cluster-api.md).
+// that file (docs/adr/0007-reference-host-image-and-cluster-api.md). The
+// Guest Images, the kernel and root filesystem a Pool's MicroVMs boot from,
+// keep their Containerfiles in guestimage/ for the same reason: they are
+// operating system images.
 package main
 
 import (

@@ -9,8 +9,8 @@ on:
     types: [opened, synchronize, reopened, edited]
   push:
     branches: [main]
-    # a version tag publishes the images, the Manifests and the Host Image
-    # at that version
+    # a version tag publishes the images, the Manifests, the Host Image and
+    # the Guest Images at that version
     tags: ["v*"]
 
 permissions:
@@ -186,6 +186,67 @@ jobs:
           PLATFORM: linux/${{ matrix.arch }}
         run: dagger --progress=plain call host-image-check --platform="$PLATFORM"
 
+  # The Guest Images (guestimage/, docs/requirements/13-guest-image.md): lint
+  # their sources, build both images for linux/amd64 and linux/arm64, which
+  # runs their check stages, and run the checks again on the images built.
+  # Then push both, as a version tag does, to a registry inside the check's
+  # own container, and check what it pushed. The images are small, so one
+  # runner builds both platforms: the kernel is only a download, and the
+  # root filesystem's arm64 build runs apt under emulation. It runs only
+  # when the images, the Dagger module or this workflow changed, and always
+  # for a version tag, which publishes them in the publish job.
+  guest-image:
+    name: guest-image
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          fetch-depth: 0
+      - name: did the images change
+        id: changed
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.base_ref }}
+          BEFORE: ${{ github.event.before }}
+          REF: ${{ github.ref }}
+        run: |
+          case "$REF" in
+            refs/tags/v*) range="" ;;
+            *)
+              if [ "$EVENT" = pull_request ]; then
+                range="origin/$BASE...HEAD"
+              elif git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+                range="$BEFORE..HEAD"
+              else
+                range=""
+              fi
+              ;;
+          esac
+          if [ -z "$range" ] || git diff --name-only "$range" | grep -qE '^(guestimage/|\.dagger/|\.github/workflows/ci\.yml$)'; then
+            echo "build=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "guestimage/ is unchanged in $range; skipping the Guest Images"
+            echo "build=false" >>"$GITHUB_OUTPUT"
+          fi
+      - name: install dagger
+        if: steps.changed.outputs.build == 'true'
+        uses: ./.github/actions/setup-dagger
+        with:
+          version: ${{ env.DAGGER_VERSION }}
+      - name: lint the image sources
+        if: steps.changed.outputs.build == 'true'
+        run: dagger --progress=plain call guest-image-lint
+      - name: build and check the images for linux/amd64
+        if: steps.changed.outputs.build == 'true'
+        run: dagger --progress=plain call guest-image-check --platform=linux/amd64
+      - name: build and check the images for linux/arm64
+        if: steps.changed.outputs.build == 'true'
+        run: dagger --progress=plain call guest-image-check --platform=linux/arm64
+      - name: push the images to a registry in the check, and check them
+        if: steps.changed.outputs.build == 'true'
+        run: dagger --progress=plain call guest-image-publish-check
+
   # The Quint models (specs/quint). Not a required check; the maintainer
   # makes it one in the branch protection when ready.
   quint:
@@ -323,14 +384,17 @@ jobs:
   # tag. On a version tag it then publishes the Manifests' OCI artifact
   # (DP-030), with the images it has just pushed pinned by digest, to
   # ghcr.io/phoban01/battery-operator/manifests, tagged with the version and
-  # the commit SHA. The job summary lists every reference with its digest,
-  # to copy into the release notes.
+  # the commit SHA. On a version tag it also publishes the Guest Images
+  # (GI-030), each as one index for linux/amd64 and linux/arm64, to
+  # ghcr.io/phoban01/battery-operator/guest-kernel and guest-rootfs, tagged
+  # with the version and the commit SHA. The job summary lists every
+  # reference with its digest, to copy into the release notes.
   publish:
     name: publish
     if: github.event_name == 'push'
-    needs: [lint, test, build, check-generated, requirements, manifests]
+    needs: [lint, test, build, check-generated, requirements, manifests, guest-image]
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     permissions:
       contents: read
       packages: write
@@ -394,6 +458,36 @@ jobs:
             echo
             echo '```sh'
             echo "flux pull artifact oci://${ref%@*} --output ./battery-operator"
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
+      #= docs/requirements/13-guest-image.md#guest-publish
+      #/ When a version tag is pushed, the Guest Images SHALL be
+      #/ published to `ghcr.io/phoban01/battery-operator/guest-kernel` and
+      #/ `ghcr.io/phoban01/battery-operator/guest-rootfs`, each as one image index
+      #/ that holds `linux/amd64` and `linux/arm64`.
+      #
+      #= docs/requirements/13-guest-image.md#guest-publish
+      #/ Each index of GI-030 SHALL be tagged with the version and with
+      #/ the full SHA of the tag's commit.
+      - name: publish the Guest Images
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          echo "publishing the Guest Images at: $GITHUB_REF_NAME,$GITHUB_SHA"
+          dagger --progress=plain call guest-image-publish \
+            --tags="$GITHUB_REF_NAME,$GITHUB_SHA" \
+            --username="$ACTOR" --password=env://GITHUB_TOKEN \
+            | tee "$RUNNER_TEMP/guest-images.txt"
+          {
+            echo "## Guest Images"
+            echo
+            echo "The kernel and root filesystem images for a Pool, each one index for linux/amd64 and linux/arm64:"
+            echo
+            echo '```'
+            cat "$RUNNER_TEMP/guest-images.txt"
             echo '```'
           } >>"$GITHUB_STEP_SUMMARY"
 

@@ -27,6 +27,7 @@ The design these requirements specify is recorded in
 | `10-battery.md` | `BA` | What the Operator assumes battery v0.3.3 does, each with a pointer into battery's source |
 | `11-host-image.md` | `HI` | The Host Image: the bootc image a Host boots from, its units, guest network and checks |
 | `12-host-pool.md` | `HP` | The Host Pool Templates: Cluster API host pools that boot the Host Image's AMI and join it with kubeadm |
+| `13-guest-image.md` | `GI` | The Guest Images: the kernel image and the root filesystem image a Pool's MicroVMs boot from, their checks, and how a release publishes them |
 
 `10-battery.md` is the one document whose subject is not a system this
 project builds. Its statements are assumptions about battery, read from
@@ -41,7 +42,8 @@ Use exactly one of these shapes per requirement. The subject is always one of
 the system names defined in the glossary: the Operator, the CRDs, the Claim
 Controller, the Pool Controller, the Inventory Controller, the Exec Agent, the
 Manifests, the Client Library, the Host Image, the Host Pool Templates, the
-fake battery, the fake `flintlockd`, the unit tests, the e2e suite. In
+Guest Images, the fake battery, the fake `flintlockd`, the unit tests, the
+e2e suite. In
 `10-battery.md` alone, the subject is battery.
 
 | Pattern | Shape |
@@ -119,7 +121,9 @@ SELinux module all take `#` comments. Its checks are shell scripts, and a
 check cites a requirement with a `#= type=test` line. Inside a heredoc, a
 quote with backticks would run as a command, so put such a citation above
 the heredoc. The scripts that render and push the Manifests' OCI artifact,
-`hack/manifests-artifact*.sh`, cite requirements the same way.
+`hack/manifests-artifact*.sh`, cite requirements the same way. So do the
+Guest Images' Containerfiles and scripts under `guestimage/`, and the CI
+workflow `.github/workflows/ci.yml`, whose publish job pushes them.
 
 Other annotation types: `type=exception` with a `reason=` line for a
 requirement deliberately not met, `type=implication` for one satisfied by

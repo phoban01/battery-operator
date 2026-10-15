@@ -1,5 +1,5 @@
 # The Pool's interfaces, eth1 and after: an address, a default route and DNS
-# servers by DHCP. IPv4 only: the trial's bridge serves no IPv6.
+# servers by DHCP. IPv4 only: the Host's guest bridge serves no IPv6.
 [Match]
 Type=ether
 Name=eth*

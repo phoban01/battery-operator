@@ -40,6 +40,9 @@ use. It contains no requirements.
 - **Host Pool Templates**: the Cluster API templates in `config/capi/`
   that boot Hosts from the Host Image's AMI on AWS and join them to a
   workload cluster with kubeadm, one MachineDeployment per Host pool.
+- **Guest Images**: the kernel image and the root filesystem image in
+  `guestimage/` that a Pool's MicroVMs boot from, which a release publishes
+  as `guest-kernel` and `guest-rootfs`.
 - **e2e suite**: the end-to-end tests in `test/e2e/`, written with
   [sigs.k8s.io/e2e-framework](https://github.com/kubernetes-sigs/e2e-framework),
   which create a kind cluster, deploy the Manifests into it and test the

@@ -92,6 +92,26 @@ comment-style = { meta = "#=", content = "#/" }
 pattern = "hostimage/rootfs/etc/**/*.cfg"
 comment-style = { meta = "#=", content = "#/" }
 
+# The Guest Images (13-guest-image.md): their Containerfiles, and the
+# scripts that check, lint and push them, cite requirements with `#=` and
+# `#/`. So does the CI workflow, whose publish job pushes them on a version
+# tag.
+[[source]]
+pattern = "guestimage/*/Containerfile"
+comment-style = { meta = "#=", content = "#/" }
+
+[[source]]
+pattern = "guestimage/*.sh"
+comment-style = { meta = "#=", content = "#/" }
+
+[[source]]
+pattern = "guestimage/*/*.sh"
+comment-style = { meta = "#=", content = "#/" }
+
+[[source]]
+pattern = ".github/workflows/ci.yml"
+comment-style = { meta = "#=", content = "#/" }
+
 [[specification]]
 source = "docs/requirements/01-resources.md"
 format = "markdown"
@@ -142,6 +162,12 @@ format = "markdown"
 # The Host Pool Templates; their sources are config/**/*.yaml above.
 [[specification]]
 source = "docs/requirements/12-host-pool.md"
+format = "markdown"
+
+# The Guest Images; their sources are the guestimage/ patterns above, and
+# the CI workflow.
+[[specification]]
+source = "docs/requirements/13-guest-image.md"
 format = "markdown"
 
 [report.html]

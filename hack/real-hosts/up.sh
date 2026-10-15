@@ -134,8 +134,9 @@ step_k3s() {
 }
 
 # ---------------------------------------------------------------------------
-# images: the MicroVM kernel and root filesystem, built for the Host's
-# architecture and pushed to its registry.
+# images: the Guest Images (guestimage/), built from this checkout for the
+# Host's architecture and pushed to its registry, so that the Host pulls
+# them without reaching ghcr.io.
 
 step_images() {
 	local out="${STATE_DIR}/images" arch
@@ -143,10 +144,10 @@ step_images() {
 	mkdir -p "${out}"
 	command -v docker >/dev/null || die "docker is needed to build the MicroVM images"
 	log "Building the MicroVM kernel image for linux/${arch}"
-	docker build --platform "linux/${arch}" -f "${HERE}/images/kernel/Containerfile" -t bo-trial/kernel "${HERE}/images/kernel"
+	docker build --platform "linux/${arch}" -f "${GUEST_IMAGE_DIR}/kernel/Containerfile" -t bo-trial/kernel "${GUEST_IMAGE_DIR}/kernel"
 	log "Building the MicroVM root filesystem image for linux/${arch}"
-	docker build --platform "linux/${arch}" --build-arg GUEST_AGENT_VERSION="${GUEST_AGENT_VERSION}" \
-		-f "${HERE}/images/rootfs/Containerfile" -t bo-trial/rootfs "${HERE}/images/rootfs"
+	docker build --platform "linux/${arch}" \
+		-f "${GUEST_IMAGE_DIR}/rootfs/Containerfile" -t bo-trial/rootfs "${GUEST_IMAGE_DIR}/rootfs"
 	docker save --platform "linux/${arch}" bo-trial/kernel -o "${out}/kernel.tar" 2>/dev/null ||
 		docker save bo-trial/kernel -o "${out}/kernel.tar"
 	docker save --platform "linux/${arch}" bo-trial/rootfs -o "${out}/rootfs.tar" 2>/dev/null ||

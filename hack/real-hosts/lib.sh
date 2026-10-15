@@ -61,15 +61,17 @@ REGISTRY_VERSION="${REGISTRY_VERSION:-3.1.2}"
 # DNS on virbr-battery. An apt version: when Ubuntu replaces it with a newer
 # security update, set the new one here.
 DNSMASQ_VERSION="${DNSMASQ_VERSION:-2.90-2ubuntu0.4}"
-GUEST_AGENT_VERSION="${GUEST_AGENT_VERSION:-0.4.0}"
 CERT_MANAGER_VERSION="${CERT_MANAGER_VERSION:-v1.20.2}"
 
 # The Operator's images; latest, or a main commit's SHA.
 IMAGE_TAG="${IMAGE_TAG:-latest}"
 
-# The MicroVM kernel and root filesystem images, built by up.sh and pushed
-# to the Host's own registry on 127.0.0.1:5000 (flintlockd's containerd
-# pulls over plain HTTP only from localhost).
+# The MicroVM kernel and root filesystem images: the Guest Images, built by
+# up.sh from GUEST_IMAGE_DIR and pushed to the Host's own registry on
+# 127.0.0.1:5000 (flintlockd's containerd pulls over plain HTTP only from
+# localhost). A release publishes the same images to ghcr.io as
+# guest-kernel and guest-rootfs.
+GUEST_IMAGE_DIR="${REPO_ROOT}/guestimage"
 MICROVM_REGISTRY=127.0.0.1:5000
 KERNEL_IMAGE="${MICROVM_REGISTRY}/bo-trial/kernel:6.1"
 ROOTFS_IMAGE="${MICROVM_REGISTRY}/bo-trial/rootfs:24.04"
