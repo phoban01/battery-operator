@@ -431,8 +431,8 @@ says:
 
 The Pool's kernel and root filesystem can be the Guest Images that a
 release publishes, `ghcr.io/phoban01/battery-operator/guest-kernel:<version>`
-and `guest-rootfs:<version>`, for x86_64 and arm64. The release after
-`v0.3.2` is the first to publish them. Their kernel boots on Firecracker,
+and `guest-rootfs:<version>`, for x86_64 and arm64. `v0.3.3` is the first
+to publish them. Their kernel boots on Firecracker,
 which the Host Image runs, and not on Cloud Hypervisor.
 
 `flintlockd` on the Hosts pulls the Pool's kernel and root filesystem

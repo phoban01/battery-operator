@@ -18,8 +18,8 @@ builds of them from its registry, so name those:
 
 ```sh
 export KUBECONFIG=hack/real-hosts/.state/kubeconfig
-sed -e 's|ghcr.io/phoban01/battery-operator/guest-kernel:<version>|127.0.0.1:5000/bo-trial/kernel:6.1|' \
-  -e 's|ghcr.io/phoban01/battery-operator/guest-rootfs:<version>|127.0.0.1:5000/bo-trial/rootfs:24.04|' \
+sed -e 's|ghcr.io/phoban01/battery-operator/guest-kernel:v0.3.3|127.0.0.1:5000/bo-trial/kernel:6.1|' \
+  -e 's|ghcr.io/phoban01/battery-operator/guest-rootfs:v0.3.3|127.0.0.1:5000/bo-trial/rootfs:24.04|' \
   examples/demo/demo.yaml | kubectl apply -f -
 kubectl -n demo wait --for=jsonpath={.status.available}=2 pool/demo --timeout=10m
 kubectl -n demo get pool demo
@@ -60,8 +60,8 @@ the Client Library create, renew and delete its claims.
 
 The Pool names the Guest Images that a release publishes,
 `ghcr.io/phoban01/battery-operator/guest-kernel` and `guest-rootfs`
-([guestimage/README.md](../../guestimage/README.md)). Replace `<version>`
-with a release that has them: the first is the release after `v0.3.2`.
+([guestimage/README.md](../../guestimage/README.md)), from `v0.3.3`, the
+first release that publishes them. A later release works too.
 The Hosts need a way out to ghcr.io. The kernel boots on Firecracker, not
-on Cloud Hypervisor. flintlock v0.15.2 needs at least 1024 MiB and one
+on Cloud Hypervisor. flintlock v0.16.0 needs at least 1024 MiB and one
 network interface per MicroVM (RS-014 to RS-016).
