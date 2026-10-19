@@ -21,7 +21,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -33,36 +32,22 @@ import (
 	"github.com/phoban01/battery-operator/internal/reconcile"
 )
 
-// Reasons for the Ready condition of a Pool being deleted
-// (docs/requirements/03-pools.md#deletion).
-const (
-	// PoolReasonDeletionBlocked: battery refuses to delete the Pool while
-	// claims hold some of its MicroVMs or some are quarantined, which the
-	// Pool Controller does not delete (PO-032, PO-033).
-	PoolReasonDeletionBlocked = "DeletionBlocked"
-	// PoolReasonDraining: the Pool Controller is emptying the Pool in
-	// battery so that battery can delete it (PO-034).
-	PoolReasonDraining = "Draining"
-)
-
-// poolDrainRequeue is how soon a Pool being drained is reconciled again
-// without an event: battery's Events stream (PO-023) usually comes first.
-const poolDrainRequeue = 5 * time.Second
+// PoolReasonDeletionBlocked is the reason of the Ready condition of a
+// deleted Pool that battery refuses to delete while claims hold some of
+// its MicroVMs (PO-043).
+const PoolReasonDeletionBlocked = "DeletionBlocked"
 
 // poolDeletion deletes a deleted Pool from battery and then lets it go.
 // For a Pool that is not being deleted it does nothing.
 //
-// battery v0.4.0 refuses DeletePool with FAILED_PRECONDITION while the
-// Pool has a leased or claiming MicroVM, and otherwise deletes the Pool
-// with its MicroVMs (BA-070). battery v0.3.3 refused while the Pool owned
-// any MicroVM, and had no call that deletes a Pool with its MicroVMs. So
-// while battery refuses, poolDeletion drains the Pool: it gives it its
+// battery v0.4.0's DeletePool drains the Pool it deletes: it refuses with
+// FAILED_PRECONDITION while the Pool has a leased or claiming MicroVM, and
+// otherwise deletes the Pool with every MicroVM it owns (BA-070, BA-073).
+// So poolDeletion only asks. While battery refuses, it gives the Pool its
 // drained spec, under which battery creates no MicroVM for it (BA-072),
-// claims each available MicroVM and releases it at once, which deletes it
-// (BA-030), and asks again. Against v0.4.0 that happens only while a
-// claim holds a MicroVM; #199 replaces the drain with battery's own. A
-// MicroVM a claim holds stays, as did a quarantined one under v0.3.3; the
-// Pool waits, and says why on its Ready condition.
+// and says on the Ready condition that the Pool waits for its claims.
+// battery's Events stream (PO-023) and the workqueue's backoff bring the
+// Pool back to ask again.
 type poolDeletion struct{}
 
 func (poolDeletion) Reconcile(ctx context.Context, s *poolScope) (reconcile.Result, error) {
@@ -75,12 +60,22 @@ func (poolDeletion) Reconcile(ctx context.Context, s *poolScope) (reconcile.Resu
 
 	//= docs/requirements/03-pools.md#declaration
 	//# The Pool Controller SHALL add a finalizer to each Pool, and when
-	//# the Pool is deleted SHALL call `DeletePool`, drain the Pool while battery
-	//# refuses it (PO-030, PO-031), and remove the finalizer only once battery
-	//# has deleted the Pool or reported it unknown.
+	//# the Pool is deleted SHALL call `DeletePool` until battery accepts it
+	//# (PO-042, PO-043), and remove the finalizer only once battery has
+	//# deleted the Pool or reported it unknown.
+
+	//= docs/requirements/03-pools.md#deletion
+	//# The Pool Controller SHALL NOT claim or release a MicroVM of a
+	//# deleted Pool, and SHALL leave the deletion of the Pool's MicroVMs to
+	//# battery's `DeletePool`.
 	ref := poolRef(s.Object)
-	if done, err := deletePoolFromBattery(ctx, s, ref); done || err != nil {
-		return reconcile.Result{Stop: true}, err
+	err := s.Battery.DeletePool(ctx, ref)
+	switch {
+	case err == nil, errors.Is(err, battery.ErrNotFound):
+		releasePool(s, ref)
+		return reconcile.Result{Stop: true}, nil
+	case !errors.Is(err, battery.ErrFailedPrecondition):
+		return reconcile.Result{Stop: true}, fmt.Errorf("deleting Pool %s from battery: %w", ref, err)
 	}
 
 	held, err := s.Battery.GetPool(ctx, ref)
@@ -93,132 +88,46 @@ func (poolDeletion) Reconcile(ctx context.Context, s *poolScope) (reconcile.Resu
 	}
 
 	if !isDrainedSpec(held.Spec) {
-		if held.Status.Provisioning > 0 {
-			// UpdatePool would cancel these under the Pool's old hook
-			// failure policy (BA-074), which may quarantine them.
-			return reportRefusal(s, ref, held.Status)
-		}
-
 		//= docs/requirements/03-pools.md#deletion
-		//# When battery refuses `DeletePool` for a deleted Pool because
-		//# the Pool still has MicroVMs, the Pool's spec in battery is not its
-		//# drained spec, and battery reports no provisioning MicroVM in the Pool,
-		//# the Pool Controller SHALL send battery the Pool's drained spec with
-		//# `UpdatePool`.
-		if held, err = s.Battery.UpdatePool(ctx, drainedSpec(held.Spec)); err != nil {
-			return reconcile.Result{Stop: true}, fmt.Errorf("draining Pool %s in battery: %w", ref, err)
+		//# When battery refuses `DeletePool` for a deleted Pool and the
+		//# Pool's spec in battery is not its drained spec, the Pool Controller
+		//# SHALL send battery the Pool's drained spec with `UpdatePool`.
+		updated, err := s.Battery.UpdatePool(ctx, drainedSpec(held.Spec))
+		if err != nil {
+			res, refusal := reportRefusal(s, ref, held.Status)
+			return res, errors.Join(fmt.Errorf("sending Pool %s's drained spec to battery: %w", ref, err), refusal)
 		}
+		held = updated
 		s.Log.Info("Sent Pool's drained spec to battery", "pool", ref.String())
-	}
-
-	if err := drainAvailable(ctx, s, ref, held.Status.Available); err != nil {
-		res, refusal := reportRefusal(s, ref, held.Status)
-		return res, errors.Join(err, refusal)
-	}
-	if done, err := deletePoolFromBattery(ctx, s, ref); done || err != nil {
-		return reconcile.Result{Stop: true}, err
-	}
-	switch held, err = s.Battery.GetPool(ctx, ref); {
-	case errors.Is(err, battery.ErrNotFound):
-		releasePool(s, ref)
-		return reconcile.Result{Stop: true}, nil
-	case err != nil:
-		return reconcile.Result{Stop: true}, fmt.Errorf("getting Pool %s from battery: %w", ref, err)
 	}
 	return reportRefusal(s, ref, held.Status)
 }
 
-// reportRefusal shows on the Pool's Ready condition why battery still
-// refuses to delete it, with battery's counts. A Pool the Pool Controller
-// is still draining is asked for again soon; one that waits on leased or
-// quarantined MicroVMs returns an error, so that the workqueue retries it
-// with its exponential backoff, and the Events stream brings it back
-// sooner when a MicroVM goes (PO-023). It returns poolDeletion's result,
-// which stops the chain.
+// reportRefusal shows on the Pool's Ready condition that battery refuses
+// to delete it while claims hold its MicroVMs, with battery's counts. It
+// returns an error, so that the workqueue retries the Pool with its
+// exponential backoff; the Events stream brings it back sooner when a
+// MicroVM goes (PO-023). It returns poolDeletion's result, which stops the
+// chain.
 func reportRefusal(s *poolScope, ref battery.PoolRef, st battery.PoolStatus) (reconcile.Result, error) {
 	setDeletionCounts(s, st)
-	if st.Leased == 0 && st.Quarantined == 0 {
-		//= docs/requirements/03-pools.md#deletion
-		//# While battery refuses `DeletePool` for a deleted Pool that has
-		//# no leased or quarantined MicroVM, the Pool Controller SHALL set the Pool's
-		//# condition `Ready` false with the reason `Draining`.
-		msg := fmt.Sprintf("The Pool Controller is emptying the Pool in battery, which deletes it once it has no MicroVM: "+
-			"%d available, %d provisioning", st.Available, st.Provisioning)
-		s.setCondition(batteryv1alpha1.PoolConditionReady, metav1.ConditionFalse, PoolReasonDraining, msg)
-		return reconcile.Result{Stop: true, RequeueAfter: poolDrainRequeue}, nil
-	}
 
 	//= docs/requirements/03-pools.md#deletion
-	//# While battery refuses `DeletePool` for a deleted Pool that has
-	//# leased or quarantined MicroVMs, the Pool Controller SHALL set the Pool's
-	//# condition `Ready` false with the reason `DeletionBlocked` and a message
-	//# that gives those counts.
-	msg := fmt.Sprintf("battery holds %d leased and %d quarantined MicroVMs of the Pool, and deletes it only once they are gone: "+
-		"a leased MicroVM goes when its claim is released or its Lease expires; battery never deletes a quarantined one",
-		st.Leased, st.Quarantined)
+	//# While battery refuses `DeletePool` for a deleted Pool, the Pool
+	//# Controller SHALL set the Pool's condition `Ready` false with the reason
+	//# `DeletionBlocked` and a message that gives the Pool's leased MicroVMs.
+	msg := fmt.Sprintf("battery holds %d leased MicroVMs of the Pool, and deletes the Pool with its other MicroVMs "+
+		"once they are gone: a leased MicroVM goes when its claim is released or its Lease expires", st.Leased)
 	s.setCondition(batteryv1alpha1.PoolConditionReady, metav1.ConditionFalse, PoolReasonDeletionBlocked, msg)
-	s.Log.Info("Battery refused to delete Pool", "pool", ref.String(), "leased", st.Leased, "quarantined", st.Quarantined)
-	return reconcile.Result{Stop: true}, fmt.Errorf("battery refused to delete Pool %s: %d leased and %d quarantined MicroVMs remain: %w",
-		ref, st.Leased, st.Quarantined, battery.ErrFailedPrecondition)
-}
-
-// deletePoolFromBattery calls DeletePool. It reports done, having removed
-// the finalizer, when battery deleted the Pool or does not know it; not
-// done and no error when battery refused because the Pool has MicroVMs;
-// and an error otherwise.
-func deletePoolFromBattery(ctx context.Context, s *poolScope, ref battery.PoolRef) (bool, error) {
-	err := s.Battery.DeletePool(ctx, ref)
-	switch {
-	case err == nil, errors.Is(err, battery.ErrNotFound):
-		releasePool(s, ref)
-		return true, nil
-	case errors.Is(err, battery.ErrFailedPrecondition):
-		return false, nil
-	default:
-		return false, fmt.Errorf("deleting Pool %s from battery: %w", ref, err)
-	}
+	s.Log.Info("Battery refused to delete Pool", "pool", ref.String(), "leased", st.Leased)
+	return reconcile.Result{Stop: true}, fmt.Errorf("battery refused to delete Pool %s: %d leased MicroVMs remain: %w",
+		ref, st.Leased, battery.ErrFailedPrecondition)
 }
 
 // releasePool removes the finalizer of a Pool battery no longer holds.
 func releasePool(s *poolScope, ref battery.PoolRef) {
 	controllerutil.RemoveFinalizer(s.Object, PoolFinalizer)
 	s.Log.Info("Deleted Pool from battery", "pool", ref.String())
-}
-
-// drainAvailable claims up to n available MicroVMs of the Pool and
-// releases each at once, until battery has none left to claim.
-func drainAvailable(ctx context.Context, s *poolScope, ref battery.PoolRef, n int32) error {
-	//= docs/requirements/03-pools.md#deletion
-	//# When battery refuses `DeletePool` for a deleted Pool whose
-	//# spec in battery is its drained spec, the Pool Controller SHALL claim each
-	//# available MicroVM of the Pool with `ClaimVM`, release it at once with
-	//# `ReleaseVM`, and then call `DeletePool` again.
-	for range n {
-		// No request id: each drain claim is meant to take another
-		// MicroVM, and one whose answer is lost is left to expire
-		// (BA-023), as the comment below says.
-		claim, err := s.Battery.ClaimVM(ctx, ref, "")
-		switch {
-		case errors.Is(err, battery.ErrExhausted):
-			return nil
-		case err != nil:
-			return fmt.Errorf("claiming a MicroVM of Pool %s to drain it: %w", ref, err)
-		}
-
-		//= docs/requirements/03-pools.md#deletion
-		//# The Pool Controller SHALL NOT release a Lease of a deleted
-		//# Pool other than one it claimed itself under PO-031.
-		//
-		// The only Lease released here is the one ClaimVM just returned. If
-		// its release fails, or the Operator stops before it, nothing renews
-		// the Lease, and battery deletes it and its MicroVM once the Pool's
-		// heartbeat_expiry_threshold has passed (BA-023).
-		if err := s.Battery.ReleaseVM(ctx, claim.LeaseID); err != nil && !errors.Is(err, battery.ErrNotFound) {
-			return fmt.Errorf("releasing MicroVM %s of Pool %s to drain it: %w", claim.VMUID, ref, err)
-		}
-		s.Log.Info("Drained MicroVM from Pool", "pool", ref.String(), "microvm", claim.VMUID)
-	}
-	return nil
 }
 
 // setDeletionCounts copies battery's counts into a Pool being deleted, as
@@ -236,10 +145,10 @@ func setDeletionCounts(s *poolScope, counts battery.PoolStatus) {
 const drainedMinSize = 1
 
 // drainedSpec is spec, the one battery holds for a deleted Pool, as its
-// drained spec (glossary): size 0, MIN_SIZE_THRESHOLD with a min_size of
-// 1, no pre-lease commands and DELETE_AND_REPLACE. battery creates no
-// MicroVM for it (BA-072), and a drain claim runs no hook and deletes the
-// MicroVM rather than quarantine it if it fails.
+// drained spec (glossary): size 0 and MIN_SIZE_THRESHOLD with a min_size
+// of 1, under which battery creates no MicroVM for it (BA-072). The rest
+// of the spec stays, so that a claim that binds to one of the Pool's
+// available MicroVMs meanwhile runs the Pool's own pre-lease hooks.
 func drainedSpec(spec battery.PoolSpec) battery.PoolSpec {
 	minSize := int32(drainedMinSize)
 	spec.Size = 0
@@ -247,10 +156,9 @@ func drainedSpec(spec battery.PoolSpec) battery.PoolSpec {
 		Type:    poolmgrv1.ReplenishmentStrategyType_MIN_SIZE_THRESHOLD,
 		MinSize: &minSize,
 	}
-	spec.PreLeaseCommands = nil
-	spec.HookFailurePolicy = poolmgrv1.HookFailurePolicy_DELETE_AND_REPLACE
 	spec.FlintlockHosts = slices.Clone(spec.FlintlockHosts)
 	spec.CreateCommands = slices.Clone(spec.CreateCommands)
+	spec.PreLeaseCommands = slices.Clone(spec.PreLeaseCommands)
 	return spec
 }
 
@@ -259,7 +167,5 @@ func isDrainedSpec(spec battery.PoolSpec) bool {
 	r := spec.Replenishment
 	return spec.Size == 0 &&
 		r.Type == poolmgrv1.ReplenishmentStrategyType_MIN_SIZE_THRESHOLD &&
-		r.MinSize != nil && *r.MinSize == drainedMinSize &&
-		len(spec.PreLeaseCommands) == 0 &&
-		spec.HookFailurePolicy == poolmgrv1.HookFailurePolicy_DELETE_AND_REPLACE
+		r.MinSize != nil && *r.MinSize == drainedMinSize
 }

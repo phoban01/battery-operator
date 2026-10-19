@@ -148,10 +148,20 @@ func TestServesTheThreeServicesOverGRPC(t *testing.T) {
 	}
 	waitProtoEvent(t, stream, poolmgrv1.EventType_VM_DELETED_ON_RELEASE)
 
-	// battery refuses to delete a Pool that owns MicroVMs; one that never
-	// had any goes at once.
+	// battery refuses to delete a Pool with a leased MicroVM, and deletes
+	// one without, with its MicroVMs; one that never had any goes at once.
+	held, err := lease.ClaimVM(ctx, &poolmgrv1.ClaimVMRequest{Pool: ref})
+	if err != nil {
+		t.Fatalf("Lease.ClaimVM: %v", err)
+	}
 	if _, err := admin.DeletePool(ctx, &poolmgrv1.DeletePoolRequest{Ref: ref}); statusCode(t, err) != codes.FailedPrecondition {
-		t.Fatalf("PoolAdmin.DeletePool of a filled pool: code %v, want FAILED_PRECONDITION", statusCode(t, err))
+		t.Fatalf("PoolAdmin.DeletePool of a pool with a lease: code %v, want FAILED_PRECONDITION", statusCode(t, err))
+	}
+	if _, err := lease.ReleaseVM(ctx, &poolmgrv1.ReleaseVMRequest{LeaseId: held.GetLeaseId()}); err != nil {
+		t.Fatalf("Lease.ReleaseVM: %v", err)
+	}
+	if _, err := admin.DeletePool(ctx, &poolmgrv1.DeletePoolRequest{Ref: ref}); err != nil {
+		t.Fatalf("PoolAdmin.DeletePool of a pool with no lease: %v", err)
 	}
 	spec.Name, spec.Size = "empty", 0
 	ref = &poolmgrv1.PoolRef{Name: spec.GetName(), Namespace: spec.GetNamespace()}

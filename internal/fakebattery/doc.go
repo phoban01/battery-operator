@@ -36,8 +36,10 @@ limitations under the License.
 // nothing AVAILABLE, the request id on ClaimVM and the replay of a claim
 // by it, the host field on ClaimVMResponse, ListLeases, the MicroVM ids,
 // the three replenishment strategies topped up on every tick, the hook
-// failure policies, the event types, and UpdatePool cancelling the Pool's
-// provisioning under the old spec's hook failure policy.
+// failure policies, the event types, UpdatePool cancelling the Pool's
+// provisioning under the old spec's hook failure policy, and DeletePool
+// refusing a Pool with a leased MicroVM and otherwise deleting it with
+// every MicroVM it owns.
 //
 // What the Operator assumes battery does is listed in
 // docs/requirements/10-battery.md (BA-*), from battery v0.4.0's source; the
@@ -53,12 +55,6 @@ limitations under the License.
 //
 // The fake deliberately differs from battery in these ways:
 //
-//   - DeletePool refuses while the Pool owns a MicroVM in any phase and
-//     deletes none of them, as battery v0.3.3 did. battery v0.4.0 refuses
-//     only for a leased or claiming MicroVM, and otherwise deletes the
-//     Pool with its MicroVMs, quarantined ones included, recording
-//     VM_DELETED_ON_POOL_DELETE for each (BA-070, BA-073). #199 brings
-//     the fake and the Pool Controller to that.
 //   - With Config.SeedOnce, the control loop's tick tops up an
 //     event-driven Pool only on the first tick after its CreatePool or
 //     UpdatePool, as battery v0.3.3 seeded such a Pool, so that a test

@@ -155,18 +155,39 @@ func TestEveryEventTypeIsEmittedAtItsTransition(t *testing.T) {
 		t.Fatalf("POOL_SIZE_BELOW_TARGET payload = %v, want target 1 and nothing available", p)
 	}
 
+	assertPoolDeleteEvent(t, h, collect)
 	assertEveryEventTypeSeen(t, h)
 	assertMonotonic(t, all)
 }
 
+// assertPoolDeleteEvent ends TestEveryEventTypeIsEmittedAtItsTransition:
+// once the Pool's last Lease has gone, DeletePool deletes the Pool with
+// the MicroVM the last tick provisioned, and records it.
+func assertPoolDeleteEvent(t *testing.T, h *harness, collect func(poolmgrv1.EventType) []*event) {
+	t.Helper()
+	refill := eventOfType(t, collect(poolmgrv1.EventType_VM_AVAILABLE), poolmgrv1.EventType_VM_AVAILABLE)
+	for _, l := range h.b.Leases() {
+		if err := h.client.ReleaseVM(h.ctx, l.LeaseID); err != nil {
+			t.Fatalf("ReleaseVM: %v", err)
+		}
+		collect(poolmgrv1.EventType_VM_DELETED_ON_RELEASE)
+	}
+	if err := h.client.DeletePool(h.ctx, h.ref("pool")); err != nil {
+		t.Fatalf("DeletePool: %v", err)
+	}
+	onDelete := eventOfType(t, collect(poolmgrv1.EventType_VM_DELETED_ON_POOL_DELETE), poolmgrv1.EventType_VM_DELETED_ON_POOL_DELETE)
+	if onDelete.VMUID != refill.VMUID || payloadOf(t, onDelete)["host"] != hostA {
+		t.Fatalf("VM_DELETED_ON_POOL_DELETE names %q on %v, want the available microvm %q on host-a",
+			onDelete.VMUID, payloadOf(t, onDelete)["host"], refill.VMUID)
+	}
+}
+
 // assertEveryEventTypeSeen checks that every type the proto declares was
-// seen, except the one battery v0.4.0 records when DeletePool deletes a
-// Pool's MicroVMs, which the fake does not do yet (#199).
+// seen.
 func assertEveryEventTypeSeen(t *testing.T, h *harness) {
 	t.Helper()
 	notEmitted := map[poolmgrv1.EventType]bool{
-		poolmgrv1.EventType_EVENT_TYPE_UNSPECIFIED:    true,
-		poolmgrv1.EventType_VM_DELETED_ON_POOL_DELETE: true,
+		poolmgrv1.EventType_EVENT_TYPE_UNSPECIFIED: true,
 	}
 	for value, name := range poolmgrv1.EventType_name {
 		typ := poolmgrv1.EventType(value)

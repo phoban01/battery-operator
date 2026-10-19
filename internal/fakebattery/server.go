@@ -96,9 +96,10 @@ func (s *poolAdminServer) UpdatePool(_ context.Context, req *poolmgrv1.UpdatePoo
 }
 
 // DeletePool implements poolmgrv1.PoolAdminServer. It refuses while the
-// Pool owns any MicroVM, as battery does.
-func (s *poolAdminServer) DeletePool(_ context.Context, req *poolmgrv1.DeletePoolRequest) (*emptypb.Empty, error) {
-	if err := s.b.deletePool(refFromProto(req.GetRef())); err != nil {
+// Pool has a leased MicroVM, unless the request sets force, and otherwise
+// deletes the Pool with its MicroVMs, as battery v0.4.0 does.
+func (s *poolAdminServer) DeletePool(ctx context.Context, req *poolmgrv1.DeletePoolRequest) (*emptypb.Empty, error) {
+	if err := s.b.deletePool(ctx, refFromProto(req.GetRef()), req.GetForce()); err != nil {
 		return nil, err
 	}
 	return &emptypb.Empty{}, nil

@@ -46,7 +46,8 @@ const (
 // VM_EXPIRING_SOON; a Lease expired and its MicroVM deleted,
 // VM_DELETED_DUE_TO_EXPIRY; a create or pre-lease hook failed, VM_HOOK_FAILED;
 // provisioning started, POOL_REPLENISHING; a tick found a Pool short of its
-// target, POOL_SIZE_BELOW_TARGET.
+// target, POOL_SIZE_BELOW_TARGET; DeletePool deleted the Pool with the
+// MicroVM, VM_DELETED_ON_POOL_DELETE.
 func (b *Battery) emitLocked(key poolKey, vmUID string, typ poolmgrv1.EventType, payload map[string]any) {
 	ps, ok := b.pools[key]
 	if !ok {

@@ -29,6 +29,15 @@ flintlock-runner, where `10-test-doubles.md` specifies them.
   `CreatePool` or `UpdatePool` of the Pool, whether or not those provisions
   succeed, as battery v0.3.3 seeded such a Pool.
 
+The fake battery cites each assumption of `10-battery.md` it meets, with
+a test, and lists where it differs from battery under
+[Where the stand-ins differ](10-battery.md#stand-ins). Its `DeletePool`
+drains the Pool as battery v0.4.0's does (BA-070, BA-073). It refuses
+while the Pool has a leased or claiming MicroVM, unless the request sets
+`force`. Otherwise it deletes the Pool with every MicroVM the Pool owns,
+and records `VM_DELETED_ON_POOL_DELETE` for each. A MicroVM whose Host
+refuses the deletion stays `DELETING`, and the next tick deletes it.
+
 ## The fake flintlockd {#fake-flintlockd}
 
 - **TD-010** The fake `flintlockd` SHALL serve flintlock's MicroVM and

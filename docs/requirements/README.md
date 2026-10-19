@@ -258,9 +258,8 @@ of date. `make duvet-models-write` rewrites it. `type=test` and
 | PO-010 | `specs/quint/pools.qnt` |
 | PO-011 | `specs/quint/pools.qnt` |
 | PO-012 | `specs/quint/pools.qnt` |
-| PO-030 | `specs/quint/pools.qnt` |
-| PO-031 | `specs/quint/pools.qnt` |
-| PO-032 | `specs/quint/pools.qnt` |
+| PO-042 | `specs/quint/pools.qnt` |
+| PO-044 | `specs/quint/pools.qnt` |
 <!-- END modelled -->
 
 ## The coverage gate

@@ -485,8 +485,7 @@ func (b *Battery) applyHookFailurePolicy(ctx context.Context, vm *vmState, hook 
 		//
 		// The MicroVM keeps no lease id, so ReleaseVM cannot reach it, and
 		// the tick deletes only expired leased MicroVMs and DELETING ones.
-		// The fake's DeletePool refuses while the MicroVM exists, where
-		// battery v0.4.0 deletes it with the Pool (#199).
+		// Only DeletePool deletes it, with its Pool.
 		b.setPhaseLocked(vm, poolmgrv1.VMPhase_QUARANTINED)
 		b.mu.Unlock()
 		b.log.Info("Quarantined MicroVM after its hook failed", "hook", string(hook), "uid", vm.uid, "pool", vm.pool.String(), "err", cause.Error())

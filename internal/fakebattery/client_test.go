@@ -79,6 +79,12 @@ func (c *testClient) DeletePool(ctx context.Context, ref PoolRef) error {
 	return err
 }
 
+// ForceDeletePool is DeletePool with force set.
+func (c *testClient) ForceDeletePool(ctx context.Context, ref PoolRef) error {
+	_, err := c.admin.DeletePool(ctx, &poolmgrv1.DeletePoolRequest{Ref: refToProto(ref), Force: true})
+	return err
+}
+
 func (c *testClient) GetPool(ctx context.Context, ref PoolRef) (*pool, error) {
 	resp, err := c.admin.GetPool(ctx, &poolmgrv1.GetPoolRequest{Ref: refToProto(ref)})
 	if err != nil {

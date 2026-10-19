@@ -336,10 +336,9 @@ transaction, and then deletes each MicroVM through `flintlockd`,
 recording `VM_DELETED_ON_POOL_DELETE` for it; a MicroVM whose Host does
 not answer is left `DELETING` for the sweep. With `force` it deletes the
 leased MicroVMs and their Leases too. battery v0.3.3 refused while the
-Pool owned a MicroVM in any phase, and deleted none of them; the Pool
-Controller's drain (03-pools.md, PO-030 to PO-034) was written for that,
-still works against v0.4.0, since the refusal it reacts to is the one
-v0.4.0 still gives, and is replaced by battery's own draining in #199.
+Pool owned a MicroVM in any phase, and deleted none of them, so the Pool
+Controller drained the Pool itself (03-pools.md, PO-030 to PO-034, now
+withdrawn). Since #199 it leaves the drain to battery (PO-042 to PO-044).
 None of battery's replenishment strategies deletes a MicroVM when a
 Pool's size drops: a strategy only decides how many to create. So, short
 of deleting the Pool, a MicroVM goes only these ways:
@@ -445,18 +444,15 @@ in its code as an exception:
 - where a test sets `SeedOnce` (TD-007), its tick tops up an
   event-driven Pool only on the first tick after its `CreatePool` or
   `UpdatePool`, as battery v0.3.3 seeded such a Pool, where battery
-  v0.4.0 tops it up on every tick (BA-075);
-- its `DeletePool` refuses while the Pool owns a MicroVM in any phase, as
-  battery v0.3.3 did, where battery v0.4.0 refuses only for a leased or
-  claiming MicroVM and deletes the rest with the Pool (BA-070); #199
-  brings the fake and the Pool Controller to v0.4.0's draining.
+  v0.4.0 tops it up on every tick (BA-075).
 
 The pools model (`specs/quint/pools.qnt`) has no phases between created
 and available, so no MicroVM is being provisioned when `UpdatePool` comes
 (BA-074), and it has no quarantined MicroVM (BA-073). It has no
 replenishment strategies either: its battery tops a Pool up whenever the
-Pool is below its size (BA-075, BA-076). Its `DeletePool` refuses while
-the Pool owns any MicroVM, as the fake's does (BA-070, #199).
+Pool is below its size (BA-075, BA-076). Its MicroVMs are leased or
+available, and its `DeletePool` refuses for a leased one and deletes the
+available ones with the Pool, as battery does (BA-070).
 
 The claim lifecycle model (`specs/quint/claims.qnt`) is coarser than
 battery in these ways:
