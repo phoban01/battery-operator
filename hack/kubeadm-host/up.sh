@@ -56,6 +56,10 @@ step_controlplane() {
 # architecture and loaded into Docker.
 
 step_image() {
+	if [[ -n "${HOST_DISK:-}" ]]; then
+		log "HOST_DISK is set: the Host boots ${HOST_DISK}, so no image is built"
+		return
+	fi
 	if docker image inspect "${HOST_IMG}" >/dev/null 2>&1 && [[ -z "${REBUILD_IMAGE:-}" ]]; then
 		log "Using ${HOST_IMG}, already in Docker (REBUILD_IMAGE=1 builds it again)"
 		return
@@ -67,12 +71,21 @@ step_image() {
 # ---------------------------------------------------------------------------
 # disk: the Host Image installed onto a raw disk with `bootc install
 # to-disk`, run from the image itself, and a blank disk for the thin pool.
+# HOST_DISK=<raw disk image> boots a disk made elsewhere instead, such as
+# bootc-image-builder's `--type raw` output (README.md).
 
 step_disk() {
 	local root="${LOCAL_WORK_DIR}/host-root.raw" thin="${LOCAL_WORK_DIR}/host-thin-pool.raw"
 	mkdir -p "${LOCAL_WORK_DIR}" "${STATE_DIR}"
 	if [[ -f "${root}" && -z "${REBUILD_DISK:-}" ]]; then
 		log "Using the Host's disk ${MAC_WORK_DIR}/host-root.raw (REBUILD_DISK=1 makes it again)"
+	elif [[ -n "${HOST_DISK:-}" ]]; then
+		[[ -f "${HOST_DISK}" ]] || die "HOST_DISK ${HOST_DISK} is not a file"
+		log "Copying ${HOST_DISK} as the Host's disk"
+		# Sparse, as below.
+		rm -f "${root}"
+		dd if="${HOST_DISK}" of="${root}" bs=1M conv=sparse status=none
+		rm -f "${LOCAL_WORK_DIR}/efi-vars" "${thin}"
 	else
 		log "Installing ${HOST_IMG} onto a ${HOST_ROOT_GIB} GiB disk"
 		local work="${STATE_DIR}/disk"

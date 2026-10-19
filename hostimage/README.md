@@ -69,9 +69,10 @@ the target's binaries, by the target's name and checksum. Under emulation
 `bootc container lint` cannot run, and the build skips it with a warning; CI
 builds each platform natively, so CI runs it for both.
 
-The AMI of [Publishing an AMI](#publishing-an-ami) is x86_64 only, so a
-host pool that boots it takes an x86_64 instance type, such as the
-example's `m6id.metal`.
+An AMI of [Publishing an AMI](#publishing-an-ami) has one architecture,
+and a host pool that boots it takes an instance type of that
+architecture: `m6id.metal` for x86_64, as in the example, or a Graviton
+metal size such as `c7gd.metal` for arm64.
 
 The published image depends on a file that only the check stage produces, so
 no builder can skip that stage: an image that fails its checks does not
@@ -695,21 +696,25 @@ the image from an AMI. `publish-ami.sh` makes one from a published image
 (HI-009):
 
 ```sh
-make host-image-ami HOST_IMG=ghcr.io/phoban01/battery-operator/host-image:v0.2.0 \
+make host-image-ami HOST_IMG=ghcr.io/phoban01/battery-operator/host-image:v0.3.3 \
   HOST_IMAGE_AMI_ARGS="--bucket my-import-bucket --region eu-west-1"
 ```
 
-The script pulls the image's x86_64 platform into root's podman storage,
-because the AMI is x86_64 only. It then runs
-`bootc-image-builder --type ami`, pinned by digest. The builder uploads the
-disk image to the S3 bucket, imports it as a snapshot through the
-`vmimport` service role, and registers the AMI. The script then tags the
-AMI:
+An AMI has one architecture, x86_64 or arm64, where the published image
+has both. `ARCH=amd64` or `ARCH=arm64` picks it (the script's `--arch`);
+left out, it is the machine's own. The script pulls that platform of the
+image into root's podman storage, checks the pulled image's architecture,
+and runs `bootc-image-builder --type ami --target-arch <arch>`, pinned by
+digest. The builder uploads the disk image to the S3 bucket, imports it
+as a snapshot through the `vmimport` service role, and registers the AMI
+as `battery-host-<kubernetes version>-<x86_64|arm64>-<12 digits of the
+digest>`. The script then tags the AMI:
 
 | Tag | Value |
 |-----|-------|
 | `battery.liquidmetal-x.dev/image-digest` | The digest of the container image |
 | `battery.liquidmetal-x.dev/kubernetes-version` | The image's Kubernetes version, from its OCI label. A pool that boots the AMI sets this as its `kubernetesVersion` |
+| `battery.liquidmetal-x.dev/architecture` | `x86_64` or `arm64`, as EC2 names them. The pool's instance type must be of this architecture |
 | `battery.liquidmetal-x.dev/host-image` | `true` |
 
 It needs podman, sudo, the `aws` command line and AWS credentials, from
@@ -718,12 +723,53 @@ once. The image must be in a registry, so that it has a digest; an image
 built only locally has none, and the script refuses it. `--dry-run` prints
 the commands and runs nothing.
 
+bootc-image-builder builds for the machine it runs on, so make each
+architecture's AMI on a machine of that architecture: an x86_64 AMI on
+an x86_64 machine, an arm64 AMI on an arm64 one, for example a Graviton
+instance or an Apple silicon Mac's Linux VM. A cross build is possible
+but untested here: bootc-image-builder's documentation says its image
+and the bootc image must be of the target architecture, so the script
+runs the builder's image for `--arch` (`podman run --platform`), which on
+another machine runs under emulation and needs `qemu-user-static`
+installed (binfmt_misc); the builder calls `--target-arch` experimental.
+
+An arm64 AMI, step by step, on an arm64 machine:
+
+```sh
+make host-image-ami ARCH=arm64 HOST_IMG=ghcr.io/phoban01/battery-operator/host-image:v0.3.3 \
+  HOST_IMAGE_AMI_ARGS="--bucket my-import-bucket --region eu-west-1"
+```
+
+Then give the pool a Graviton metal instance type, such as `c7gd.metal`
+or `c8gd.metal-24xl`: Graviton's VM sizes have no nested virtualization,
+and a Host needs KVM.
+
 Nothing else in this directory needs AWS, and nothing runs the script
 unless you ask: no other make target and no CI workflow calls it.
-`lint.sh` checks both, and checks a dry run.
+`lint.sh` checks both, and checks a dry run for each architecture.
 
 The script has not run against AWS: the project has no AWS account yet. It
-comes from flintlock-runner, which had none either.
+comes from flintlock-runner, which had none either. What has run is the
+same bootc-image-builder, pinned by the same digest, with `--type raw
+--target-arch arm64` on `host-image:v0.3.3`, on an arm64 machine; the
+disk it made booted under vfkit and joined a kubeadm cluster as a ready
+Host (`hack/kubeadm-host`, `HOST_DISK`). Only the AMI registration is
+untried.
+
+Without podman, the same build runs under docker from a containers
+storage directory that a podman container fills, as the proof did:
+
+```sh
+docker run --rm --privileged -v "$PWD/storage:/var/lib/containers/storage" \
+  quay.io/podman/stable podman pull --arch arm64 ghcr.io/phoban01/battery-operator/host-image:v0.3.3
+docker run --rm --privileged --security-opt label=disable -v /dev:/dev \
+  -v "$PWD/storage:/var/lib/containers/storage" -v "$PWD/output:/output" \
+  quay.io/centos-bootc/bootc-image-builder@sha256:2b52843ea2bfda73b0a08d97e76b734393b1d3a804681b9fabb26723bd3a2f0b \
+  --type raw --target-arch arm64 --rootfs xfs ghcr.io/phoban01/battery-operator/host-image:v0.3.3
+```
+
+The disk is `output/image/disk.raw`. The script itself stays on podman,
+the form bootc-image-builder documents.
 
 The AMI is made outside the Dagger module on purpose. bootc-image-builder
 runs as a privileged podman container that reads root's container storage,

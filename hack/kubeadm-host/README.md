@@ -138,8 +138,8 @@ Go and `kubectl` on the `PATH`.
 | Step | What it does |
 |---|---|
 | `controlplane` | Creates and starts `bo-kubeadm-cp` on Lima's `vzNAT` network, and runs `controlplane/provision.sh` on it. Writes `.state/kubeconfig`. |
-| `image` | `make host-image` for linux/arm64, as `HOST_IMG`, unless Docker has it. `REBUILD_IMAGE=1` builds it again. |
-| `disk` | Installs `HOST_IMG` onto `host-root.raw` and makes a blank `host-thin-pool.raw`, unless the root disk exists. `REBUILD_DISK=1` makes both again. |
+| `image` | `make host-image` for linux/arm64, as `HOST_IMG`, unless Docker has it. `REBUILD_IMAGE=1` builds it again. Skipped when `HOST_DISK` is set. |
+| `disk` | Installs `HOST_IMG` onto `host-root.raw` and makes a blank `host-thin-pool.raw`, unless the root disk exists. `REBUILD_DISK=1` makes both again. `HOST_DISK=<file>` copies that raw disk image instead of installing: a disk made elsewhere, such as bootc-image-builder's `--type raw` output, boots the same way. |
 | `host` | Renders the user-data and starts vfkit. |
 | `join` | Waits for the Host's address in the Mac's DHCP leases, adds the route to it, waits for the Node, initializes it as above, and waits for it to be Ready. |
 | `images`, `deploy` | Starts the registry on the Host, then the trial's steps. |

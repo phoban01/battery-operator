@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Usage: hostimage/publish-ami.sh IMAGE --bucket BUCKET --region REGION [--name NAME] [--rootfs xfs] [--dry-run]
+# Usage: hostimage/publish-ami.sh IMAGE --bucket BUCKET --region REGION [--arch amd64|arm64] [--name NAME] [--rootfs xfs] [--dry-run]
 #
 # Converts a published Host Image to an AMI with bootc-image-builder, and
 # tags the AMI, for the Cluster API host pools in config/capi. It runs only
@@ -12,18 +12,29 @@
 #
 # IMAGE is a Host Image in a registry, for example
 # ghcr.io/phoban01/battery-operator/host-image:v0.2.0, which CI publishes
-# on a version tag. The script pulls it into root's podman storage, where
-# bootc-image-builder reads it.
+# on a version tag, for both architectures. The script pulls the platform
+# of --arch into root's podman storage, where bootc-image-builder reads it.
+#
+# --arch is the AMI's architecture, amd64 (x86_64) or arm64, and defaults
+# to this machine's. bootc-image-builder builds for the machine it runs
+# on, so make an arm64 AMI on an arm64 machine and an x86_64 AMI on an
+# x86_64 machine. A cross build runs bootc-image-builder's image of the
+# target architecture under emulation (qemu-user-static); its own
+# documentation calls --target-arch experimental, and no one has run it
+# here.
 #
 # UNTESTED against AWS: written from the bootc-image-builder
 # documentation, and run only with --dry-run. flintlock-runner, where it
-# comes from, had no AWS account either.
+# comes from, had no AWS account either. The same bootc-image-builder
+# run with --type raw --target-arch arm64 made an arm64 disk that booted
+# and joined a cluster (hack/kubeadm-host, #225).
 #
 #= docs/requirements/11-host-image.md#image-build
 #/ Where publishing an AMI is requested, the Host Image build SHALL
-#/ convert the container image to an AMI with `bootc-image-builder` and SHALL
-#/ tag the AMI with the container image digest and the pinned Kubernetes
-#/ version.
+#/ convert the container image of the requested architecture, `x86_64` or
+#/ `aarch64`, to an AMI of that architecture with `bootc-image-builder` and
+#/ SHALL tag the AMI with the container image digest, the pinned Kubernetes
+#/ version and the architecture.
 set -euo pipefail
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck source=hostimage/versions.env
@@ -31,27 +42,41 @@ here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
 # bootc-image-builder reads the image from root's podman storage, so this is
 # podman and nothing else. quay.io/centos-bootc/bootc-image-builder:latest
-# as of 2026-09-21; it builds Fedora bootc images too.
+# as of 2026-09-21; it builds Fedora bootc images too. The digest is the
+# index's, which has an image for amd64 and one for arm64.
 BIB_IMAGE=${BIB_IMAGE:-quay.io/centos-bootc/bootc-image-builder@sha256:2b52843ea2bfda73b0a08d97e76b734393b1d3a804681b9fabb26723bd3a2f0b}
-# The AMI's tags: the image it was made from, and the Kubernetes version a
-# MachineDeployment that boots it has to name (config/capi).
+# The AMI's tags: the image it was made from, the Kubernetes version a
+# MachineDeployment that boots it has to name (config/capi), and the
+# architecture, as EC2 names it, which the instance type has to match.
 TAG_DIGEST=battery.liquidmetal-x.dev/image-digest
 TAG_KUBERNETES=battery.liquidmetal-x.dev/kubernetes-version
+TAG_ARCHITECTURE=battery.liquidmetal-x.dev/architecture
 TAG_HOST_IMAGE=battery.liquidmetal-x.dev/host-image
 
 usage() {
   sed -n '2p' "${BASH_SOURCE[0]}" | sed 's/^# //' >&2
   exit 2
 }
+# machine_arch is this machine's architecture as podman and
+# bootc-image-builder name it, or empty for one the Host Image is not
+# built for.
+machine_arch() {
+  case $(uname -m) in
+  x86_64 | amd64) echo amd64 ;;
+  aarch64 | arm64) echo arm64 ;;
+  esac
+}
 image=${1:-}
 [ -n "$image" ] || usage
 case $image in -*) usage ;; esac
 shift
 bucket="" region=${AWS_REGION:-${AWS_DEFAULT_REGION:-}} name="" rootfs=xfs dry_run=${DRY_RUN:-0}
+arch=$(machine_arch)
 while [ "$#" -gt 0 ]; do
   case "$1" in
   --bucket) bucket=${2:-}; shift 2 ;;
   --region) region=${2:-}; shift 2 ;;
+  --arch) arch=${2:-}; shift 2 ;;
   --name) name=${2:-}; shift 2 ;;
   --rootfs) rootfs=${2:-}; shift 2 ;;
   --dry-run) dry_run=1; shift ;;
@@ -59,6 +84,14 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 if [ -z "$bucket" ] || [ -z "$region" ]; then usage; fi
+# EC2's name for the architecture: an AMI's Architecture, and an instance
+# type's supported architecture, are x86_64 or arm64.
+case $arch in
+amd64) ec2_arch=x86_64 ;;
+arm64) ec2_arch=arm64 ;;
+"") echo "this machine is $(uname -m), which the Host Image is not built for; give --arch amd64 or --arch arm64" >&2; exit 2 ;;
+*) echo "--arch is amd64 or arm64, not '$arch'" >&2; exit 2 ;;
+esac
 
 run() {
   if [ "$dry_run" = 1 ]; then
@@ -83,10 +116,18 @@ if [ "$dry_run" = 1 ]; then
 else
   command -v podman >/dev/null || { echo "podman is required" >&2; exit 1; }
   command -v aws >/dev/null || { echo "the aws command line is required to tag the AMI" >&2; exit 1; }
-  # The AMI is x86_64 (--target-arch amd64 below), and a published Host
-  # Image holds both architectures, so the pull asks for x86_64 on any
-  # machine.
-  sudo podman image exists "$image" || sudo podman pull --arch amd64 "$image"
+  # A published Host Image holds both architectures, so the pull asks for
+  # the AMI's. An image already in root's storage may be the other
+  # architecture, from an earlier run; then it is pulled again.
+  if ! sudo podman image exists "$image" ||
+    [ "$(sudo podman image inspect --format '{{ .Architecture }}' "$image")" != "$arch" ]; then
+    sudo podman pull --arch "$arch" "$image"
+  fi
+  got=$(sudo podman image inspect --format '{{ .Architecture }}' "$image")
+  [ "$got" = "$arch" ] || {
+    echo "$image in root's podman storage is $got, not $arch; is it published for $arch?" >&2
+    exit 1
+  }
   digest=${IMAGE_DIGEST:-$(sudo podman image inspect --format '{{ .Digest }}' "$image")}
   kubernetes=$(sudo podman image inspect --format '{{ index .Labels "dev.liquidmetal-x.battery.version.kubernetes" }}' "$image")
 fi
@@ -98,7 +139,7 @@ fi
   echo "$image has no Kubernetes version label (got '$kubernetes'); is it a Host Image?" >&2
   exit 1
 }
-[ -n "$name" ] || name="battery-host-${kubernetes}-${digest:7:12}"
+[ -n "$name" ] || name="battery-host-${kubernetes}-${ec2_arch}-${digest:7:12}"
 
 # Credentials reach the builder from the environment when they are there,
 # and from ~/.aws otherwise. They are never written anywhere.
@@ -111,15 +152,18 @@ else
 fi
 
 # --preserve-env keeps the credentials across sudo without putting them on
-# a command line.
+# a command line. --platform takes bootc-image-builder's image of the
+# AMI's architecture from the index: the machine's own on a native build,
+# and the emulated one on a cross build.
 run sudo --preserve-env=AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY,AWS_SESSION_TOKEN \
   podman run --rm --privileged --pull=newer \
+  --platform "linux/$arch" \
   --security-opt label=type:unconfined_t \
   -v /var/lib/containers/storage:/var/lib/containers/storage \
   "${creds[@]}" \
   "$BIB_IMAGE" \
   --type ami \
-  --target-arch amd64 \
+  --target-arch "$arch" \
   --rootfs "$rootfs" \
   --aws-ami-name "$name" \
   --aws-bucket "$bucket" \
@@ -139,5 +183,6 @@ fi
 run aws ec2 create-tags --region "$region" --resources "$ami" --tags \
   "Key=$TAG_DIGEST,Value=$digest" \
   "Key=$TAG_KUBERNETES,Value=$kubernetes" \
+  "Key=$TAG_ARCHITECTURE,Value=$ec2_arch" \
   "Key=$TAG_HOST_IMAGE,Value=true"
-echo "$ami $name $digest $kubernetes"
+echo "$ami $name $digest $kubernetes $ec2_arch"

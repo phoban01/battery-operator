@@ -314,24 +314,48 @@ fi
 #= docs/requirements/11-host-image.md#image-build
 #= type=test
 #/ Where publishing an AMI is requested, the Host Image build SHALL
-#/ convert the container image to an AMI with `bootc-image-builder` and SHALL
-#/ tag the AMI with the container image digest and the pinned Kubernetes
-#/ version.
-# A dry run: what publish-ami.sh would run, without podman, AWS or an
-# image. It shows the commands are formed as intended, not that AWS accepts
-# them; nothing has run the script against AWS.
+#/ convert the container image of the requested architecture, `x86_64` or
+#/ `aarch64`, to an AMI of that architecture with `bootc-image-builder` and
+#/ SHALL tag the AMI with the container image digest, the pinned Kubernetes
+#/ version and the architecture.
+# A dry run for each architecture: what publish-ami.sh would run, without
+# podman, AWS or an image. It shows the commands are formed as intended,
+# not that AWS accepts them; nothing has run the script against AWS.
 digest=sha256:$(printf 'a%.0s' $(seq 1 64))
 k8s=$(sed -n 's/^KUBERNETES_VERSION=//p' hostimage/versions.env)
-ami_out=$(IMAGE_DIGEST=$digest hostimage/publish-ami.sh registry.example/host:1 --bucket b --region eu-west-1 --dry-run 2>&1)
-for want in "bootc-image-builder@sha256:" "--type ami" "--target-arch amd64" "--aws-bucket b" "--aws-region eu-west-1" \
-  "registry.example/host:1" "create-tags" "Key=battery.liquidmetal-x.dev/image-digest,Value=$digest" \
-  "Key=battery.liquidmetal-x.dev/kubernetes-version,Value=$k8s"; do
-  if printf '%s\n' "$ami_out" | tr -d "\\\\" | grep -qF -- "$want"; then
-    echo "ok    publish-ami dry run has: $want"
-  else
-    fail "publish-ami dry run lacks: $want"
-  fi
+for arch in amd64:x86_64 arm64:arm64; do
+  ec2_arch=${arch#*:}
+  arch=${arch%:*}
+  ami_out=$(IMAGE_DIGEST=$digest hostimage/publish-ami.sh registry.example/host:1 --bucket b --region eu-west-1 --arch "$arch" --dry-run 2>&1)
+  for want in "bootc-image-builder@sha256:" "--platform linux/$arch" "--type ami" "--target-arch $arch" "--aws-bucket b" "--aws-region eu-west-1" \
+    "--aws-ami-name battery-host-$k8s-$ec2_arch-${digest:7:12}" \
+    "registry.example/host:1" "create-tags" "Key=battery.liquidmetal-x.dev/image-digest,Value=$digest" \
+    "Key=battery.liquidmetal-x.dev/kubernetes-version,Value=$k8s" "Key=battery.liquidmetal-x.dev/architecture,Value=$ec2_arch"; do
+    if printf '%s\n' "$ami_out" | tr -d "\\\\" | grep -qF -- "$want"; then
+      echo "ok    publish-ami dry run for $arch has: $want"
+    else
+      fail "publish-ami dry run for $arch lacks: $want"
+    fi
+  done
 done
+# Without --arch the AMI is this machine's architecture, and an
+# architecture the Host Image is not built for is refused.
+case $(uname -m) in x86_64 | amd64) own=amd64 ;; aarch64 | arm64) own=arm64 ;; *) own="" ;; esac
+if [ -n "$own" ]; then
+  # Captured, not piped into grep -q: with pipefail, a grep that exits on
+  # its match leaves the script with SIGPIPE and the pipeline failed.
+  own_out=$(IMAGE_DIGEST=$digest hostimage/publish-ami.sh registry.example/host:1 --bucket b --region eu-west-1 --dry-run 2>&1)
+  if [[ $own_out == *"--target-arch $own"* ]]; then
+    echo "ok    publish-ami defaults to this machine's architecture, $own"
+  else
+    fail "publish-ami does not default to this machine's architecture, $own"
+  fi
+fi
+if IMAGE_DIGEST=$digest hostimage/publish-ami.sh registry.example/host:1 --bucket b --region eu-west-1 --arch riscv64 --dry-run >/dev/null 2>&1; then
+  fail "publish-ami accepts --arch riscv64"
+else
+  echo "ok    publish-ami refuses --arch riscv64"
+fi
 # Only when requested: no target but host-image-ami, and no workflow, runs it.
 if grep -n 'publish-ami\|host-image-ami' Makefile .github/workflows/*.yml .dagger/*.go |
   grep -v '^Makefile:[0-9]*:\(#\|host-image-ami:\|\.PHONY: host-image-ami\|	hostimage/publish-ami.sh \)' | grep -q .; then
