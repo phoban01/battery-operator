@@ -342,7 +342,10 @@ done
 # architecture the Host Image is not built for is refused.
 case $(uname -m) in x86_64 | amd64) own=amd64 ;; aarch64 | arm64) own=arm64 ;; *) own="" ;; esac
 if [ -n "$own" ]; then
-  if IMAGE_DIGEST=$digest hostimage/publish-ami.sh registry.example/host:1 --bucket b --region eu-west-1 --dry-run 2>&1 | grep -q -- "--target-arch $own"; then
+  # Captured, not piped into grep -q: with pipefail, a grep that exits on
+  # its match leaves the script with SIGPIPE and the pipeline failed.
+  own_out=$(IMAGE_DIGEST=$digest hostimage/publish-ami.sh registry.example/host:1 --bucket b --region eu-west-1 --dry-run 2>&1)
+  if [[ $own_out == *"--target-arch $own"* ]]; then
     echo "ok    publish-ami defaults to this machine's architecture, $own"
   else
     fail "publish-ami does not default to this machine's architecture, $own"
