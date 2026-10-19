@@ -68,212 +68,152 @@ func wantReady(t *testing.T, s *poolScope, reason string) *metav1.Condition {
 	return ready
 }
 
-//= docs/requirements/03-pools.md#deletion
-//= type=test
-//# When battery refuses `DeletePool` for a deleted Pool because
-//# the Pool still has MicroVMs, the Pool's spec in battery is not its
-//# drained spec, and battery reports no provisioning MicroVM in the Pool,
-//# the Pool Controller SHALL send battery the Pool's drained spec with
-//# `UpdatePool`.
-
-//= docs/requirements/03-pools.md#deletion
-//= type=test
-//# When battery refuses `DeletePool` for a deleted Pool whose
-//# spec in battery is its drained spec, the Pool Controller SHALL claim each
-//# available MicroVM of the Pool with `ClaimVM`, release it at once with
-//# `ReleaseVM`, and then call `DeletePool` again.
+// wantNoClaims fails if the Pool Controller claimed or released a MicroVM.
+// The stub battery has neither call, so one would panic first; this says
+// so where a test relies on it.
+func wantNoClaims(t *testing.T, b *stubBattery) {
+	t.Helper()
+	for _, call := range b.Calls() {
+		if strings.HasPrefix(call, "ClaimVM ") || strings.HasPrefix(call, "ReleaseVM ") {
+			t.Errorf("the Pool Controller called %q for a deleted Pool", call)
+		}
+	}
+}
 
 //= docs/requirements/03-pools.md#declaration
 //= type=test
 //# The Pool Controller SHALL add a finalizer to each Pool, and when
-//# the Pool is deleted SHALL call `DeletePool`, drain the Pool while battery
-//# refuses it (PO-030, PO-031), and remove the finalizer only once battery
-//# has deleted the Pool or reported it unknown.
+//# the Pool is deleted SHALL call `DeletePool` until battery accepts it
+//# (PO-042, PO-043), and remove the finalizer only once battery has
+//# deleted the Pool or reported it unknown.
 
-// TestDeletedPoolIsDrainedThenDeleted covers PO-030, PO-031 and PO-003: a
-// refused DeletePool gives battery the drained spec, which keeps the
-// Pool's template and Hosts, then the Pool Controller claims and releases
-// each available MicroVM and deletes the Pool, all in one reconcile.
-func TestDeletedPoolIsDrainedThenDeleted(t *testing.T) {
+//= docs/requirements/03-pools.md#deletion
+//= type=test
+//# The Pool Controller SHALL NOT claim or release a MicroVM of a
+//# deleted Pool, and SHALL leave the deletion of the Pool's MicroVMs to
+//# battery's `DeletePool`.
+
+// TestADeletedPoolGoesWithItsMicroVMs covers PO-003 and PO-044: a Pool no
+// claim holds goes in one DeletePool, which deletes its available,
+// provisioning and quarantined MicroVMs with it (BA-070, BA-073).
+func TestADeletedPoolGoesWithItsMicroVMs(t *testing.T) {
 	b := newStubBattery()
-	pool, ref := heldDeletedPool(b, battery.PoolStatus{Available: 2})
+	pool, ref := heldDeletedPool(b, battery.PoolStatus{Available: 2, Provisioning: 1, Quarantined: 1})
 	s := newTestPoolScope(pool, b)
 
 	if _, err := runDeletion(t, s); err != nil {
 		t.Fatalf("chain: %v", err)
 	}
-	wantCalls(t, b,
-		"DeletePool ci/runners", "GetPool ci/runners", "UpdatePool ci/runners",
-		"ClaimVM ci/runners", "ReleaseVM lease-1",
-		"ClaimVM ci/runners", "ReleaseVM lease-2",
-		"DeletePool ci/runners")
+	wantCalls(t, b, "DeletePool ci/runners")
+	wantNoClaims(t, b)
 	if controllerutil.ContainsFinalizer(s.Object, PoolFinalizer) {
 		t.Error("the finalizer is still on the Pool battery deleted")
 	}
 	if _, ok := b.spec(ref); ok {
 		t.Error("battery still holds the Pool")
 	}
-
-	// The spec the drain sent: the one battery held, drained.
-	b2 := newStubBattery()
-	pool2, _ := heldDeletedPool(b2, battery.PoolStatus{Available: 1, Leased: 1})
-	before := b2.pools[ref]
-	s2 := newTestPoolScope(pool2, b2)
-	_, _ = runDeletion(t, s2)
-	got, _ := b2.spec(ref)
-	if got.Size != 0 ||
-		got.Replenishment.Type != poolmgrv1.ReplenishmentStrategyType_MIN_SIZE_THRESHOLD ||
-		got.Replenishment.MinSize == nil || *got.Replenishment.MinSize != 1 ||
-		len(got.PreLeaseCommands) != 0 ||
-		got.HookFailurePolicy != poolmgrv1.HookFailurePolicy_DELETE_AND_REPLACE {
-		t.Errorf("drained spec = size %d, %v min %v, pre-lease %q, %v; want size 0, MIN_SIZE_THRESHOLD min 1, none, DELETE_AND_REPLACE",
-			got.Size, got.Replenishment.Type, got.Replenishment.MinSize, got.PreLeaseCommands, got.HookFailurePolicy)
-	}
-	if !proto.Equal(got.Template, before.Template) || !slices.Equal(got.FlintlockHosts, before.FlintlockHosts) ||
-		got.HeartbeatExpiryThreshold != before.HeartbeatExpiryThreshold {
-		t.Errorf("drained spec changed the template, Hosts or expiry threshold battery held: %+v", got)
-	}
-}
-
-// TestADrainedPoolIsNotUpdatedAgain covers PO-031 for a Pool whose spec in
-// battery is already drained: no UpdatePool, straight to the claims.
-func TestADrainedPoolIsNotUpdatedAgain(t *testing.T) {
-	b := newStubBattery()
-	pool, ref := heldDeletedPool(b, battery.PoolStatus{Available: 1})
-	b.pools[ref] = drainedSpec(b.pools[ref])
-	s := newTestPoolScope(pool, b)
-	if _, err := runDeletion(t, s); err != nil {
-		t.Fatalf("chain: %v", err)
-	}
-	wantCalls(t, b, "DeletePool ci/runners", "GetPool ci/runners",
-		"ClaimVM ci/runners", "ReleaseVM lease-1", "DeletePool ci/runners")
-}
-
-// TestADeletedPoolIsNotDrainedWhileProvisioning covers PO-030's wait:
-// while battery reports a provisioning MicroVM, UpdatePool would cancel
-// it under the old policy (BA-074), so the Pool Controller waits, says
-// Draining and asks again soon.
-func TestADeletedPoolIsNotDrainedWhileProvisioning(t *testing.T) {
-	b := newStubBattery()
-	pool, _ := heldDeletedPool(b, battery.PoolStatus{Available: 1, Provisioning: 1})
-	s := newTestPoolScope(pool, b)
-	res, err := runDeletion(t, s)
-	if err != nil {
-		t.Fatalf("chain: %v", err)
-	}
-	wantCalls(t, b, "DeletePool ci/runners", "GetPool ci/runners")
-	wantReady(t, s, PoolReasonDraining)
-	if res.RequeueAfter != poolDrainRequeue {
-		t.Errorf("RequeueAfter = %v, want %v", res.RequeueAfter, poolDrainRequeue)
-	}
-	if !controllerutil.ContainsFinalizer(s.Object, PoolFinalizer) {
-		t.Error("the finalizer went while battery still holds the Pool")
-	}
-	if st := s.Object.Status; st.Available != 1 || st.Provisioning != 1 {
-		t.Errorf("status counts = %+v, want battery's", st)
+	if ready := readyCondition(s.Object); ready != nil {
+		t.Errorf("Ready = %+v, want none", ready)
 	}
 }
 
 //= docs/requirements/03-pools.md#deletion
 //= type=test
-//# The Pool Controller SHALL NOT release a Lease of a deleted
-//# Pool other than one it claimed itself under PO-031.
+//# When battery refuses `DeletePool` for a deleted Pool and the
+//# Pool's spec in battery is not its drained spec, the Pool Controller
+//# SHALL send battery the Pool's drained spec with `UpdatePool`.
 
 //= docs/requirements/03-pools.md#deletion
 //= type=test
-//# While battery refuses `DeletePool` for a deleted Pool that has
-//# leased or quarantined MicroVMs, the Pool Controller SHALL set the Pool's
-//# condition `Ready` false with the reason `DeletionBlocked` and a message
-//# that gives those counts.
+//# While battery refuses `DeletePool` for a deleted Pool, the Pool
+//# Controller SHALL set the Pool's condition `Ready` false with the reason
+//# `DeletionBlocked` and a message that gives the Pool's leased MicroVMs.
 
-// TestADeletedPoolWaitsForItsClaims covers PO-032 and PO-033: the drain
-// takes the available MicroVMs and leaves the ones claims hold, and the
-// quarantined one; the Pool stays, DeletionBlocked, with the counts.
+// TestADeletedPoolWaitsForItsClaims covers PO-042, PO-043 and PO-044:
+// battery refuses while claims hold two MicroVMs, so the Pool Controller
+// gives the Pool its drained spec, which keeps the Pool's template, Hosts
+// and hooks, says DeletionBlocked with the counts, keeps the finalizer and
+// takes no MicroVM itself. Once the claims end, the next reconcile deletes
+// the Pool.
 func TestADeletedPoolWaitsForItsClaims(t *testing.T) {
 	b := newStubBattery()
 	pool, ref := heldDeletedPool(b, battery.PoolStatus{Available: 1, Leased: 2, Quarantined: 1})
-	// Two Leases claims hold, which the drain did not hand out.
-	b.leases["claim-a"], b.leases["claim-b"] = ref, ref
+	before := b.pools[ref]
 	s := newTestPoolScope(pool, b)
 
 	_, err := runDeletion(t, s)
 	if !errors.Is(err, battery.ErrFailedPrecondition) {
 		t.Fatalf("chain error = %v, want the refusal, for the workqueue's backoff", err)
 	}
-	for _, call := range b.Calls() {
-		if strings.HasPrefix(call, "ReleaseVM ") && call != "ReleaseVM lease-1" {
-			t.Errorf("the drain called %q, a Lease it did not claim", call)
-		}
+	wantCalls(t, b, "DeletePool ci/runners", "GetPool ci/runners", "UpdatePool ci/runners")
+	wantNoClaims(t, b)
+	got, _ := b.spec(ref)
+	if got.Size != 0 ||
+		got.Replenishment.Type != poolmgrv1.ReplenishmentStrategyType_MIN_SIZE_THRESHOLD ||
+		got.Replenishment.MinSize == nil || *got.Replenishment.MinSize != 1 {
+		t.Errorf("drained spec = size %d, %v min %v; want size 0, MIN_SIZE_THRESHOLD min 1",
+			got.Size, got.Replenishment.Type, got.Replenishment.MinSize)
 	}
-	if _, ok := b.leases["claim-a"]; !ok {
-		t.Error("a claim's Lease was released")
+	if !proto.Equal(got.Template, before.Template) || !slices.Equal(got.FlintlockHosts, before.FlintlockHosts) ||
+		!slices.Equal(got.PreLeaseCommands, before.PreLeaseCommands) || got.HookFailurePolicy != before.HookFailurePolicy ||
+		got.HeartbeatExpiryThreshold != before.HeartbeatExpiryThreshold {
+		t.Errorf("drained spec changed more than the size and strategy battery held: %+v", got)
 	}
 	ready := wantReady(t, s, PoolReasonDeletionBlocked)
-	if !strings.Contains(ready.Message, "2 leased and 1 quarantined") {
-		t.Errorf("Ready message = %q, want the leased and quarantined counts", ready.Message)
+	if !strings.Contains(ready.Message, "2 leased") {
+		t.Errorf("Ready message = %q, want the leased count", ready.Message)
 	}
 	if !controllerutil.ContainsFinalizer(s.Object, PoolFinalizer) {
 		t.Error("the finalizer went while battery still holds the Pool")
 	}
-	if st := s.Object.Status; st.Available != 0 || st.Leased != 2 || st.Quarantined != 1 {
-		t.Errorf("status counts = %+v, want battery's after the drain", st)
+	if st := s.Object.Status; st.Available != 1 || st.Leased != 2 || st.Quarantined != 1 {
+		t.Errorf("status counts = %+v, want battery's", st)
 	}
 
-	// The claims end; the next reconcile deletes the Pool.
-	b.status[ref] = battery.PoolStatus{Quarantined: 1}
-	s = newTestPoolScope(s.Object, b)
-	if _, err := runDeletion(t, s); !errors.Is(err, battery.ErrFailedPrecondition) {
-		t.Fatalf("chain error with a quarantined MicroVM = %v, want the refusal", err)
-	}
-	wantReady(t, s, PoolReasonDeletionBlocked)
-	b.status[ref] = battery.PoolStatus{}
+	// The claims end; the next reconcile deletes the Pool, quarantined
+	// MicroVM and all.
+	b.status[ref] = battery.PoolStatus{Available: 1, Quarantined: 1}
+	b.calls = nil
 	s = newTestPoolScope(s.Object, b)
 	if _, err := runDeletion(t, s); err != nil {
 		t.Fatalf("chain: %v", err)
 	}
+	wantCalls(t, b, "DeletePool ci/runners")
 	if controllerutil.ContainsFinalizer(s.Object, PoolFinalizer) {
 		t.Error("the finalizer is still on the Pool battery deleted")
 	}
 }
 
-//= docs/requirements/03-pools.md#deletion
-//= type=test
-//# While battery refuses `DeletePool` for a deleted Pool that has
-//# no leased or quarantined MicroVM, the Pool Controller SHALL set the Pool's
-//# condition `Ready` false with the reason `Draining`.
+// TestADrainedPoolIsNotUpdatedAgain covers PO-042 for a Pool whose spec in
+// battery is already drained: no UpdatePool, and the Pool still waits.
+func TestADrainedPoolIsNotUpdatedAgain(t *testing.T) {
+	b := newStubBattery()
+	pool, ref := heldDeletedPool(b, battery.PoolStatus{Leased: 1})
+	b.pools[ref] = drainedSpec(b.pools[ref])
+	s := newTestPoolScope(pool, b)
+	if _, err := runDeletion(t, s); !errors.Is(err, battery.ErrFailedPrecondition) {
+		t.Fatalf("chain error = %v, want the refusal", err)
+	}
+	wantCalls(t, b, "DeletePool ci/runners", "GetPool ci/runners")
+	wantReady(t, s, PoolReasonDeletionBlocked)
+}
 
-// TestADeletedPoolDrainingSaysSo covers PO-034: a Pool battery still
-// refuses with no leased or quarantined MicroVM, here one being deleted,
-// or one whose drain claim failed, says Draining.
-func TestADeletedPoolDrainingSaysSo(t *testing.T) {
-	t.Run("a MicroVM still being deleted", func(t *testing.T) {
-		b := newStubBattery()
-		pool, ref := heldDeletedPool(b, battery.PoolStatus{})
-		b.hidden[ref] = 1
-		s := newTestPoolScope(pool, b)
-		res, err := runDeletion(t, s)
-		if err != nil {
-			t.Fatalf("chain: %v", err)
-		}
-		wantReady(t, s, PoolReasonDraining)
-		if res.RequeueAfter != poolDrainRequeue {
-			t.Errorf("RequeueAfter = %v, want %v", res.RequeueAfter, poolDrainRequeue)
-		}
-	})
-
-	t.Run("a drain claim failed", func(t *testing.T) {
-		b := newStubBattery()
-		pool, _ := heldDeletedPool(b, battery.PoolStatus{Available: 1})
-		b.claimErr = battery.ErrUnavailable
-		s := newTestPoolScope(pool, b)
-		if _, err := runDeletion(t, s); !errors.Is(err, battery.ErrUnavailable) {
-			t.Fatalf("chain error = %v, want the failed claim", err)
-		}
-		wantReady(t, s, PoolReasonDraining)
-		if !controllerutil.ContainsFinalizer(s.Object, PoolFinalizer) {
-			t.Error("the finalizer went while battery still holds the Pool")
-		}
-	})
+// TestAFailedDrainIsRetried: an UpdatePool that fails leaves the Pool
+// DeletionBlocked, with the finalizer, and returns the failure so the
+// workqueue tries again (PO-042, PO-043).
+func TestAFailedDrainIsRetried(t *testing.T) {
+	b := newStubBattery()
+	pool, _ := heldDeletedPool(b, battery.PoolStatus{Available: 1, Leased: 1})
+	b.updateErr = battery.ErrUnavailable
+	s := newTestPoolScope(pool, b)
+	_, err := runDeletion(t, s)
+	if !errors.Is(err, battery.ErrUnavailable) {
+		t.Fatalf("chain error = %v, want the failed UpdatePool", err)
+	}
+	wantReady(t, s, PoolReasonDeletionBlocked)
+	if !controllerutil.ContainsFinalizer(s.Object, PoolFinalizer) {
+		t.Error("the finalizer went while battery still holds the Pool")
+	}
 }
 
 // TestADeletedPoolBatteryLosesIsLetGo: battery refused, then no longer
@@ -293,11 +233,11 @@ func TestADeletedPoolBatteryLosesIsLetGo(t *testing.T) {
 }
 
 // TestPoolDeletionAgainstTheFakeBattery drives a Pool's deletion through
-// the reconciler, the fake client and the fake battery, which refuses
-// DeletePool as battery v0.3.3 does (BA-070): the Pool battery filled,
-// with one MicroVM a claim holds, is drained, waits DeletionBlocked for
-// the claim, and goes once the claim's Lease is released (PO-003, PO-030
-// to PO-033).
+// the reconciler, the fake client and the fake battery, which drains a
+// Pool in DeletePool as battery v0.4.0 does (BA-070): the Pool battery
+// filled, with one MicroVM a claim holds, gets its drained spec and waits
+// DeletionBlocked for the claim with its warm MicroVMs, and goes with them
+// once the claim's Lease is released (PO-003, PO-042 to PO-044).
 func TestPoolDeletionAgainstTheFakeBattery(t *testing.T) {
 	ctx := context.Background()
 	fl := fakeflintlock.New(fakeflintlock.Config{Name: testHostA})
@@ -340,7 +280,7 @@ func TestPoolDeletionAgainstTheFakeBattery(t *testing.T) {
 	if err := k8s.Delete(ctx, pool.DeepCopy()); err != nil {
 		t.Fatalf("Delete Pool: %v", err)
 	}
-	eventually(t, "the Pool drained, blocked by the claim", func() (bool, string) {
+	eventually(t, "the Pool blocked by the claim", func() (bool, string) {
 		reconcileOnce()
 		got := &batteryv1alpha1.Pool{}
 		if err := k8s.Get(ctx, key, got); err != nil {
@@ -348,11 +288,18 @@ func TestPoolDeletionAgainstTheFakeBattery(t *testing.T) {
 		}
 		ready := readyCondition(got)
 		return ready != nil && ready.Reason == PoolReasonDeletionBlocked &&
-				got.Status.Available == 0 && got.Status.Leased == 1,
+				got.Status.Available == 3 && got.Status.Leased == 1,
 			fmt.Sprintf("Ready %+v, status %+v", ready, got.Status)
 	})
-	if n := len(fl.MicroVMs()); n != 1 {
-		t.Fatalf("%d MicroVMs on the Host while the claim holds one, want 1", n)
+	held, err := bc.GetPool(ctx, ref)
+	if err != nil {
+		t.Fatalf("GetPool: %v", err)
+	}
+	if !isDrainedSpec(held.Spec) {
+		t.Errorf("battery's spec for the deleted Pool = %+v, want its drained spec", held.Spec)
+	}
+	if n := len(fl.MicroVMs()); n != 4 {
+		t.Fatalf("%d MicroVMs on the Host while the claim holds one, want 4", n)
 	}
 
 	if err := bc.ReleaseVM(ctx, claim.LeaseID); err != nil {

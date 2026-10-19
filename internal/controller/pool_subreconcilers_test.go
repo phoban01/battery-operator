@@ -61,9 +61,9 @@ func readyCondition(pool *batteryv1alpha1.Pool) *metav1.Condition {
 //= docs/requirements/03-pools.md#declaration
 //= type=test
 //# The Pool Controller SHALL add a finalizer to each Pool, and when
-//# the Pool is deleted SHALL call `DeletePool`, drain the Pool while battery
-//# refuses it (PO-030, PO-031), and remove the finalizer only once battery
-//# has deleted the Pool or reported it unknown.
+//# the Pool is deleted SHALL call `DeletePool` until battery accepts it
+//# (PO-042, PO-043), and remove the finalizer only once battery has
+//# deleted the Pool or reported it unknown.
 
 // TestPoolFinalizerIsAddedBeforeBatteryHearsOfThePool covers PO-003: the
 // chain stops once it adds the finalizer, so battery is not called until
@@ -88,9 +88,9 @@ func TestPoolFinalizerIsAddedBeforeBatteryHearsOfThePool(t *testing.T) {
 //= docs/requirements/03-pools.md#declaration
 //= type=test
 //# The Pool Controller SHALL add a finalizer to each Pool, and when
-//# the Pool is deleted SHALL call `DeletePool`, drain the Pool while battery
-//# refuses it (PO-030, PO-031), and remove the finalizer only once battery
-//# has deleted the Pool or reported it unknown.
+//# the Pool is deleted SHALL call `DeletePool` until battery accepts it
+//# (PO-042, PO-043), and remove the finalizer only once battery has
+//# deleted the Pool or reported it unknown.
 
 // TestDeletedPoolLeavesBatteryBeforeItsFinalizer covers PO-003 for each
 // answer battery can give DeletePool but a refusal, which

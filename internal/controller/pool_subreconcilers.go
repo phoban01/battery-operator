@@ -59,9 +59,9 @@ func poolChain() reconcile.Chain[*poolScope] {
 
 //= docs/requirements/03-pools.md#declaration
 //# The Pool Controller SHALL add a finalizer to each Pool, and when
-//# the Pool is deleted SHALL call `DeletePool`, drain the Pool while battery
-//# refuses it (PO-030, PO-031), and remove the finalizer only once battery
-//# has deleted the Pool or reported it unknown.
+//# the Pool is deleted SHALL call `DeletePool` until battery accepts it
+//# (PO-042, PO-043), and remove the finalizer only once battery has
+//# deleted the Pool or reported it unknown.
 //
 //= docs/requirements/03-pools.md#declaration
 //# When a Pool exists that battery does not hold, the Pool

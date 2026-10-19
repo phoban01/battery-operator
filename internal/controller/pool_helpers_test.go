@@ -52,10 +52,10 @@ var poolTestEpoch = time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)
 // and answers a call with the error set for it, if any. The embedded
 // interface is nil, so a call the Pool Controller should not make panics.
 //
-// Like battery, it refuses DeletePool while the Pool's status counts any
-// MicroVM, or while pending counts MicroVMs its status does not show, such
-// as those being deleted (BA-070). ClaimVM takes an available MicroVM and
-// ReleaseVM deletes it, for the Leases ClaimVM handed out.
+// Like battery v0.4.0, it refuses DeletePool while the Pool's status
+// counts a leased MicroVM, and otherwise deletes the Pool with its
+// MicroVMs (BA-070). It has no ClaimVM or ReleaseVM: the Pool Controller
+// never calls them (PO-044).
 type stubBattery struct {
 	battery.Client
 
@@ -63,22 +63,15 @@ type stubBattery struct {
 	pools map[battery.PoolRef]battery.PoolSpec
 	// status is the PoolStatus GetPool reports for a Pool it holds.
 	status map[battery.PoolRef]battery.PoolStatus
-	// hidden counts MicroVMs of a Pool that its status does not show.
-	hidden map[battery.PoolRef]int32
-	// leases are the Leases ClaimVM handed out and ReleaseVM has not ended.
-	leases    map[string]battery.PoolRef
-	nextLease int
-	calls     []string
+	calls  []string
 
-	getErr, createErr, updateErr, deleteErr, claimErr, releaseErr error
+	getErr, createErr, updateErr, deleteErr error
 }
 
 func newStubBattery() *stubBattery {
 	return &stubBattery{
 		pools:  map[battery.PoolRef]battery.PoolSpec{},
 		status: map[battery.PoolRef]battery.PoolStatus{},
-		hidden: map[battery.PoolRef]int32{},
-		leases: map[string]battery.PoolRef{},
 	}
 }
 
@@ -144,49 +137,11 @@ func (b *stubBattery) DeletePool(_ context.Context, ref battery.PoolRef) error {
 	if _, ok := b.pools[ref]; !ok {
 		return battery.ErrNotFound
 	}
-	st := b.status[ref]
-	if st.Available+st.Leased+st.Provisioning+st.Quarantined+b.hidden[ref] > 0 {
-		return fmt.Errorf("%w: pool %s still has VMs, delete or drain them first", battery.ErrFailedPrecondition, ref)
+	if n := b.status[ref].Leased; n > 0 {
+		return fmt.Errorf("%w: pool %s has %d leased VMs, release them or delete with force", battery.ErrFailedPrecondition, ref, n)
 	}
 	delete(b.pools, ref)
-	return nil
-}
-
-func (b *stubBattery) ClaimVM(_ context.Context, ref battery.PoolRef, _ string) (*battery.Claim, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.record("ClaimVM " + ref.String())
-	if b.claimErr != nil {
-		return nil, b.claimErr
-	}
-	st := b.status[ref]
-	if st.Available == 0 {
-		return nil, battery.ErrExhausted
-	}
-	st.Available--
-	st.Leased++
-	b.status[ref] = st
-	b.nextLease++
-	id := fmt.Sprintf("lease-%d", b.nextLease)
-	b.leases[id] = ref
-	return &battery.Claim{LeaseID: id, VMUID: "vm-" + id}, nil
-}
-
-func (b *stubBattery) ReleaseVM(_ context.Context, leaseID string) error {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.record("ReleaseVM " + leaseID)
-	if b.releaseErr != nil {
-		return b.releaseErr
-	}
-	ref, ok := b.leases[leaseID]
-	if !ok {
-		return battery.ErrNotFound
-	}
-	delete(b.leases, leaseID)
-	st := b.status[ref]
-	st.Leased--
-	b.status[ref] = st
+	delete(b.status, ref)
 	return nil
 }
 

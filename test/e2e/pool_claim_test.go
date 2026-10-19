@@ -228,28 +228,21 @@ func placementFeature(ns string) features.Feature {
 		Assess("a deleted Pool whose MicroVM a claim holds waits for the claim", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
 			//= docs/requirements/03-pools.md#deletion
 			//= type=test
-			//# While battery refuses `DeletePool` for a deleted Pool that has
-			//# leased or quarantined MicroVMs, the Pool Controller SHALL set the Pool's
-			//# condition `Ready` false with the reason `DeletionBlocked` and a message
-			//# that gives those counts.
-
-			//= docs/requirements/03-pools.md#deletion
-			//= type=test
-			//# When battery refuses `DeletePool` for a deleted Pool whose
-			//# spec in battery is its drained spec, the Pool Controller SHALL claim each
-			//# available MicroVM of the Pool with `ClaimVM`, release it at once with
-			//# `ReleaseVM`, and then call `DeletePool` again.
+			//# While battery refuses `DeletePool` for a deleted Pool, the Pool
+			//# Controller SHALL set the Pool's condition `Ready` false with the reason
+			//# `DeletionBlocked` and a message that gives the Pool's leased MicroVMs.
 			//
-			// poolmgrd refuses DeletePool while the Pool has any MicroVM
-			// (BA-070): the Pool Controller drains the available ones and
-			// leaves the claim's.
+			// poolmgrd refuses DeletePool while the Pool has a leased
+			// MicroVM (BA-070), and deletes the Pool with its warm MicroVMs
+			// only once the claim's has gone. The Pool Controller takes
+			// none of them itself (PO-044), so the warm ones stay meanwhile.
 			c := mustClient(t, cfg)
 			pool := &batteryv1alpha1.Pool{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: placedPoolName}}
 			if err := c.Delete(ctx, pool); err != nil {
 				t.Fatalf("deleting the Pool %s: %v", placedPoolName, err)
 			}
 			waitForPoolReady(ctx, t, c, pool, metav1.ConditionFalse, poolReasonDeletionBlocked, func(p *batteryv1alpha1.Pool) bool {
-				return p.Status.Available == 0 && p.Status.Provisioning == 0 && p.Status.Leased == 1
+				return p.Status.Leased == 1 && p.Status.Available >= 1
 			})
 			claim := &batteryv1alpha1.MicroVMClaim{}
 			if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: claimName}, claim); err != nil {
@@ -279,9 +272,11 @@ func placementFeature(ns string) features.Feature {
 			//= docs/requirements/03-pools.md#declaration
 			//= type=test
 			//# The Pool Controller SHALL add a finalizer to each Pool, and when
-			//# the Pool is deleted SHALL call `DeletePool`, drain the Pool while battery
-			//# refuses it (PO-030, PO-031), and remove the finalizer only once battery
-			//# has deleted the Pool or reported it unknown.
+			//# the Pool is deleted SHALL call `DeletePool` until battery accepts it
+			//# (PO-042, PO-043), and remove the finalizer only once battery has
+			//# deleted the Pool or reported it unknown.
+			//
+			// battery deletes the Pool's warm MicroVMs with it (BA-070).
 			c := mustClient(t, cfg)
 			waitForGone(ctx, t, c, &batteryv1alpha1.Pool{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: placedPoolName}})
 			return ctx

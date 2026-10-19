@@ -17,6 +17,7 @@ limitations under the License.
 package fakebattery
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"slices"
@@ -130,19 +131,23 @@ func (b *Battery) updatePool(spec poolSpec) (*pool, error) {
 	return &pool{Spec: spec, Status: b.countsLocked(ps.key).status()}, nil
 }
 
-// deletePool implements PoolAdmin.DeletePool. It refuses while the Pool
-// owns any MicroVM, in any phase, and deletes none of them, as battery
-// v0.3.3 did; battery v0.4.0 refuses only for a leased or claiming
-// MicroVM and deletes the rest with the Pool (BA-070, #199).
-func (b *Battery) deletePool(ref PoolRef) error {
+// deletePool implements PoolAdmin.DeletePool, which drains the Pool it
+// deletes, as battery v0.4.0's does. Without force it refuses while the
+// Pool has a leased or claiming MicroVM. Otherwise it stops the Pool's
+// provisioning, marks every MicroVM of the Pool DELETING, drops their
+// Leases, records VM_DELETED_ON_POOL_DELETE for each and removes the
+// Pool, all under one lock, as battery does in one transaction. It then
+// deletes each MicroVM on its Host before it answers; one whose Host does
+// not answer stays DELETING, and the tick retries it.
+func (b *Battery) deletePool(ctx context.Context, ref PoolRef, force bool) error {
 	b.mu.Lock()
-	defer b.mu.Unlock()
 
 	//= docs/requirements/10-battery.md#delete-pool
 	//# If battery holds no Pool of the name and namespace a
 	//# `DeletePool` names, then battery SHALL answer it with `NOT_FOUND`.
 	ps, err := b.poolLocked(ref)
 	if err != nil {
+		b.mu.Unlock()
 		return err
 	}
 
@@ -151,13 +156,60 @@ func (b *Battery) deletePool(ref PoolRef) error {
 	//# `PRE_LEASE_HOOK_RUNNING`, then battery SHALL answer a `DeletePool`
 	//# without `force` for it with `FAILED_PRECONDITION` and keep the Pool and
 	//# its MicroVMs.
+	var vms []*vmState
+	leased := 0
 	for _, vm := range b.vms {
-		if vm.pool == ps.key {
-			return status.Errorf(codes.FailedPrecondition, "pool %s still has VMs, delete or drain them first", ps.key)
+		if vm.pool != ps.key {
+			continue
+		}
+		vms = append(vms, vm)
+		switch vm.phase {
+		case poolmgrv1.VMPhase_LEASED, poolmgrv1.VMPhase_PRE_LEASE_HOOK_RUNNING:
+			leased++
 		}
 	}
+	if leased > 0 && !force {
+		b.mu.Unlock()
+		return status.Errorf(codes.FailedPrecondition, "pool %s has %d leased VMs, release them or delete with force", ps.key, leased)
+	}
+
+	//= docs/requirements/10-battery.md#delete-pool
+	//# battery SHALL NOT delete a MicroVM in the phase `QUARANTINED`
+	//# other than in a `DeletePool` of its Pool.
+	//
+	// Every MicroVM of the Pool goes, quarantined ones included. Each
+	// VM_DELETED_ON_POOL_DELETE is recorded before the Pool is removed,
+	// since an event needs its Pool; finishDeletionLocked records nothing
+	// more for a MicroVM whose Pool has gone.
+	slices.SortFunc(vms, func(x, y *vmState) int { return cmp.Compare(x.id, y.id) })
 	b.stopReconcilerLocked(ps)
+	for _, vm := range vms {
+		b.setPhaseLocked(vm, poolmgrv1.VMPhase_DELETING)
+		if vm.leaseID != "" {
+			b.dropLeaseLocked(vm.leaseID)
+			vm.leaseID = ""
+		}
+		vm.deleteEvent = 0
+		if vm.uid != "" {
+			b.emitLocked(ps.key, vm.uid, poolmgrv1.EventType_VM_DELETED_ON_POOL_DELETE, map[string]any{payloadHost: vm.host})
+		}
+	}
+	for id, ls := range b.leases {
+		if keyOf(ls.rec.Pool) == ps.key {
+			b.dropLeaseLocked(id)
+		}
+	}
 	delete(b.pools, ps.key)
+	b.mu.Unlock()
+
+	// As battery's deletePoolVMs, the Host deletions outlive the caller.
+	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
+	defer cancel()
+	for _, vm := range vms {
+		if err := b.deleteVM(cleanup, vm, 0); err != nil && !errors.Is(err, errDeletionInFlight) {
+			b.log.Error(err, "Deferred deletion of MicroVM of deleted Pool", "uid", vm.uid, "host", vm.host, "pool", ps.key.String())
+		}
+	}
 	return nil
 }
 

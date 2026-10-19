@@ -14,9 +14,9 @@ view of it into the Pool's status (ADR 0001, decision 4).
   to battery with `UpdatePool` and then set `status.observedGeneration` to
   that generation.
 - **PO-003** The Pool Controller SHALL add a finalizer to each Pool, and when
-  the Pool is deleted SHALL call `DeletePool`, drain the Pool while battery
-  refuses it (PO-030, PO-031), and remove the finalizer only once battery
-  has deleted the Pool or reported it unknown.
+  the Pool is deleted SHALL call `DeletePool` until battery accepts it
+  (PO-042, PO-043), and remove the finalizer only once battery has
+  deleted the Pool or reported it unknown.
 - **PO-004** If battery refuses a Pool's spec, then the Pool Controller SHALL
   set the Pool's condition `Ready` false with the reason `Rejected` and
   battery's message.
@@ -96,69 +96,56 @@ once battery reports why a provision fails.
 
 ## Deletion {#deletion}
 
-- **PO-030** When battery refuses `DeletePool` for a deleted Pool because
-  the Pool still has MicroVMs, the Pool's spec in battery is not its
-  drained spec, and battery reports no provisioning MicroVM in the Pool,
-  the Pool Controller SHALL send battery the Pool's drained spec with
-  `UpdatePool`.
-- **PO-031** When battery refuses `DeletePool` for a deleted Pool whose
-  spec in battery is its drained spec, the Pool Controller SHALL claim each
-  available MicroVM of the Pool with `ClaimVM`, release it at once with
-  `ReleaseVM`, and then call `DeletePool` again.
-- **PO-032** The Pool Controller SHALL NOT release a Lease of a deleted
-  Pool other than one it claimed itself under PO-031.
-- **PO-033** While battery refuses `DeletePool` for a deleted Pool that has
-  leased or quarantined MicroVMs, the Pool Controller SHALL set the Pool's
-  condition `Ready` false with the reason `DeletionBlocked` and a message
-  that gives those counts.
-- **PO-034** While battery refuses `DeletePool` for a deleted Pool that has
-  no leased or quarantined MicroVM, the Pool Controller SHALL set the Pool's
-  condition `Ready` false with the reason `Draining`.
+- **PO-030** (withdrawn): replaced by PO-042.
+- **PO-031** (withdrawn): replaced by battery's own draining (BA-070)
+  and PO-044.
+- **PO-032** (withdrawn): replaced by PO-044.
+- **PO-033** (withdrawn): replaced by PO-043.
+- **PO-034** (withdrawn): replaced by PO-043.
+- **PO-042** When battery refuses `DeletePool` for a deleted Pool and the
+  Pool's spec in battery is not its drained spec, the Pool Controller
+  SHALL send battery the Pool's drained spec with `UpdatePool`.
+- **PO-043** While battery refuses `DeletePool` for a deleted Pool, the
+  Pool Controller SHALL set the Pool's condition `Ready` false with the
+  reason `DeletionBlocked` and a message that gives the Pool's leased
+  MicroVMs.
+- **PO-044** The Pool Controller SHALL NOT claim or release a MicroVM of a
+  deleted Pool, and SHALL leave the deletion of the Pool's MicroVMs to
+  battery's `DeletePool`.
 
-battery v0.4.0 refuses `DeletePool` only while the Pool has a leased or
-claiming MicroVM, and otherwise deletes the Pool with its MicroVMs
-(BA-070). battery v0.3.3 refused while the Pool owned any MicroVM, and
-had no call that deletes a Pool with its MicroVMs, so the Pool Controller
-empties the Pool first, with the calls battery has. Against v0.4.0 the
-drain runs only while a claim holds a MicroVM; #199 replaces it with
-battery's own draining. The drained spec (glossary) makes battery stop
-creating MicroVMs for the Pool:
-a `MIN_SIZE_THRESHOLD` Pool of size 0 creates none (BA-072), where the
-other strategies would replace each MicroVM the drain takes. It also makes
-the drain's own claims run no pre-lease hook, and delete rather than
-quarantine a MicroVM whose claim fails. The Pool Controller then claims
-each available MicroVM and releases it, which deletes it (BA-030), and
-asks battery to delete the Pool again.
+battery v0.4.0's `DeletePool` drains the Pool it deletes
+(liquidmetal-dev/battery#83). It refuses while the Pool has a leased or
+claiming MicroVM, and otherwise deletes the Pool with every MicroVM it
+owns: available, provisioning and quarantined ones alike (BA-070,
+BA-073). So the Pool Controller calls `DeletePool` and does nothing to
+the Pool's MicroVMs itself (PO-044). A Pool that no claim holds goes in
+one call.
 
-PO-030 waits for the Pool's MicroVMs to finish provisioning, because
-`UpdatePool` cancels a provisioning MicroVM under the Pool's old hook
-failure policy (BA-074), which may quarantine it and so block the deletion
-for good. A Pool that stays provisioning is one battery would refuse to
-delete anyway.
+A Pool deleted while claims hold its MicroVMs stays, with `Ready` false
+and the reason `DeletionBlocked` (PO-043), until each of those claims
+ends: it is released (CL-020) or its Lease expires (BA-023). Its Bound
+claims keep working meanwhile. The Operator's Events stream reports each
+deletion (PO-023), so the Pool Controller asks again soon after the last
+claim ends, and battery then deletes the Pool with its warm MicroVMs.
 
-The drain does not take a MicroVM a claim holds. A Pool deleted while
-claims hold its MicroVMs stays, with `Ready` false and the reason
-`DeletionBlocked` (PO-033), until each of those claims ends: it is
-released (CL-020) or its Lease expires (BA-023). Its Bound claims keep
-working meanwhile, and a claim can still bind to an available MicroVM
-the drain has not yet taken, which then holds the deletion up the same
-way; nothing replaces it. The Operator's Events stream reports each
-deletion (PO-023), so the Pool is deleted soon after its last MicroVM.
+While battery refuses, it keeps the Pool and its reconciler, and would
+replace each MicroVM a new claim takes. The drained spec (glossary) stops
+that: a `MIN_SIZE_THRESHOLD` Pool of size 0 creates no MicroVM (BA-072).
+So the deletion waits at most for the claims there are, and for claims
+that bind to the warm MicroVMs the Pool still has; nothing replaces
+those. The drained spec keeps the Pool's hooks and hook failure policy,
+since a claim that binds meanwhile is a real one. `UpdatePool` cancels
+any provisioning MicroVM under the Pool's hook failure policy (BA-074),
+which may quarantine it; battery deletes a quarantined MicroVM with its
+Pool (BA-073), so that does not hold the deletion up.
 
-Under battery v0.3.3 a quarantined MicroVM also blocked the deletion,
-since v0.3.3 never deleted one: a Pool that had one kept the reason
-`DeletionBlocked` until an operator removed that MicroVM from battery's
-database by hand (#23). battery v0.4.0 deletes a quarantined MicroVM with
-its Pool (BA-073), so it no longer holds the deletion up.
-While battery is only deleting MicroVMs, or finishing their provisioning,
-the reason is `Draining` (PO-034).
-
-If the Operator stops between the drain's `ClaimVM` and its `ReleaseVM`,
-or the `ReleaseVM` fails in transit, the Lease is left with nothing to
-renew it. battery deletes it and its MicroVM once the Pool's
-`heartbeat_expiry_threshold` has passed (BA-023), and the deletion then
-goes on. PO-032 keeps the drain from releasing a Lease it cannot tell
-from a claim's (CL-031).
+battery v0.3.3 refused `DeletePool` while the Pool owned a MicroVM in
+any phase, and deleted none. The Pool Controller then emptied the Pool
+itself: it gave the Pool its drained spec, claimed each available
+MicroVM and released it at once, and waited for any MicroVM still
+provisioning (PO-030 to PO-034, #137). battery v0.4.0 does that work in
+`DeletePool`, so #199 withdrew those requirements. The drained spec stays,
+for the reason above.
 
 ## Refilling {#refill}
 
