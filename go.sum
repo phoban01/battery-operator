@@ -101,8 +101,8 @@ github.com/klauspost/compress v1.19.1 h1:VsB4HPswih7mmZ8WleSFQ75c/Ui1M4trX5oAsJn
 github.com/klauspost/compress v1.19.1/go.mod h1:cwPg85FWrGar70rWktvGQj8/hthj3wpl0PGDogxkrSQ=
 github.com/kylelemons/godebug v1.1.0 h1:RPNrshWIDI6G2gRW9EHilWtl7Z6Sb1BR0xunSBf0SNc=
 github.com/kylelemons/godebug v1.1.0/go.mod h1:9/0rRGxNHcop5bhtWyNeEfOS8JIWk580+fNqagV/RAw=
-github.com/liquidmetal-dev/battery v0.3.3 h1:XzjgqA02FY2bQ5XN2rZJWkoVxjzw3t8JXqagoVqvk10=
-github.com/liquidmetal-dev/battery v0.3.3/go.mod h1:RsAdM5tXWtmAfuWdcddqs5nAy1Dl/m8m9wfjTVQ+Lc0=
+github.com/liquidmetal-dev/battery v0.4.0 h1:OVsw0V5wSoIDKNu6Q1ddJcbbTL79r8QFgSe+8WujyFw=
+github.com/liquidmetal-dev/battery v0.4.0/go.mod h1:RsAdM5tXWtmAfuWdcddqs5nAy1Dl/m8m9wfjTVQ+Lc0=
 github.com/liquidmetal-dev/flintlock/api v0.0.0-20260922072746-f69bffbac45c h1:b8Y08PjYvn44nIegvW0cOPc2BGMCQM4e/f24yrWTlCg=
 github.com/liquidmetal-dev/flintlock/api v0.0.0-20260922072746-f69bffbac45c/go.mod h1:qixvd3PcuOTl0lwTitSrroUhk63nEGI9TeOb3Et2NdU=
 github.com/moby/spdystream v0.5.1 h1:9sNYeYZUcci9R6/w7KDaFWEWeV4LStVG78Mpyq/Zm/Y=

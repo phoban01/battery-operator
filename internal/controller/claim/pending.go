@@ -95,10 +95,23 @@ func (p Pending) Reconcile(_ context.Context, s *claimscope.Scope) (reconcile.Re
 	//# condition `Bound` false and the reason `BatteryUnavailable`, and SHALL
 	//# retry `ClaimVM` with backoff.
 	case failedInTransit(err):
-		// battery may have leased a MicroVM whose answer was lost; that
-		// Lease is an orphan, and the retry claims another (CL-008).
+		// battery may have leased a MicroVM whose answer was lost. The
+		// retry sends the same request id, so it gets that Lease back if
+		// battery still holds it (CL-060, CL-061).
 		reason = batteryv1alpha1.ReasonBatteryUnavailable
 		message = fmt.Sprintf("ClaimVM on Pool %s got no answer from battery", pool)
+	//= docs/requirements/02-claims.md#claim-retry
+	//# If battery answers a `ClaimVM` for a claim with `ABORTED`,
+	//# then the Claim Controller SHALL keep the claim in the phase `Pending`
+	//# with the condition `Bound` false and the reason `ClaimAborted`, and SHALL
+	//# retry `ClaimVM` with backoff.
+	case errors.Is(err, battery.ErrAborted):
+		// The Lease the claim's request id names is on its way out, or
+		// the MicroVM battery had picked was deleted during the claim
+		// (BA-009). battery's advice is to retry: once the Lease is gone,
+		// the request id is free and the retry claims afresh.
+		reason = batteryv1alpha1.ReasonClaimAborted
+		message = fmt.Sprintf("battery aborted ClaimVM on Pool %s: %s", pool, err.Error())
 	default:
 		return reconcile.Result{}, nil
 	}

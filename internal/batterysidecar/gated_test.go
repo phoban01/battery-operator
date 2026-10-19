@@ -64,7 +64,7 @@ func (s *stubClient) ListPools(context.Context, string) ([]*battery.Pool, error)
 	return nil, nil
 }
 
-func (s *stubClient) ClaimVM(context.Context, battery.PoolRef) (*battery.Claim, error) {
+func (s *stubClient) ClaimVM(context.Context, battery.PoolRef, string) (*battery.Claim, error) {
 	s.record()
 	return &battery.Claim{}, nil
 }
@@ -107,7 +107,7 @@ func gatedCalls(g batterysidecar.Gated) map[string]func(context.Context) error {
 		"DeletePool": func(ctx context.Context) error { return g.DeletePool(ctx, battery.PoolRef{}) },
 		"GetPool":    func(ctx context.Context) error { _, err := g.GetPool(ctx, battery.PoolRef{}); return err },
 		"ListPools":  func(ctx context.Context) error { _, err := g.ListPools(ctx, ""); return err },
-		"ClaimVM":    func(ctx context.Context) error { _, err := g.ClaimVM(ctx, battery.PoolRef{}); return err },
+		"ClaimVM":    func(ctx context.Context) error { _, err := g.ClaimVM(ctx, battery.PoolRef{}, ""); return err },
 		"Heartbeat":  func(ctx context.Context) error { _, err := g.Heartbeat(ctx, "l"); return err },
 		"ReleaseVM":  func(ctx context.Context) error { return g.ReleaseVM(ctx, "l") },
 		"ListLeases": func(ctx context.Context) error { _, err := g.ListLeases(ctx, nil); return err },

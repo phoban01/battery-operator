@@ -30,7 +30,7 @@ import (
 )
 
 //= docs/requirements/08-test-doubles.md#fake-battery
-//# The fake battery SHALL serve battery v0.3.3's `PoolAdmin`,
+//# The fake battery SHALL serve battery v0.4.0's `PoolAdmin`,
 //# `Lease` and `Events` services over gRPC with the generated server stubs.
 
 // newGRPCServer builds a server with the three services registered from
@@ -132,7 +132,7 @@ type leaseServer struct {
 // ClaimVM implements poolmgrv1.LeaseServer. It fills the host field with
 // the placed Host's name and address.
 func (s *leaseServer) ClaimVM(ctx context.Context, req *poolmgrv1.ClaimVMRequest) (*poolmgrv1.ClaimVMResponse, error) {
-	res, err := s.b.claimVM(ctx, refFromProto(req.GetPool()))
+	res, err := s.b.claimVM(ctx, refFromProto(req.GetPool()), req.GetRequestId())
 	if err != nil {
 		return nil, err
 	}
@@ -302,6 +302,7 @@ func leaseToProto(l LeaseRecord) *poolmgrv1.LeaseRecord {
 		ClaimedAt:       timestamppb.New(l.ClaimedAt),
 		LastHeartbeatAt: timestamppb.New(l.LastHeartbeatAt),
 		ExpiresAt:       timestamppb.New(l.ExpiresAt),
+		RequestId:       l.RequestID,
 	}
 }
 

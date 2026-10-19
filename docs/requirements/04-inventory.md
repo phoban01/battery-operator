@@ -1,7 +1,7 @@
 # The Inventory Controller
 
 The Inventory Controller decides which Nodes are Hosts and gives battery the
-list (ADR 0001, decisions 4 and 10). battery v0.3.3 reads its Hosts once, from
+list (ADR 0001, decisions 4 and 10). battery v0.4.0 reads its Hosts once, from
 its configuration file, and has no call to change them, so giving battery
 the list means rewriting its configuration and restarting it
 (consequence 1).
@@ -63,7 +63,7 @@ flags `--inventory-settle-time`, `--inventory-restart-window` and
 `--inventory-drain-timeout`, 30 seconds, one minute and 30 seconds by
 default.
 
-battery's Pools survive its restarts in its database, and battery v0.3.3
+battery's Pools survive its restarts in its database, and battery v0.4.0
 does not check a Pool's `flintlock_hosts` against its Hosts: it replenishes
 a Pool on the Host in `flintlock_hosts` with the fewest of the Pool's
 MicroVMs, which for a removed Host is none, and provisioning there fails
@@ -86,7 +86,7 @@ battery creates and deletes MicroVMs by calling `flintlockd` on each Host.
 Each Host's `flintlockd` serves on the Host's internal address with mutual
 TLS, and battery reaches it directly with the Operator's client certificate
 ([ADR 0002](../adr/0002-battery-reaches-flintlockd-over-mtls.md)). IN-004
-is what keeps that connection authenticated both ways: battery v0.3.3 can
+is what keeps that connection authenticated both ways: battery v0.4.0 can
 also be configured without TLS, and the Inventory Controller never does so.
 
 ## Keeping battery's configuration {#keeping}

@@ -29,7 +29,7 @@ import (
 //= type=test
 //# The fake battery SHALL replenish Pools, expire Leases that are
 //# not renewed within the Pool's expiry threshold, and answer `ClaimVM` on an
-//# empty Pool with `RESOURCE_EXHAUSTED`, as battery v0.3.3 does.
+//# empty Pool with `RESOURCE_EXHAUSTED`, as battery v0.4.0 does.
 
 //= docs/requirements/08-test-doubles.md#fake-battery
 //= type=test
@@ -113,7 +113,7 @@ func TestLeaseExpiryDeletesTheMicroVM(t *testing.T) {
 //= type=test
 //# The fake battery SHALL replenish Pools, expire Leases that are
 //# not renewed within the Pool's expiry threshold, and answer `ClaimVM` on an
-//# empty Pool with `RESOURCE_EXHAUSTED`, as battery v0.3.3 does.
+//# empty Pool with `RESOURCE_EXHAUSTED`, as battery v0.4.0 does.
 
 // TestClaimOnEmptyPoolIsResourceExhausted asserts the gRPC status code on the
 // wire, because a client's exhaustion path keys on the code, and checks the

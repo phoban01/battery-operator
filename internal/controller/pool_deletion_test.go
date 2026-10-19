@@ -331,7 +331,7 @@ func TestPoolDeletionAgainstTheFakeBattery(t *testing.T) {
 	// its MicroVMs; IMMEDIATE_ON_LEASE replaces it.
 	reconcileOnce()
 	eventually(t, "the Pool filled", available(3))
-	claim, err := bc.ClaimVM(ctx, ref)
+	claim, err := bc.ClaimVM(ctx, ref, "")
 	if err != nil {
 		t.Fatalf("ClaimVM: %v", err)
 	}

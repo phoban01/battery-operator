@@ -32,17 +32,17 @@ func poolRef(pool *batteryv1alpha1.Pool) battery.PoolRef {
 	return battery.PoolRef{Name: pool.Name, Namespace: pool.Namespace}
 }
 
-// poolSpecToBattery converts a Pool to battery v0.3.3's PoolSpec, field by
+// poolSpecToBattery converts a Pool to battery v0.4.0's PoolSpec, field by
 // field as the doc comment of batteryv1alpha1.PoolSpec maps them.
 //
 // Two fields have no counterpart in the Pool's spec:
 //
 //   - The template's flintlock namespace is the Pool's own namespace, so
 //     that a MicroVM in flintlock shows which Pool's namespace it serves.
-//     Its id stays empty: battery v0.3.3 names each MicroVM itself.
+//     Its id stays empty: battery v0.4.0 names each MicroVM itself.
 //   - flintlock_hosts is hosts: the names of the Hosts the Pool's
 //     spec.placement.nodeSelector matches, as poolPlacement resolves them
-//     (PO-010). battery v0.3.3 does not validate flintlock_hosts, so an
+//     (PO-010). battery v0.4.0 does not validate flintlock_hosts, so an
 //     empty list is a valid PoolSpec: battery holds the Pool and places no
 //     MicroVM.
 //

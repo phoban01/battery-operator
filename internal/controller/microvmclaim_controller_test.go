@@ -86,7 +86,7 @@ type claimVMStub struct {
 	calls   int
 }
 
-func (s *claimVMStub) ClaimVM(context.Context, battery.PoolRef) (*battery.Claim, error) {
+func (s *claimVMStub) ClaimVM(context.Context, battery.PoolRef, string) (*battery.Claim, error) {
 	err := s.answers[s.calls]
 	s.calls++
 	if err != nil {

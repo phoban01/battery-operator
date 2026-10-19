@@ -18,6 +18,8 @@ package claim
 
 import (
 	"context"
+	"fmt"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -40,20 +42,22 @@ import (
 var start = time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)
 
 // stubBattery is a battery.Client whose ClaimVM answers with claimVM and
-// records its calls. Every other method panics through the nil embedded
-// Client: binding must not call them.
+// records its calls, with the request id each carried. Every other method
+// panics through the nil embedded Client: binding must not call them.
 type stubBattery struct {
 	battery.Client
 
-	mu      sync.Mutex
-	claimVM func(battery.PoolRef) (*battery.Claim, error)
-	calls   []battery.PoolRef
+	mu         sync.Mutex
+	claimVM    func(battery.PoolRef) (*battery.Claim, error)
+	calls      []battery.PoolRef
+	requestIDs []string
 }
 
-func (b *stubBattery) ClaimVM(_ context.Context, pool battery.PoolRef) (*battery.Claim, error) {
+func (b *stubBattery) ClaimVM(_ context.Context, pool battery.PoolRef, requestID string) (*battery.Claim, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.calls = append(b.calls, pool)
+	b.requestIDs = append(b.requestIDs, requestID)
 	return b.claimVM(pool)
 }
 
@@ -61,6 +65,67 @@ func (b *stubBattery) claimCalls() []battery.PoolRef {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return append([]battery.PoolRef(nil), b.calls...)
+}
+
+// claimRequestIDs is the request id of each ClaimVM, in order.
+func (b *stubBattery) claimRequestIDs() []string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return append([]string(nil), b.requestIDs...)
+}
+
+// replayingBattery is a battery.Client whose ClaimVM keeps a Lease per
+// request id, as battery v0.4.0 does (BA-007, BA-008): the first call for
+// a request id leases the next MicroVM, and every later call for it gets
+// the same Lease back. lose makes the next call lose its answer in
+// transit after battery has acted, as a dropped connection does.
+type replayingBattery struct {
+	battery.Client
+
+	mu     sync.Mutex
+	leases map[string]*battery.Claim
+	next   int
+	lose   bool
+	calls  []string
+}
+
+func newReplayingBattery() *replayingBattery {
+	return &replayingBattery{leases: map[string]*battery.Claim{}}
+}
+
+func (b *replayingBattery) ClaimVM(_ context.Context, _ battery.PoolRef, requestID string) (*battery.Claim, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.calls = append(b.calls, requestID)
+	l, ok := b.leases[requestID]
+	if !ok {
+		b.next++
+		l = &battery.Claim{
+			LeaseID: "lease-" + strconv.Itoa(b.next),
+			VMUID:   "vm-" + strconv.Itoa(b.next),
+			Host:    battery.HostRef{Name: nodeA},
+		}
+		b.leases[requestID] = l
+	}
+	if b.lose {
+		b.lose = false
+		return nil, fmt.Errorf("answer lost in transit: %w", battery.ErrUnavailable)
+	}
+	return l, nil
+}
+
+// leased is how many Leases battery created.
+func (b *replayingBattery) leased() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.next
+}
+
+// requestIDs is the request id of each ClaimVM, in order.
+func (b *replayingBattery) requestIDs() []string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return append([]string(nil), b.calls...)
 }
 
 // answers makes a stubBattery that answers every ClaimVM with c and err.
@@ -71,12 +136,17 @@ func answers(c *battery.Claim, err error) *stubBattery {
 // claimKey is aClaim's key.
 var claimKey = client.ObjectKey{Namespace: "ci", Name: "runner-1"}
 
+// testClaimUID is aClaim's uid, which the API server would give it, and
+// the request id Bind sends for it (CL-060).
+const testClaimUID = "6f1c2d3e-0000-4000-8000-000000000001"
+
 // aClaim is the claim "runner-1" in "ci" on the Pool testPool.
 func aClaim(finalizers ...string) *batteryv1alpha1.MicroVMClaim {
 	return &batteryv1alpha1.MicroVMClaim{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       claimKey.Name,
 			Namespace:  claimKey.Namespace,
+			UID:        testClaimUID,
 			Generation: 1,
 			Finalizers: finalizers,
 		},

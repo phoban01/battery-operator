@@ -52,14 +52,17 @@ const poolDrainRequeue = 5 * time.Second
 // poolDeletion deletes a deleted Pool from battery and then lets it go.
 // For a Pool that is not being deleted it does nothing.
 //
-// battery v0.3.3 refuses DeletePool with FAILED_PRECONDITION while the
-// Pool owns any MicroVM (BA-070), and has no call that deletes a Pool with
-// its MicroVMs. So while battery refuses, poolDeletion drains the Pool:
-// it gives it its drained spec, under which battery creates no MicroVM
-// for it (BA-072), claims each available MicroVM and releases it at once,
-// which deletes it (BA-030), and asks again. A MicroVM a claim holds, or
-// one battery has quarantined, stays; the Pool waits, and says why on its
-// Ready condition.
+// battery v0.4.0 refuses DeletePool with FAILED_PRECONDITION while the
+// Pool has a leased or claiming MicroVM, and otherwise deletes the Pool
+// with its MicroVMs (BA-070). battery v0.3.3 refused while the Pool owned
+// any MicroVM, and had no call that deletes a Pool with its MicroVMs. So
+// while battery refuses, poolDeletion drains the Pool: it gives it its
+// drained spec, under which battery creates no MicroVM for it (BA-072),
+// claims each available MicroVM and releases it at once, which deletes it
+// (BA-030), and asks again. Against v0.4.0 that happens only while a
+// claim holds a MicroVM; #199 replaces the drain with battery's own. A
+// MicroVM a claim holds stays, as did a quarantined one under v0.3.3; the
+// Pool waits, and says why on its Ready condition.
 type poolDeletion struct{}
 
 func (poolDeletion) Reconcile(ctx context.Context, s *poolScope) (reconcile.Result, error) {
@@ -191,7 +194,10 @@ func drainAvailable(ctx context.Context, s *poolScope, ref battery.PoolRef, n in
 	//# available MicroVM of the Pool with `ClaimVM`, release it at once with
 	//# `ReleaseVM`, and then call `DeletePool` again.
 	for range n {
-		claim, err := s.Battery.ClaimVM(ctx, ref)
+		// No request id: each drain claim is meant to take another
+		// MicroVM, and one whose answer is lost is left to expire
+		// (BA-023), as the comment below says.
+		claim, err := s.Battery.ClaimVM(ctx, ref, "")
 		switch {
 		case errors.Is(err, battery.ErrExhausted):
 			return nil

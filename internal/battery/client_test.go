@@ -243,7 +243,7 @@ func TestLeaseAndEvents(t *testing.T) {
 		}
 	}
 
-	claim, err := c.ClaimVM(ctx, pool)
+	claim, err := c.ClaimVM(ctx, pool, "")
 	if err != nil {
 		t.Fatalf("ClaimVM: %v", err)
 	}
@@ -378,9 +378,9 @@ func TestStatusCodesMapToSentinels(t *testing.T) {
 
 	_, err := c.GetPool(ctx, ref("missing"))
 	check("GetPool of an unknown Pool", err, battery.ErrNotFound)
-	_, err = c.ClaimVM(ctx, ref("missing"))
+	_, err = c.ClaimVM(ctx, ref("missing"), "")
 	check("ClaimVM on an unknown Pool", err, battery.ErrNotFound)
-	_, err = c.ClaimVM(ctx, ref("empty"))
+	_, err = c.ClaimVM(ctx, ref("empty"), "")
 	check("ClaimVM on an empty Pool", err, battery.ErrExhausted)
 
 	_, err = c.CreatePool(ctx, battery.PoolSpec{Ref: ref("")})
@@ -389,7 +389,7 @@ func TestStatusCodesMapToSentinels(t *testing.T) {
 	}
 
 	b.SetFaults(fakebattery.Faults{UnavailableFor: time.Hour})
-	_, err = c.ClaimVM(ctx, ref("empty"))
+	_, err = c.ClaimVM(ctx, ref("empty"), "")
 	check("ClaimVM while battery is unavailable", err, battery.ErrUnavailable)
 	// Opening a stream does not wait for battery's answer, so the refusal
 	// can arrive on the first Recv instead.
@@ -404,6 +404,70 @@ func TestStatusCodesMapToSentinels(t *testing.T) {
 	gone := dial(t, battery.Config{Address: closedAddress(t)})
 	_, err = gone.ListPools(ctx, "")
 	check("ListPools with no battery listening", err, battery.ErrUnavailable)
+}
+
+// TestClaimVMCarriesTheRequestID: the request id goes out on the wire and
+// comes back on the Lease's record, a second ClaimVM with it gets the same
+// Lease, and battery's ABORTED, while that Lease's MicroVM is deleting,
+// is ErrAborted and no other sentinel.
+func TestClaimVMCarriesTheRequestID(t *testing.T) {
+	ctx := testContext(t)
+	fl := fakeflintlock.New(fakeflintlock.Config{Name: hostA})
+	conn, err := fl.Conn()
+	if err != nil {
+		t.Fatalf("connecting to fake flintlockd %s: %v", hostA, err)
+	}
+	t.Cleanup(func() {
+		_ = conn.Close()
+		_ = fl.Close()
+	})
+	hosts := fakebattery.NewHosts()
+	hosts.Add(hostA, hostA+":9090", conn)
+	b := startBattery(t, fakebattery.Config{Hosts: hosts})
+	c := dial(t, battery.Config{Address: b.Addr(), CallTimeout: 500 * time.Millisecond})
+
+	pool := ref("pool")
+	if _, err := c.CreatePool(ctx, spec(pool.Name, 2, hostA)); err != nil {
+		t.Fatalf("CreatePool: %v", err)
+	}
+	var first *battery.Claim
+	for first == nil {
+		first, err = c.ClaimVM(ctx, pool, "request-1")
+		if err != nil && !errors.Is(err, battery.ErrExhausted) {
+			t.Fatalf("ClaimVM: %v", err)
+		}
+	}
+	leases, err := c.ListLeases(ctx, &pool)
+	if err != nil {
+		t.Fatalf("ListLeases: %v", err)
+	}
+	if len(leases) != 1 || leases[0].RequestID != "request-1" || leases[0].LeaseID != first.LeaseID {
+		t.Fatalf("ListLeases = %+v, want the one Lease with request id request-1", leases)
+	}
+	again, err := c.ClaimVM(ctx, pool, "request-1")
+	if err != nil {
+		t.Fatalf("ClaimVM again: %v", err)
+	}
+	if again.LeaseID != first.LeaseID || again.VMUID != first.VMUID {
+		t.Fatalf("ClaimVM again = %+v, want the first answer %+v", again, first)
+	}
+
+	// The Host stops answering, so the release leaves the MicroVM deleting
+	// and the Lease in place, and a replay is refused.
+	fl.SetFaults(fakeflintlock.Faults{Unresponsive: true})
+	if err := c.ReleaseVM(ctx, first.LeaseID); !errors.Is(err, battery.ErrUnavailable) {
+		t.Fatalf("ReleaseVM while the Host does not answer = %v, want ErrUnavailable", err)
+	}
+	_, err = c.ClaimVM(ctx, pool, "request-1")
+	for _, s := range []error{battery.ErrNotFound, battery.ErrExhausted, battery.ErrUnavailable, battery.ErrInvalid} {
+		if errors.Is(err, s) {
+			t.Errorf("ClaimVM while the Lease's MicroVM is deleting = %v, want ErrAborted alone", err)
+		}
+	}
+	if !errors.Is(err, battery.ErrAborted) {
+		t.Fatalf("ClaimVM while the Lease's MicroVM is deleting = %v, want ErrAborted", err)
+	}
+	fl.SetFaults(fakeflintlock.Faults{})
 }
 
 //= docs/requirements/06-deployment.md#battery-connection
@@ -446,7 +510,7 @@ func TestEveryUnaryCallHasADeadline(t *testing.T) {
 	b.SetFaults(fakebattery.Faults{ClaimLatency: time.Hour})
 
 	start := time.Now()
-	_, err := c.ClaimVM(context.Background(), ref("any"))
+	_, err := c.ClaimVM(context.Background(), ref("any"), "")
 	if !errors.Is(err, battery.ErrUnavailable) {
 		t.Errorf("ClaimVM that battery never answers: got %v, want ErrUnavailable", err)
 	}
@@ -456,7 +520,7 @@ func TestEveryUnaryCallHasADeadline(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
-	if _, err := c.ClaimVM(ctx, ref("any")); !errors.Is(err, context.DeadlineExceeded) {
+	if _, err := c.ClaimVM(ctx, ref("any"), ""); !errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("ClaimVM past the caller's own deadline: got %v, want context.DeadlineExceeded", err)
 	}
 }

@@ -83,10 +83,13 @@ module claims_test {
       .then(ctlClaimVM("a", "v1"))
       .fail()
 
-  // ADR 0001, consequence 2: a crash between ClaimVM and the status write
-  // orphans the Lease, and the retry claims a second MicroVM. The orphan
-  // is never renewed, and battery expires it after the threshold.
-  run crashWindowOrphanTest =
+  // ADR 0001, consequence 2, with battery v0.4.0's request id: a crash
+  // between ClaimVM and the status write loses the answer, and the Lease
+  // is an orphan until the retry. The retry carries the same request id,
+  // so battery replays the Lease (BA-008): the claim binds to it, with the
+  // time of the retry's answer as its time of binding, and no second
+  // MicroVM is leased (CL-061). The MicroVM the retry names plays no part.
+  run crashWindowReplayTest =
     init
       .then(createClaim("a"))
       .then(ctlAddFinalizer("a"))
@@ -95,16 +98,92 @@ module claims_test {
       .then(ctlClaimVM("a", "v1"))
       .then(crashController)
       .then(ctlRecover)
+      .expect(and { orphans == Set(1), obj("a").status.phase == Pending, canClaimVM("a"), safety })
+      .then(tick)
+      .then(ctlClaimVM("a", "v2"))
+      .expect(and { orphans == Set(), battery.leases.keys() == Set(1), battery.warm == Set("v2"), safety })
+      .then(ctlWriteBound("a"))
+      .expect(and {
+        obj("a").status.phase == Bound,
+        obj("a").status.leaseId == Some(1),
+        obj("a").status.microVM == Some("v1"),
+        obj("a").status.boundTime == Some(1),
+        battery.leases.keys() == Set(1),
+        battery.leases.get(1).claimedAt == 0,
+        battery.warm == Set("v2"),
+        hist.replays == Set("a"),
+        witnessReplayBound,
+        safety,
+      })
+
+  // BA-008 before BA-001: battery looks the request id up before it looks
+  // at the Pool, so a replay succeeds while the Pool has no warm MicroVM.
+  run replayBeatsExhaustedTest =
+    init
+      .then(createClaim("a"))
+      .then(ctlAddFinalizer("a"))
+      .then(replenish("v1"))
+      .then(ctlClaimVMLost("a", "v1"))
+      .expect(and { battery.warm == Set(), hasReplay("a"), enabledClaimVM("a") })
+      .then(ctlPoolExhausted("a"))
+      .fail()
+
+  run replayWithExhaustedPoolTest =
+    init
+      .then(createClaim("a"))
+      .then(ctlAddFinalizer("a"))
+      .then(replenish("v1"))
+      .then(ctlClaimVMLost("a", "v1"))
+      .then(ctlClaimVM("a", "v1"))
+      .then(ctlWriteBound("a"))
+      .expect(and { obj("a").status.leaseId == Some(1), battery.warm == Set(), safety })
+
+  // A retry that comes after the sweep deleted the lost Lease finds no
+  // Lease under the request id, and claims afresh: a new lease id and a
+  // new MicroVM (02-claims.md, Retrying ClaimVM).
+  run retryAfterSweepClaimsAfreshTest =
+    init
+      .then(createClaim("a"))
+      .then(ctlAddFinalizer("a"))
+      .then(replenish("v1"))
+      .then(replenish("v2"))
+      .then(ctlClaimVMLost("a", "v1"))
+      .then(ticks(EXPIRY))
+      .then(batteryExpire)
+      .expect(and { not(holds(1)), battery.retired == Set("v1"), not(hasReplay("a")), canClaimVM("a"), safety })
       .then(ctlClaimVM("a", "v2"))
       .then(ctlWriteBound("a"))
       .expect(and {
-        orphans == Set(1),
         obj("a").status.leaseId == Some(2),
+        obj("a").status.microVM == Some("v2"),
+        battery.leases.keys() == Set(2),
+        hist.replays == Set(),
+        hist.created == Set(("a", 1), ("a", 2)),
         safety,
       })
+
+  // A replay of a Lease whose expiry has passed, which the sweep has not
+  // deleted yet: the claim binds to it as it is, CL-016's ListLeases reads
+  // the passed expiry, and CL-014 expires the claim.
+  run replayPastExpiryTest =
+    init
+      .then(createClaim("a"))
+      .then(ctlAddFinalizer("a"))
+      .then(replenish("v1"))
+      .then(ctlClaimVMLost("a", "v1"))
       .then(ticks(EXPIRY))
-      .then(batteryExpire)
-      .expect(and { orphans == Set(), not(holds(1)), safety })
+      .expect(and { holds(1), not(holdsUnexpired(1)), hasReplay("a") })
+      .then(ctlClaimVM("a", "v1"))
+      .then(ctlWriteBound("a"))
+      .expect(and {
+        obj("a").status.phase == Bound,
+        obj("a").status.leaseId == Some(1),
+        obj("a").status.leaseExpiresAt == None,
+        canExpiryPassed("a"),
+        safety,
+      })
+      .then(ctlExpiryPassed("a"))
+      .expect(and { obj("a").status.phase == Expired, holds(1), witnessExpiredByTime, controllerIdle, safety })
 
   // CL-020: release, then the finalizer; the MicroVM is never warm again.
   run releaseTest =
@@ -319,7 +398,10 @@ module claims_test {
   // heartbeat_expiry_threshold by up to a sweep interval, which ADR 0001,
   // consequence 2, as first written, does not allow for. orphanLeaseBounded,
   // the bound battery gives, which 02-claims.md, Binding, and the ADR's
-  // correction note now state (#86, #106), still holds.
+  // correction note now state (#86, #106), still holds. With the request
+  // id, the claim's retry would replay the orphan, so the claim is deleted
+  // while Pending, which leaves the Lease behind (CL-021): only the sweep
+  // ends it. Beside a Bound claim, that is witnessOrphanBesideBound.
   run orphanOutlivesExpiryTest =
     init
       .then(createClaim("a"))
@@ -328,12 +410,19 @@ module claims_test {
       .then(ctlClaimVM("a", "v1"))
       .then(crashController)
       .then(ctlRecover)
+      .then(deleteClaim("a"))
+      .then(ctlReleasePending("a"))
+      .expect(and { isGone(slot("a")), orphans == Set(1), safety })
+      .then(bind("b", "v2"))
+      .expect(witnessOrphanBesideBound)
       .then(ticks(EXPIRY + 1))
       .expect(and {
         orphans == Set(1),
         not(orphanGoneByExpiry),
         safety,
       })
+      .then(batteryExpire)
+      .expect(and { orphans == Set(), not(holds(1)), safety })
 
   // CL-013 (#45): battery expires an unrenewed Lease, and the Events stream
   // reports the deleted MicroVM; the claim goes Expired.
@@ -399,9 +488,12 @@ module claims_test {
         safety,
       })
 
-  // CL-007 and CL-008: ClaimVM fails in transit after battery committed
-  // the Lease. The claim stays Pending with BatteryUnavailable, the retry
-  // binds a second MicroVM, and the first Lease is an orphan that expires.
+  // CL-007 with BA-008 and CL-061: ClaimVM fails in transit after battery
+  // committed the Lease. The claim stays Pending with BatteryUnavailable,
+  // and the Lease is an orphan until the retry. A retry whose answer is
+  // lost too changes nothing in battery. The retry that is answered gets
+  // the same Lease back, the claim binds to it, and the second warm
+  // MicroVM stays warm.
   run claimVMAnswerLostTest =
     init
       .then(createClaim("a"))
@@ -414,21 +506,31 @@ module claims_test {
         obj("a").status.bound == { status: CondFalse, reason: BatteryUnavailable },
         obj("a").status.synced == { status: CondFalse, reason: BatteryUnavailable },
         orphans == Set(1),
+        witnessOrphanFromLostAnswer,
         canClaimVM("a"),
         safety,
       })
       .then(tick)
+      .then(ctlClaimVMLost("a", "v2"))
+      .expect(and { orphans == Set(1), battery.leases.keys() == Set(1), battery.warm == Set("v2"), safety })
       .then(ctlClaimVM("a", "v2"))
       .then(ctlWriteBound("a"))
       .expect(and {
-        obj("a").status.leaseId == Some(2),
+        obj("a").status.phase == Bound,
+        obj("a").status.leaseId == Some(1),
+        obj("a").status.microVM == Some("v1"),
+        obj("a").status.boundTime == Some(1),
         obj("a").status.synced.status == CondTrue,
-        orphans == Set(1),
+        orphans == Set(),
+        battery.leases.keys() == Set(1),
+        battery.leases.get(1).expiresAt == EXPIRY,
+        battery.warm == Set("v2"),
+        hist.replays == Set("a"),
+        witnessReplayBound,
         safety,
       })
-      .then(ticks(EXPIRY - 1))
-      .then(batteryExpire)
-      .expect(and { orphans == Set(), obj("a").status.phase == Bound, safety })
+      .then(ctlListRenewed("a"))
+      .expect(and { obj("a").status.leaseExpiresAt == Some(EXPIRY), controllerIdle, safety })
 
   // CL-015: Heartbeat fails in transit after battery renewed. The claim
   // stays Bound with the old expiry, the renewal stays pending, and the

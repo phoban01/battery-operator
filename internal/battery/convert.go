@@ -115,5 +115,6 @@ func leaseFromProto(l *poolmgrv1.LeaseRecord) *LeaseRecord {
 		ClaimedAt:       l.GetClaimedAt().AsTime(),
 		LastHeartbeatAt: l.GetLastHeartbeatAt().AsTime(),
 		ExpiresAt:       l.GetExpiresAt().AsTime(),
+		RequestID:       l.GetRequestId(),
 	}
 }

@@ -48,7 +48,7 @@ import (
 )
 
 // defaultVersion is the flintlock version ServerInfo reports: battery
-// v0.3.3's poolmgrd refuses a Host whose flintlockd is older than v0.15.2,
+// v0.4.0's poolmgrd refuses a Host whose flintlockd is older than v0.15.2,
 // or whose version it cannot parse.
 const defaultVersion = "v0.15.2"
 

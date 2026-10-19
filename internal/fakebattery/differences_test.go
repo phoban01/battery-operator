@@ -27,7 +27,7 @@ import (
 //= docs/requirements/08-test-doubles.md#fake-battery
 //= type=test
 //# The fake battery SHALL document every behaviour in which it
-//# deliberately differs from battery v0.3.3.
+//# deliberately differs from battery v0.4.0.
 
 // TestDocumentedDifferences pins each difference from battery that the
 // package documentation lists, so that the list and the behaviour cannot

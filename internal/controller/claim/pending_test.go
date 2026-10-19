@@ -202,3 +202,38 @@ func TestPendingWhenClaimVMFailsInTransitBacksOff(t *testing.T) {
 		t.Errorf("phase = %q after %d ClaimVM calls, want Bound after one retry", got.Status.Phase, len(b.claimCalls()))
 	}
 }
+
+//= docs/requirements/02-claims.md#claim-retry
+//= type=test
+//# If battery answers a `ClaimVM` for a claim with `ABORTED`,
+//# then the Claim Controller SHALL keep the claim in the phase `Pending`
+//# with the condition `Bound` false and the reason `ClaimAborted`, and SHALL
+//# retry `ClaimVM` with backoff.
+
+// TestPendingWhenClaimVMIsAbortedBacksOff covers CL-062: battery's ABORTED
+// leaves the claim Pending with ClaimAborted and Synced true, since
+// battery answered, and ClaimVM is retried with backoff until it succeeds.
+func TestPendingWhenClaimVMIsAbortedBacksOff(t *testing.T) {
+	c := newFakeClient(t, aClaim(batteryv1alpha1.ReleaseFinalizer))
+
+	res, got := reconcileAt(t, c, answers(nil, battery.ErrAborted), start)
+	assertPending(t, got, batteryv1alpha1.ReasonClaimAborted)
+	if res.RequeueAfter != time.Second {
+		t.Errorf("RequeueAfter = %v, want 1s", res.RequeueAfter)
+	}
+	if !meta.IsStatusConditionTrue(got.Status.Conditions, batteryv1alpha1.ConditionSynced) {
+		t.Error("Synced is not true after battery answered ABORTED")
+	}
+
+	res, got = reconcileAt(t, c, answers(nil, battery.ErrAborted), start.Add(2*time.Second))
+	assertPending(t, got, batteryv1alpha1.ReasonClaimAborted)
+	if res.RequeueAfter != 2*time.Second {
+		t.Errorf("RequeueAfter = %v, want 2s", res.RequeueAfter)
+	}
+
+	b := answers(leased, nil)
+	_, got = reconcileAt(t, c, b, start.Add(4*time.Second))
+	if got.Status.Phase != batteryv1alpha1.MicroVMClaimBound || len(b.claimCalls()) != 1 {
+		t.Errorf("phase = %q after %d ClaimVM calls, want Bound after one retry", got.Status.Phase, len(b.claimCalls()))
+	}
+}

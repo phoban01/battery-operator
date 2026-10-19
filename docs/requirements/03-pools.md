@@ -41,7 +41,7 @@ covers the rest.
   SHALL set the Pool's condition `Ready` false with the reason
   `NoEligibleHost`.
 
-battery v0.3.3 has each Pool list its Hosts by name. The Pool Controller
+battery v0.4.0 has each Pool list its Hosts by name. The Pool Controller
 resolves the selector against the Hosts the Inventory Controller has given
 battery and is not about to remove (IN-013), so adding a Host to the
 cluster reaches every Pool that selects it with no change to any Pool
@@ -84,8 +84,8 @@ meanwhile is removed from battery once the drain timeout of IN-013 passes.
 The Events stream makes the status prompt; the resync of PO-024 makes it
 eventually right when the stream drops.
 
-PO-041 shows on the Pool the one provisioning failure battery v0.3.3
-reports. battery v0.3.3 records `VM_HOOK_FAILED` with no payload, so its
+PO-041 shows on the Pool the one provisioning failure battery v0.4.0
+reports. battery v0.4.0 records `VM_HOOK_FAILED` with no payload, so its
 Event names the MicroVM only, and the cause is in the log of the battery
 container; the fake battery's payload also gives the hook and the error.
 battery replays its outbox on each subscription (BA-050), so the Pool
@@ -115,10 +115,14 @@ once battery reports why a provision fails.
   no leased or quarantined MicroVM, the Pool Controller SHALL set the Pool's
   condition `Ready` false with the reason `Draining`.
 
-battery v0.3.3 refuses `DeletePool` while the Pool owns any MicroVM
-(BA-070), and has no call that deletes a Pool with its MicroVMs. So the
-Pool Controller empties the Pool first, with the calls battery has. The
-drained spec (glossary) makes battery stop creating MicroVMs for the Pool:
+battery v0.4.0 refuses `DeletePool` only while the Pool has a leased or
+claiming MicroVM, and otherwise deletes the Pool with its MicroVMs
+(BA-070). battery v0.3.3 refused while the Pool owned any MicroVM, and
+had no call that deletes a Pool with its MicroVMs, so the Pool Controller
+empties the Pool first, with the calls battery has. Against v0.4.0 the
+drain runs only while a claim holds a MicroVM; #199 replaces it with
+battery's own draining. The drained spec (glossary) makes battery stop
+creating MicroVMs for the Pool:
 a `MIN_SIZE_THRESHOLD` Pool of size 0 creates none (BA-072), where the
 other strategies would replace each MicroVM the drain takes. It also makes
 the drain's own claims run no pre-lease hook, and delete rather than
@@ -141,10 +145,11 @@ the drain has not yet taken, which then holds the deletion up the same
 way; nothing replaces it. The Operator's Events stream reports each
 deletion (PO-023), so the Pool is deleted soon after its last MicroVM.
 
-A quarantined MicroVM also blocks the deletion, and battery v0.3.3 never
-deletes one (BA-073). A Pool that has one keeps the reason
-`DeletionBlocked` until an operator removes that MicroVM from battery's
-database by hand; upstream would have to add a call that does it (#23).
+Under battery v0.3.3 a quarantined MicroVM also blocked the deletion,
+since v0.3.3 never deleted one: a Pool that had one kept the reason
+`DeletionBlocked` until an operator removed that MicroVM from battery's
+database by hand (#23). battery v0.4.0 deletes a quarantined MicroVM with
+its Pool (BA-073), so it no longer holds the deletion up.
 While battery is only deleting MicroVMs, or finishing their provisioning,
 the reason is `Draining` (PO-034).
 
@@ -204,7 +209,9 @@ deletion fails. `UpdatePool` starts a new reconciler, which seeds again
 (BA-074), and the workaround relies on that: battery v0.3.3 restarts the
 reconciler on every `UpdatePool`, even with an unchanged spec, but battery
 does not promise it. A `MinSizeThreshold` Pool needs none of this, since
-battery tops it up on its tick.
+battery tops it up on its tick. battery v0.4.0 provisions the shortfall
+on every tick (BA-075), so the reseed is redundant against it and is to
+be removed; it still does no harm.
 
 The wait and its backoff keep the Pool Controller from calling battery
 often. A MicroVM that battery is provisioning counts as provisioning, and
@@ -223,8 +230,8 @@ a stalled Pool, so the Pool Controller asks for its own reconcile when the
 wait ends (PO-038).
 
 The reason `NotFilling` (PO-039, PO-040) also works around battery
-v0.3.3, and is to be refactored once battery reports why a provision
-fails. battery v0.3.3 reports a failed provision nowhere the Operator can
+v0.4.0, and is to be refactored once battery reports why a provision
+fails. battery v0.4.0 reports a failed provision nowhere the Operator can
 read: `PoolStatus` holds only counts, and a `CreateMicroVM` that
 `flintlockd` refuses records no event. So the Pool Controller can say only
 that the Pool is not filling, and where to look. It says so once a reseed

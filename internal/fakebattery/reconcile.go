@@ -57,7 +57,14 @@ func strategyOf(spec poolSpec) strategy {
 	return s
 }
 
-// onClaimed is how many MicroVMs to start after a successful claim.
+//= docs/requirements/10-battery.md#seeding
+//# When a MicroVM of a Pool is claimed, for `IMMEDIATE_ON_LEASE`,
+//# and when one is deleted, for `REPLACE_ON_DELETE`, battery SHALL provision
+//# the shortfall of BA-075 at once, without waiting for the tick.
+
+// onClaimed is how many MicroVMs to start after a successful claim. One
+// claim leaves a shortfall of one, which is what battery's OnVMClaimed
+// finds short of a failed provision, which the next tick makes up.
 func (s strategy) onClaimed() int {
 	if s.typ == poolmgrv1.ReplenishmentStrategyType_IMMEDIATE_ON_LEASE {
 		return 1
@@ -78,36 +85,32 @@ func (s strategy) onDeleted() int {
 //# provision for a Pool whose replenishment strategy is `IMMEDIATE_ON_LEASE`
 //# or `REPLACE_ON_DELETE` on its tick only on the first tick after each
 //# `CreatePool` or `UpdatePool` of the Pool, whether or not those provisions
-//# succeed, as battery v0.3.3 seeds such a Pool (BA-075, BA-076).
+//# succeed, as battery v0.3.3 seeded such a Pool.
 
 //= docs/requirements/10-battery.md#seeding
-//# When a Pool's reconciler starts, battery SHALL provision for
-//# the Pool once, whether or not those provisions succeed, its size less its
-//# available and provisioning MicroVMs for `IMMEDIATE_ON_LEASE`, and its size
-//# less its available, leased and provisioning MicroVMs for
-//# `REPLACE_ON_DELETE`.
-
-//= docs/requirements/10-battery.md#seeding
-//# While a Pool's replenishment strategy is `IMMEDIATE_ON_LEASE`
-//# or `REPLACE_ON_DELETE`, battery SHALL provision a MicroVM for it only when
-//# its reconciler starts, on a claim for `IMMEDIATE_ON_LEASE`, and on a
-//# deletion for `REPLACE_ON_DELETE`.
+//# When a Pool's reconciler starts, and on each of its ticks
+//# after that, battery SHALL provision for the Pool its size less its
+//# available, claiming and provisioning MicroVMs for `IMMEDIATE_ON_LEASE`,
+//# and its size less its available, claiming, leased and provisioning
+//# MicroVMs for `REPLACE_ON_DELETE`.
 
 //= docs/requirements/10-battery.md#seeding
 //= type=exception
-//= reason=Unless a test sets Config.SeedOnce, the fake's tick tops up a Pool of every strategy, so that a Pool recovers from a failed create without a claim, a deletion or an UpdatePool.
-//# While a Pool's replenishment strategy is `IMMEDIATE_ON_LEASE`
-//# or `REPLACE_ON_DELETE`, battery SHALL provision a MicroVM for it only when
-//# its reconciler starts, on a claim for `IMMEDIATE_ON_LEASE`, and on a
-//# deletion for `REPLACE_ON_DELETE`.
+//= reason=Where a test sets Config.SeedOnce, the fake's tick tops up an event-driven Pool only on the first tick after its CreatePool or UpdatePool, as battery v0.3.3 seeded it, so that a test can reach a Pool that stays short (TD-007).
+//# When a Pool's reconciler starts, and on each of its ticks
+//# after that, battery SHALL provision for the Pool its size less its
+//# available, claiming and provisioning MicroVMs for `IMMEDIATE_ON_LEASE`,
+//# and its size less its available, claiming, leased and provisioning
+//# MicroVMs for `REPLACE_ON_DELETE`.
 
-// eventDriven reports whether battery tops the Pool up only when its
-// reconciler starts and on the strategy's events, and not on its tick
-// (BA-076). With Config.SeedOnce, the fake's tick provisions for such a
-// Pool only while the Pool is fresh: the first tick after CreatePool or
-// UpdatePool, which is where battery's reconciler seeds it (BA-075). The
-// seed's count is tickDeficit, which for REPLACE_ON_DELETE also counts the
-// MicroVMs being deleted, where battery's seed does not.
+// eventDriven reports whether the strategy is one battery v0.3.3 seeded
+// once, when the Pool's reconciler started, and then topped up only on
+// its events. battery v0.4.0 tops such a Pool up on every tick (BA-075),
+// as the fake does by default. With Config.SeedOnce, the fake's tick
+// provisions for such a Pool only while the Pool is fresh: the first tick
+// after CreatePool or UpdatePool, which is where v0.3.3's reconciler
+// seeded it. The seed's count is tickDeficit, which for REPLACE_ON_DELETE
+// also counts the MicroVMs being deleted, where battery's does not.
 func (s strategy) eventDriven() bool {
 	return s.typ == poolmgrv1.ReplenishmentStrategyType_IMMEDIATE_ON_LEASE ||
 		s.typ == poolmgrv1.ReplenishmentStrategyType_REPLACE_ON_DELETE
@@ -477,10 +480,13 @@ func (b *Battery) applyHookFailurePolicy(ctx context.Context, vm *vmState, hook 
 		map[string]any{"hook": string(hook), "error": cause.Error(), "policy": policy.String()})
 	if policy == poolmgrv1.HookFailurePolicy_QUARANTINE {
 		//= docs/requirements/10-battery.md#delete-pool
-		//# battery SHALL NOT delete a MicroVM in the phase `QUARANTINED`.
+		//# battery SHALL NOT delete a MicroVM in the phase `QUARANTINED`
+		//# other than in a `DeletePool` of its Pool.
 		//
 		// The MicroVM keeps no lease id, so ReleaseVM cannot reach it, and
 		// the tick deletes only expired leased MicroVMs and DELETING ones.
+		// The fake's DeletePool refuses while the MicroVM exists, where
+		// battery v0.4.0 deletes it with the Pool (#199).
 		b.setPhaseLocked(vm, poolmgrv1.VMPhase_QUARANTINED)
 		b.mu.Unlock()
 		b.log.Info("Quarantined MicroVM after its hook failed", "hook", string(hook), "uid", vm.uid, "pool", vm.pool.String(), "err", cause.Error())

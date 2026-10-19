@@ -107,8 +107,8 @@ type claimed struct {
 	Address string
 }
 
-func (c *testClient) ClaimVM(ctx context.Context, ref PoolRef) (*claimed, error) {
-	resp, err := c.lease.ClaimVM(ctx, &poolmgrv1.ClaimVMRequest{Pool: refToProto(ref)})
+func (c *testClient) ClaimVM(ctx context.Context, ref PoolRef, requestID string) (*claimed, error) {
+	resp, err := c.lease.ClaimVM(ctx, &poolmgrv1.ClaimVMRequest{Pool: refToProto(ref), RequestId: requestID})
 	if err != nil {
 		return nil, err
 	}

@@ -37,9 +37,10 @@ import (
 // Bind leases a MicroVM for a claim that has no Lease, with battery's
 // ClaimVM, and records the Lease in the claim's status.
 //
-// ClaimVM cannot be retried safely: battery chooses the lease id and the
-// request carries only the Pool, so a second call leases a second MicroVM.
-// Bind therefore calls it only for a claim that the API server itself, not
+// Bind sends the claim's uid as ClaimVM's request id, so a retry gets the
+// Lease an earlier call created back while battery holds it (CL-060).
+// Still, a claim deleted between ClaimVM and the status write leaves its
+// Lease behind, so Bind calls ClaimVM only for a claim that the API server itself, not
 // the manager's cache, shows with no lease id and with the release
 // finalizer written. A cache that has not yet seen the status of an
 // earlier bind cannot make it claim twice.
@@ -51,9 +52,10 @@ import (
 // controller's backoff and its phase is left as it was.
 //
 // A ClaimVM that fails in transit may have leased a MicroVM whose answer
-// was lost. Bind never looks for that Lease, in battery or anywhere else:
-// it writes only the lease id of the answer it got, and the lost Lease is
-// an orphan like any other.
+// was lost. Bind never looks for that Lease in ListLeases: it writes only
+// the lease id of an answer it got, and the retry's answer is that Lease
+// (CL-061). ABORTED, a Lease on its way out, leaves the claim Pending too
+// (CL-062).
 //
 // With Slots set, Bind calls ClaimVM only while it holds one of their
 // slots, so that a slow ClaimVM never holds up every reconcile (CL-018).
@@ -120,10 +122,24 @@ func (b Bind) Reconcile(ctx context.Context, s *claimscope.Scope) (reconcile.Res
 	// Renewal).
 	renewTime := s.Object.Spec.RenewTime.DeepCopy()
 	pool := battery.PoolRef{Name: s.Object.Spec.PoolRef.Name, Namespace: s.Object.Namespace}
-	claimed, err := s.Battery.ClaimVM(ctx, pool)
+
+	//= docs/requirements/02-claims.md#claim-retry
+	//# The Claim Controller SHALL send with every `ClaimVM` for a
+	//# claim a request id equal to the claim's `metadata.uid`.
+	//
+	// A claim calls ClaimVM for one Lease in its life, so its uid names
+	// that Lease on every call, first or retry, and battery gives the
+	// same Lease back on a retry (02-claims.md, Retrying ClaimVM).
+	claimed, err := s.Battery.ClaimVM(ctx, pool, string(fresh.UID))
 	s.Called(methodClaimVM, err)
 	switch {
-	case errors.Is(err, battery.ErrExhausted), errors.Is(err, battery.ErrNotFound), failedInTransit(err):
+	//= docs/requirements/02-claims.md#claim-retry
+	//# If battery answers a `ClaimVM` for a claim with `ABORTED`,
+	//# then the Claim Controller SHALL keep the claim in the phase `Pending`
+	//# with the condition `Bound` false and the reason `ClaimAborted`, and SHALL
+	//# retry `ClaimVM` with backoff.
+	case errors.Is(err, battery.ErrExhausted), errors.Is(err, battery.ErrNotFound),
+		errors.Is(err, battery.ErrAborted), failedInTransit(err):
 		return reconcile.Result{}, nil
 	//= docs/requirements/02-claims.md#failed-calls
 	//# If a call to battery for a claim fails with an error that no
@@ -140,20 +156,28 @@ func (b Bind) Reconcile(ctx context.Context, s *claimscope.Scope) (reconcile.Res
 	// The orphan window (ADR 0001, consequence 2). battery now holds a
 	// Lease that only this reconcile knows about. Until the controller's
 	// patch writes the status below, a crash, a lost API server or a
-	// failed status write orphans that Lease, and the next reconcile
-	// claims a second MicroVM. The window is kept as short as it can be:
+	// failed status write loses the answer, and the next reconcile's
+	// ClaimVM gets the same Lease back by the claim's request id. The window is kept as short as it can be:
 	// Bind stops the chain, so the status is the next thing written and
 	// no other call to battery comes first; the Synced step that runs
 	// after the chain only reads the scope. The status patch carries no
-	// optimistic lock, so no conflict can lose it. An orphaned Lease is
-	// bounded: nothing renews it, so battery expires it after the Pool's
-	// heartbeat_expiry_threshold and deletes its MicroVM. Only a
-	// client-chosen lease id upstream would close the window.
+	// optimistic lock, so no conflict can lose it. A claim deleted
+	// before its retry orphans the Lease, which is bounded: nothing renews
+	// it, so battery expires it after the Pool's heartbeat_expiry_threshold
+	// and deletes its MicroVM.
 
 	//= docs/requirements/02-claims.md#binding
 	//# The Claim Controller SHALL write to a claim's status only a
 	//# lease id that battery returned in its answer to a `ClaimVM` call for that
 	//# claim.
+
+	//= docs/requirements/02-claims.md#claim-retry
+	//# When battery answers a retried `ClaimVM` for a claim with the
+	//# Lease that an earlier `ClaimVM` for that claim created, the Claim
+	//# Controller SHALL record that Lease as CL-002 says, as for any successful
+	//# `ClaimVM`.
+	//
+	// A replayed answer looks like any other, so it takes the same path.
 
 	//= docs/requirements/02-claims.md#binding
 	//# When battery's `ClaimVM` succeeds for a claim, the Claim

@@ -19,7 +19,7 @@
 //   battery refuses to delete: its drained spec, then a claim and release
 //   of each available MicroVM, never one a claim holds (PO-001 to PO-004,
 //   PO-010 to PO-012, PO-030 to PO-032);
-// - battery v0.3.3: it reads its Hosts from its configuration, and its
+// - battery v0.4.0: it reads its Hosts from its configuration, and its
 //   client certificate from its Secret's volume, only when it
 //   starts, and replenishes each Pool on the least loaded Host in the
 //   Pool's flintlock_hosts (internal/reconciler/hostpick.go). It does not
@@ -236,7 +236,7 @@ module pools {
   def vmCount(p: PoolName, h: HostName): int =
     battery.vms.filter(v => v.pool == p and v.host == h).size()
 
-  // battery v0.3.3's PickHost: the Host in flintlock_hosts with the fewest
+  // battery v0.4.0's PickHost: the Host in flintlock_hosts with the fewest
   // of the Pool's MicroVMs. Ties go by the order of flintlock_hosts, which
   // the model does not keep, so any of the least loaded.
   def leastLoaded(p: PoolName): Set[HostName] =
@@ -709,13 +709,16 @@ module pools {
   def vmsOf(p: PoolName): Set[PlacedVM] = battery.vms.filter(v => v.pool == p)
 
   //@= docs/requirements/10-battery.md#delete-pool
-  //@# If a Pool owns a MicroVM in any phase, then battery SHALL
-  //@# answer `DeletePool` for it with `FAILED_PRECONDITION` and keep the Pool
-  //@# and its MicroVMs.
+  //@# If a Pool owns a MicroVM in the phase `LEASED` or
+  //@# `PRE_LEASE_HOOK_RUNNING`, then battery SHALL answer a `DeletePool`
+  //@# without `force` for it with `FAILED_PRECONDITION` and keep the Pool and
+  //@# its MicroVMs.
   //
   // DeletePool succeeds for a Pool battery does not hold (NOT_FOUND, which
   // lets the finalizer go) or one that owns no MicroVM; otherwise battery
-  // refuses it and the Pool Controller drains the Pool.
+  // refuses it and the Pool Controller drains the Pool. This refuses for a
+  // MicroVM in any phase, as battery v0.3.3 did, which covers v0.4.0's
+  // refusal for a leased one; #199 brings the model to v0.4.0's draining.
   def canDelete(p: PoolName): bool = and {
     live(p), obj(p).deleting, obj(p).hasFinalizer, battery.up,
     not(inBattery(p)) or vmsOf(p) == Set(),
@@ -915,7 +918,7 @@ module pools {
       i > 0 implies hist.restarts[i].at - hist.restarts[i - 1].at >= WINDOW)
 
   // IN-013 (#73): while battery runs, every Pool in battery names only
-  // Hosts battery knows, so battery v0.3.3's PickHost never picks a Host
+  // Hosts battery knows, so battery v0.4.0's PickHost never picks a Host
   // it cannot provision on. A Host joins the Pools only after the restart
   // that gives battery it, and leaves them before the restart that takes
   // it away. The one exception is a Pool the Pool Controller cannot update

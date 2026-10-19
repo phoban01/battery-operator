@@ -94,14 +94,15 @@ func TestDeletedVMsForgetsOldEntries(t *testing.T) {
 	}
 }
 
-// TestReportsDeletion: only the two deletions of a leased MicroVM count.
+// TestReportsDeletion: only the three deletions of a leased MicroVM count.
 func TestReportsDeletion(t *testing.T) {
 	for typ, want := range map[poolmgrv1.EventType]bool{
-		poolmgrv1.EventType_VM_DELETED_DUE_TO_EXPIRY: true,
-		poolmgrv1.EventType_VM_DELETED_ON_RELEASE:    true,
-		poolmgrv1.EventType_VM_EXPIRING_SOON:         false,
-		poolmgrv1.EventType_VM_RELEASED:              false,
-		poolmgrv1.EventType_VM_CLAIMED:               false,
+		poolmgrv1.EventType_VM_DELETED_DUE_TO_EXPIRY:  true,
+		poolmgrv1.EventType_VM_DELETED_ON_RELEASE:     true,
+		poolmgrv1.EventType_VM_DELETED_ON_POOL_DELETE: true,
+		poolmgrv1.EventType_VM_EXPIRING_SOON:          false,
+		poolmgrv1.EventType_VM_RELEASED:               false,
+		poolmgrv1.EventType_VM_CLAIMED:                false,
 	} {
 		if got := ReportsDeletion(&battery.Event{Type: typ, VMUID: testVM}); got != want {
 			t.Errorf("ReportsDeletion(%s) = %t, want %t", typ, got, want)

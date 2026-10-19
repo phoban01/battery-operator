@@ -38,7 +38,7 @@ type PoolLister interface {
 const drainPoll = time.Second
 
 // Drain takes the Hosts the next restart removes out of every Pool before
-// battery restarts without them (#73). battery v0.3.3 does not check a
+// battery restarts without them (#73). battery v0.4.0 does not check a
 // Pool's flintlock_hosts against its Hosts, and replenishes a Pool on the
 // Host in flintlock_hosts with the fewest of its MicroVMs: a removed Host
 // has none, so battery would pick it every time and fail, and the Pool

@@ -163,6 +163,15 @@ type modelLease struct {
 	Host      string `json:"host"`
 	ClaimedAt itfInt `json:"claimedAt"`
 	ExpiresAt itfInt `json:"expiresAt"`
+	// RequestID is the claim whose ClaimVM created the Lease (BA-007).
+	RequestID string `json:"requestId"`
+}
+
+// modelClaimAnswer is the value of claims.qnt's ClaimAnswered: battery's
+// answer to ClaimVM, and the time it came.
+type modelClaimAnswer struct {
+	Lease modelLease `json:"lease"`
+	At    itfInt     `json:"at"`
 }
 
 // modelBattery is claims.qnt's BatteryState.

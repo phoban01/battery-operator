@@ -56,7 +56,7 @@ func TestClaimVMNeverLeasesAMicroVMTwice(t *testing.T) {
 	var wg sync.WaitGroup
 	for range size + 1 {
 		wg.Go(func() {
-			c, err := h.client.ClaimVM(h.ctx, h.ref("pool"))
+			c, err := h.client.ClaimVM(h.ctx, h.ref("pool"), "")
 			results <- result{c, err}
 		})
 	}

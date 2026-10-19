@@ -157,6 +157,16 @@ are the price of option B, and the first two are worth raising upstream.
 
    A client-supplied lease id upstream, so that the claim's own uid could
    be the lease id, would remove the window.
+
+   > **Update, 2026-10-19 (#197):** battery v0.4.0 added a client-chosen
+   > `request_id` to `ClaimVM`, and answers a repeat with the same id with
+   > the Lease the first created, for as long as it holds it. The Claim
+   > Controller sends the claim's uid (CL-060), so the retry after a
+   > crash or a lost answer gets the same Lease back and claims no second
+   > VM. An orphan is left only when the claim is deleted before its retry
+   > (CL-021), and it is bounded as above. The decision stands;
+   > [02-claims.md](../requirements/02-claims.md#claim-retry) has the
+   > details.
 3. **Renewal is relayed.** A client renews by patching `spec.renewTime`,
    and the controller turns that into `Heartbeat`, so how long a lease
    survives now includes the controller's reaction time. The controller has

@@ -209,7 +209,7 @@ func TestBatteryEventsServesBothControllersAgainstTheFakeBattery(t *testing.T) {
 		}
 		return p.Status.Available > 0, fmt.Sprintf("%+v", p.Status)
 	})
-	lease, err := bc.ClaimVM(ctx, ref)
+	lease, err := bc.ClaimVM(ctx, ref, "")
 	if err != nil {
 		t.Fatalf("ClaimVM: %v", err)
 	}

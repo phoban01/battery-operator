@@ -43,7 +43,7 @@ needs. Nothing test-only goes in `config/` at the top of the repository.
   client CA the Exec Agent writes to `/etc/battery/flintlockd` (EA-064), and
   reads them again for every connection, because kind has no Host Image
   unit to start and restart it. It reports flintlock v0.15.2, the oldest
-  that battery v0.3.3 accepts. Its init container does what the Host Image
+  that battery v0.4.0 accepts. Its init container does what the Host Image
   would: creates that directory for user 65532, and a stand-in for
   containerd's thin pool.
 - `exec-agent-host-prerequisites.yaml`: Host prerequisites a kind node can
@@ -57,6 +57,12 @@ battery starts with no Hosts, as the Manifests ship it. The Inventory
 Controller gives it the kind workers once their Exec Agents report them
 ready, and restarts it; `TestPoolPlacementAndClaim` waits for that before
 it makes a Pool.
+
+`TestBatteryUpgrade` (`upgrade_test.go`) sets the sidecar back to
+`poolmgrd:0.3.3`, binds a claim, and sets it to the suite's image again,
+so that battery migrates its database (BA-062) with a Lease in it. The
+Deployment's `Recreate` strategy replaces the pod each time, and the
+feature puts the suite's image back whatever happens.
 
 ## CI
 

@@ -83,7 +83,7 @@ func TestRenderHosts(t *testing.T) {
 }
 
 // TestRenderPlaceholder checks that no Hosts render the one placeholder
-// Host, since poolmgrd v0.3.3 refuses to start with none.
+// Host, since poolmgrd v0.4.0 refuses to start with none.
 func TestRenderPlaceholder(t *testing.T) {
 	t.Parallel()
 	out, err := batterysidecar.Render(nil)

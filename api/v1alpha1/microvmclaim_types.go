@@ -62,6 +62,11 @@ const (
 	// ReasonBatteryUnavailable means the last call to battery for the claim
 	// failed in transit: battery may or may not have acted on it.
 	ReasonBatteryUnavailable = "BatteryUnavailable"
+	// ReasonClaimAborted means battery answered ClaimVM with ABORTED: the
+	// Lease it had for the claim is on its way out, or the MicroVM it had
+	// picked was deleted during the claim. The claim stays Pending and
+	// ClaimVM is retried.
+	ReasonClaimAborted = "ClaimAborted"
 )
 
 // ConditionSynced is the condition type that says whether battery answered
@@ -257,7 +262,7 @@ type MicroVMClaimStatus struct {
 // releases the MicroVM.
 //
 // The proposal on battery#46 made the claim's name its lease id. battery
-// v0.3.3 chooses the lease id itself in ClaimVM, so the id is recorded in
+// v0.4.0 chooses the lease id itself in ClaimVM, so the id is recorded in
 // status.leaseID instead (ADR 0001, consequence 2).
 type MicroVMClaim struct {
 	metav1.TypeMeta `json:",inline"`

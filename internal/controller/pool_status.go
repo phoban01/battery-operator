@@ -41,7 +41,7 @@ const (
 	PoolReasonBelowSize = "BelowSize"
 	// PoolReasonNotFilling: Ready is false; the Pool is below its size
 	// and a reseed has not changed its shortfall (PO-039). It works around
-	// battery v0.3.3, which does not report why a provision fails.
+	// battery v0.4.0, which does not report why a provision fails.
 	PoolReasonNotFilling = "NotFilling"
 	// PoolReasonNotInBattery: battery does not hold the Pool (PO-022).
 	PoolReasonNotInBattery = "NotInBattery"
@@ -172,7 +172,7 @@ func (poolReadiness) Reconcile(_ context.Context, s *poolScope) (reconcile.Resul
 }
 
 // notFillingMessage is the message of Ready with the reason NotFilling.
-// battery v0.3.3 gives the Operator no cause, so it points at the log
+// battery v0.4.0 gives the Operator no cause, so it points at the log
 // that has one.
 func notFillingMessage(nf *poolNotFilling) string {
 	//= docs/requirements/03-pools.md#refill

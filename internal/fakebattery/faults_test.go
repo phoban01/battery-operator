@@ -45,7 +45,7 @@ func TestFaultClaimLatency(t *testing.T) {
 	}
 	done := make(chan result, 1)
 	go func() {
-		claim, err := h.client.ClaimVM(h.ctx, h.ref("pool"))
+		claim, err := h.client.ClaimVM(h.ctx, h.ref("pool"), "")
 		done <- result{claim, err}
 	}()
 
@@ -75,7 +75,7 @@ func TestFaultClaimLatency(t *testing.T) {
 	ctx, cancel := context.WithCancel(h.ctx)
 	errc := make(chan error, 1)
 	go func() {
-		_, err := h.client.ClaimVM(ctx, h.ref("pool"))
+		_, err := h.client.ClaimVM(ctx, h.ref("pool"), "")
 		errc <- err
 	}()
 	h.waitTimers(2)
@@ -123,7 +123,7 @@ func TestFaultUnavailablePeriod(t *testing.T) {
 	if _, err := admin.GetPool(h.ctx, &poolmgrv1.GetPoolRequest{Ref: ref}); err != nil {
 		t.Fatalf("GetPool after the outage: %v", err)
 	}
-	if _, err := h.client.ClaimVM(h.ctx, h.ref("pool")); err != nil {
+	if _, err := h.client.ClaimVM(h.ctx, h.ref("pool"), ""); err != nil {
 		t.Fatalf("ClaimVM after the outage: %v", err)
 	}
 }
@@ -214,7 +214,7 @@ func TestFaultHookFailure(t *testing.T) {
 		// The next claim, on the replacement, works.
 		h.advance(testInterval)
 		h.waitEvent(poolmgrv1.EventType_VM_AVAILABLE)
-		if _, err := h.client.ClaimVM(h.ctx, h.ref("pool")); err != nil {
+		if _, err := h.client.ClaimVM(h.ctx, h.ref("pool"), ""); err != nil {
 			t.Fatalf("ClaimVM after the injection was consumed: %v", err)
 		}
 	})
@@ -264,7 +264,7 @@ func TestFaultDropEventsStream(t *testing.T) {
 		t.Fatalf("Faults().DropEventsStream = true, want it cleared after the drop")
 	}
 
-	claim, err := h.client.ClaimVM(h.ctx, h.ref("pool"))
+	claim, err := h.client.ClaimVM(h.ctx, h.ref("pool"), "")
 	if err != nil {
 		t.Fatalf("ClaimVM: %v", err)
 	}
