@@ -15,7 +15,7 @@ code. They do not replace Go tests. How they cite requirements is in
 | `claims_picks.qnt` | `claims.qnt`'s steps that take arguments, each recording them as the replay's picks, for the scenario tests the replay replays as fixed traces (#149) |
 | `certificates.qnt` | Certificate approval and signing, and the address pins (CT-001 to CT-020; EA-061, EA-062, EA-068; ADR 0003 and ADR 0004) |
 | `certificates_test.qnt` | Scenario tests for `certificates.qnt` |
-| `pools.qnt` | Pools, placement and inventory: the Pool Controller and the Inventory Controller against battery (PO-001 to PO-004, PO-010 to PO-012, PO-042, PO-044, IN-001 to IN-013, DP-007, DP-008, BA-061, BA-070, BA-072; ADR 0001, consequence 1) |
+| `pools.qnt` | Pools, placement and inventory: the Pool Controller and the Inventory Controller against battery (PO-001 to PO-004, PO-010 to PO-012, PO-042, PO-044, IN-001 to IN-013, DP-007, DP-008, BA-061, BA-070, BA-072, CL-063; ADR 0001, consequence 1) |
 | `pools_test.qnt` | Scenario tests for `pools.qnt` |
 
 ## Running them
@@ -618,7 +618,8 @@ only when it starts (ADR 0001, consequence 1; BA-061). The steps are:
 - **the environment:** Nodes are labelled, cordoned, uncordoned, deleted
   and created again; Node reports flip; Pools are created, changed (to a
   spec battery refuses, too) and deleted; claims lease available MicroVMs
-  and release them; cert-manager renews battery's client certificate;
+  of a Pool that is not being deleted (CL-063), and release them;
+  cert-manager renews battery's client certificate;
   time passes. The controllers act promptly: time does not pass while a
   restart window is waiting to open or close, or while battery is
   restarting.
@@ -674,7 +675,9 @@ then (PO-030 to PO-032, withdrawn in #199). `deleteFilledPoolTest` walks a
 deleted Pool through its drained spec and the wait for the MicroVM a claim
 holds, after which battery deletes it with its available one.
 `deleteAvailablePoolTest` shows a Pool no claim holds going in one
-`DeletePool`, and `deleteRefusedWhileLeasedTest` the refusal.
+`DeletePool`, `deleteRefusedWhileLeasedTest` the refusal, and
+`noLeaseOnDeletedPoolTest` a claim that leases nothing from a deleted
+Pool that still has an available MicroVM (CL-063).
 
 The witnesses show that the simulation reaches a flap absorbed within the
 settle time, a restart, a restart that batches two Hosts, two restarts, a

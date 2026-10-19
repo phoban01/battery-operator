@@ -206,6 +206,20 @@ func scopeFor(t *testing.T, c client.Client, key client.ObjectKey, b battery.Cli
 	return s
 }
 
+// deletingPool is aClaim's Pool, deleted and held by the Pool Controller's
+// finalizer while battery refuses DeletePool.
+func deletingPool() *batteryv1alpha1.Pool {
+	now := metav1.NewTime(start)
+	return &batteryv1alpha1.Pool{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              testPool,
+			Namespace:         claimKey.Namespace,
+			DeletionTimestamp: &now,
+			Finalizers:        []string{"battery.liquidmetal-x.dev/pool"},
+		},
+	}
+}
+
 // The names the claim tests use: aClaim's Pool, and the MicroVM of
 // battery's answer to its ClaimVM (testLease is in release_test.go, nodeA
 // in agentaddress_test.go).

@@ -81,6 +81,8 @@ func TestPoolPlacementAndClaim(t *testing.T) {
 
 func placementFeature(ns string) features.Feature {
 	claimName := "bound"
+	// lateName is a claim made while the Pool waits for claimName.
+	lateName := "late"
 	return features.New("Pool placement and a claim").
 		Setup(createNamespace(ns)).
 		Setup(func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
@@ -253,6 +255,34 @@ func placementFeature(ns string) features.Feature {
 			}
 			return ctx
 		}).
+		Assess("a new claim on the deleted Pool does not bind", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+			//= docs/requirements/02-claims.md#binding
+			//= type=test
+			//# If the Pool of a claim that has no lease id in its status has
+			//# a deletion timestamp, then the Claim Controller SHALL NOT call battery's
+			//# `ClaimVM` for the claim, SHALL keep the claim in the phase `Pending` with
+			//# the condition `Bound` false and the reason `PoolDeleting`, and SHALL
+			//# retry with backoff.
+			//
+			// The Pool still has a warm MicroVM that poolmgrd would lease.
+			c := mustClient(t, cfg)
+			late := &batteryv1alpha1.MicroVMClaim{
+				ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: lateName},
+				Spec: batteryv1alpha1.MicroVMClaimSpec{
+					PoolRef:            batteryv1alpha1.PoolReference{Name: placedPoolName},
+					ServiceAccountName: holderName,
+				},
+			}
+			if err := c.Create(ctx, late); err != nil {
+				t.Fatalf("creating the claim %s: %v", lateName, err)
+			}
+			waitForClaimPending(ctx, t, c, late, batteryv1alpha1.ReasonPoolDeleting)
+			pool := &batteryv1alpha1.Pool{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: placedPoolName}}
+			waitForPoolReady(ctx, t, c, pool, metav1.ConditionFalse, poolReasonDeletionBlocked, func(p *batteryv1alpha1.Pool) bool {
+				return p.Status.Leased == 1 && p.Status.Available >= 1
+			})
+			return ctx
+		}).
 		Assess("a deleted claim releases its Lease and goes", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
 			//= docs/requirements/02-claims.md#release
 			//= type=test
@@ -279,6 +309,10 @@ func placementFeature(ns string) features.Feature {
 			// battery deletes the Pool's warm MicroVMs with it (BA-070).
 			c := mustClient(t, cfg)
 			waitForGone(ctx, t, c, &batteryv1alpha1.Pool{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: placedPoolName}})
+
+			// The late claim is now one whose Pool does not exist (CL-004).
+			late := &batteryv1alpha1.MicroVMClaim{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: lateName}}
+			waitForClaimPending(ctx, t, c, late, batteryv1alpha1.ReasonPoolNotFound)
 			return ctx
 		}).
 		Teardown(deleteNamespace(ns)).
@@ -385,6 +419,25 @@ func waitForClaimBound(ctx context.Context, t *testing.T, c client.Client, claim
 		t.Fatalf("waiting for the claim %s to be Bound: %v; its status is %s", claim.Name, err, describe(got.Status))
 	}
 	return got
+}
+
+// waitForClaimPending waits for claim to be Pending, with no lease id and
+// its Bound condition false for reason.
+func waitForClaimPending(ctx context.Context, t *testing.T, c client.Client, claim *batteryv1alpha1.MicroVMClaim, reason string) {
+	t.Helper()
+	got := &batteryv1alpha1.MicroVMClaim{}
+	err := wait.PollUntilContextTimeout(ctx, time.Second, placementTimeout, true, func(ctx context.Context) (bool, error) {
+		if err := c.Get(ctx, client.ObjectKeyFromObject(claim), got); err != nil {
+			return false, nil
+		}
+		st := got.Status
+		cond := meta.FindStatusCondition(st.Conditions, batteryv1alpha1.ConditionBound)
+		return st.Phase == batteryv1alpha1.MicroVMClaimPending && st.LeaseID == "" &&
+			cond != nil && cond.Status == metav1.ConditionFalse && cond.Reason == reason, nil
+	})
+	if err != nil {
+		t.Fatalf("waiting for the claim %s to be Pending (%s): %v; its status is %s", claim.Name, reason, err, describe(got.Status))
+	}
 }
 
 // waitForGone waits until obj no longer exists.

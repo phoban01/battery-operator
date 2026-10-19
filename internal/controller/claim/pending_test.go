@@ -157,6 +157,59 @@ func TestPendingOnAMissingPoolBacksOff(t *testing.T) {
 	}
 }
 
+//= docs/requirements/02-claims.md#binding
+//= type=test
+//# If the Pool of a claim that has no lease id in its status has
+//# a deletion timestamp, then the Claim Controller SHALL NOT call battery's
+//# `ClaimVM` for the claim, SHALL keep the claim in the phase `Pending` with
+//# the condition `Bound` false and the reason `PoolDeleting`, and SHALL
+//# retry with backoff.
+
+// TestPendingOnADeletingPoolBacksOffWithoutClaimVM covers CL-063: while
+// the claim's Pool is being deleted, the claim stays Pending with
+// PoolDeleting, is retried with backoff, and battery gets no ClaimVM,
+// though it still has a warm MicroVM to give. Synced is left as it was,
+// since battery was not called. Once the Pool is gone, the claim is one
+// whose Pool does not exist (CL-004).
+func TestPendingOnADeletingPoolBacksOffWithoutClaimVM(t *testing.T) {
+	ctx := context.Background()
+	pool := deletingPool()
+	c := newFakeClient(t, aClaim(batteryv1alpha1.ReleaseFinalizer), pool)
+	warm := answers(leased, nil)
+
+	now := start
+	for _, want := range []time.Duration{1, 1, 2} {
+		res, got := reconcileAt(t, c, warm, now)
+		assertPending(t, got, batteryv1alpha1.ReasonPoolDeleting)
+		if res.RequeueAfter != want*time.Second {
+			t.Fatalf("at +%v: RequeueAfter = %v, want %v", now.Sub(start), res.RequeueAfter, want*time.Second)
+		}
+		if cond := meta.FindStatusCondition(got.Status.Conditions, batteryv1alpha1.ConditionSynced); cond != nil {
+			t.Errorf("Synced = %+v, want it unset with no call to battery", cond)
+		}
+		now = now.Add(res.RequeueAfter)
+	}
+	if n := len(warm.claimCalls()); n != 0 {
+		t.Fatalf("ClaimVM was called %d times for a claim on a deleting Pool", n)
+	}
+
+	// battery deletes the Pool, and the Pool Controller removes its
+	// finalizer, so the Pool is gone.
+	if err := c.Get(ctx, client.ObjectKeyFromObject(pool), pool); err != nil {
+		t.Fatal(err)
+	}
+	pool.Finalizers = nil
+	if err := c.Update(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	gone := answers(nil, battery.ErrNotFound)
+	_, got := reconcileAt(t, c, gone, now)
+	assertPending(t, got, batteryv1alpha1.ReasonPoolNotFound)
+	if n := len(gone.claimCalls()); n != 1 {
+		t.Errorf("ClaimVM was called %d times once the Pool was gone, want 1", n)
+	}
+}
+
 // TestPendingIgnoresASuccessfulOrAbsentClaimVM: with no pending failure in
 // the scope, Pending changes nothing.
 func TestPendingIgnoresASuccessfulOrAbsentClaimVM(t *testing.T) {
