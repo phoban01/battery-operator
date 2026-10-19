@@ -24,7 +24,8 @@ run on.
   [install guide](https://phoban01.github.io/battery-operator/install.html)
   says (`config/release`, which renders `config/default` and
   `config/exec-agent` together).
-- The Host Image published as an AMI in the region of the cluster. See
+- The Host Image published as an AMI in the region of the cluster, of
+  the architecture of the pool's instance type: x86_64 or arm64. See
   [Publishing an AMI](../../hostimage/README.md#publishing-an-ami).
 - A subnet for the Hosts.
 - A security group that lets battery reach `flintlockd` on each Host. See
@@ -54,8 +55,8 @@ every value in the pool's `host-pool.yaml`.
    | `name` | The name of the pool, and of each of its objects |
    | `clusterName` | The Cluster API `Cluster` the Hosts join |
    | `replicas` | The pool size: the number of Hosts |
-   | `instanceType` | One EC2 instance type. A Host needs KVM, so a metal instance, and an instance-store disk for the thin pool |
-   | `amiID` | The AMI of the Host Image, by id |
+   | `instanceType` | One EC2 instance type. A Host needs KVM, so a metal instance, and an instance-store disk for the thin pool. Its architecture must be the AMI's: `m6id.metal` for an x86_64 AMI, a Graviton metal size such as `c7gd.metal` or `c8gd.metal-24xl` for an arm64 AMI. Graviton's VM sizes have no nested virtualization, so a Graviton Host is a metal size |
+   | `amiID` | The AMI of the Host Image, by id. Its `battery.liquidmetal-x.dev/architecture` tag names its architecture, `x86_64` or `arm64` |
    | `subnetID` | The subnet of the Hosts, by id |
    | `additionalSecurityGroups` | A list of `id: sg-…` entries: security groups for the Hosts besides CAPA's own. See below |
    | `rootVolumeGiB` | The size of each Host's root volume, in GiB. It holds the operating system, containerd's images and the emptyDir volumes of the Host's pods |

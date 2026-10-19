@@ -180,12 +180,15 @@ host-image-push: ## Build the Host Image for linux/amd64 and linux/arm64 with Da
 # host pools (config/capi), with hostimage/publish-ami.sh (HI-009). It is the
 # one target that needs AWS, and nothing runs it unless asked: no other
 # target and no workflow. HOST_IMAGE_AMI_ARGS are the script's arguments,
-# for example "--bucket my-import-bucket --region eu-west-1".
+# for example "--bucket my-import-bucket --region eu-west-1". ARCH is the
+# AMI's architecture, amd64 or arm64; empty, the script takes this
+# machine's, which is the one bootc-image-builder builds for natively.
 HOST_IMAGE_AMI_ARGS ?=
+ARCH ?=
 
 .PHONY: host-image-ami
-host-image-ami: ## Publish HOST_IMG as an AMI with bootc-image-builder; needs podman, AWS and HOST_IMAGE_AMI_ARGS (hostimage/README.md).
-	hostimage/publish-ami.sh ${HOST_IMG} $(HOST_IMAGE_AMI_ARGS)
+host-image-ami: ## Publish HOST_IMG as an AMI with bootc-image-builder, for ARCH; needs podman, AWS and HOST_IMAGE_AMI_ARGS (hostimage/README.md).
+	hostimage/publish-ami.sh ${HOST_IMG} $(if $(ARCH),--arch $(ARCH)) $(HOST_IMAGE_AMI_ARGS)
 
 # The Cluster API host pools (config/capi, docs/requirements/12-host-pool.md,
 # ADR 0007). capi-check renders them and validates every object against the

@@ -69,11 +69,15 @@ has the detail.
 ## Make an AMI
 
 The Host pools boot the Host Image from an AMI in the region of the
-cluster. The AMI is x86_64 only, so the Hosts are x86_64 instances.
+cluster. An AMI has one architecture, so you make one for x86_64 Hosts
+and another for arm64 Hosts. An arm64 Host is a Graviton metal instance,
+such as `c7gd.metal` or `c8gd.metal-24xl`: Graviton's VM sizes have no
+nested virtualization, and a Host needs KVM.
 
 `make host-image-ami` makes the AMI with bootc-image-builder. You need:
 
-- a Linux machine with podman and sudo;
+- a Linux machine with podman and sudo, of the AMI's architecture: an
+  x86_64 machine for an x86_64 AMI, an arm64 machine for an arm64 AMI;
 - the `aws` command line, and AWS credentials in the environment or in
   `~/.aws`;
 - an S3 bucket in the region, and the `vmimport` service role, for the
@@ -88,15 +92,27 @@ make host-image-ami HOST_IMG=ghcr.io/phoban01/battery-operator/host-image:v0.3.2
   HOST_IMAGE_AMI_ARGS="--bucket my-import-bucket --region eu-west-1"
 ```
 
-The last line of the output is the AMI id, its name, the image digest and
-the Kubernetes version, for example:
+The AMI is the machine's own architecture. `ARCH=amd64` or `ARCH=arm64`
+names it instead. Releases up to `v0.3.3` make x86_64 AMIs only; their
+Host Images are published for both architectures, so a newer checkout
+makes an arm64 AMI of them. For an arm64 AMI, on an arm64 machine, with
+a checkout of `main` or of a release after `v0.3.3`:
+
+```sh
+make host-image-ami ARCH=arm64 HOST_IMG=ghcr.io/phoban01/battery-operator/host-image:v0.3.3 \
+  HOST_IMAGE_AMI_ARGS="--bucket my-import-bucket --region eu-west-1"
+```
+
+The last line of the output is the AMI id, its name, the image digest,
+the Kubernetes version and the architecture, for example:
 
 ```
-ami-0123456789abcdef0 battery-host-v1.36.3-<first 12 digits of the digest> sha256:<digest> v1.36.3
+ami-0123456789abcdef0 battery-host-v1.36.3-arm64-<first 12 digits of the digest> sha256:<digest> v1.36.3 arm64
 ```
 
-The script tags the AMI with the image digest and the Kubernetes version.
-Keep the AMI id and the version for the Host pool. To read the tags later:
+The script tags the AMI with the image digest, the Kubernetes version and
+the architecture. Keep the AMI id, the version and the architecture for
+the Host pool. To read the tags later:
 
 ```sh
 aws ec2 describe-images --region eu-west-1 --image-ids ami-0123456789abcdef0 \
@@ -297,7 +313,9 @@ Then, in the checkout:
      name: battery-hosts-example
      clusterName: battery
      replicas: "1"
-     # A metal instance with an instance-store disk.
+     # A metal instance with an instance-store disk, of the AMI's
+     # architecture: m6id.metal for an x86_64 AMI, c7gd.metal or
+     # c8gd.metal-24xl for an arm64 AMI.
      instanceType: m6id.metal
      amiID: ami-0123456789abcdef0
      subnetID: subnet-0123456789abcdef0

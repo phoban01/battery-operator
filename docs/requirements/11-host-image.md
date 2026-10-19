@@ -44,9 +44,10 @@ requirement takes the next free number above HI-080.
   container image that fails unless every component of HI-003 reports its
   pinned version and every unit this document requires is enabled.
 - **HI-009** Where publishing an AMI is requested, the Host Image build SHALL
-  convert the container image to an AMI with `bootc-image-builder` and SHALL
-  tag the AMI with the container image digest and the pinned Kubernetes
-  version.
+  convert the container image of the requested architecture, `x86_64` or
+  `aarch64`, to an AMI of that architecture with `bootc-image-builder` and
+  SHALL tag the AMI with the container image digest, the pinned Kubernetes
+  version and the architecture.
 
 The Dagger module builds the image from its Containerfile, as ADR 0005 and
 ADR 0007 say, and CI publishes it on a version tag. Both architectures of
@@ -62,7 +63,14 @@ whose Kubernetes version the cluster it joins supports. Turning the
 container image into a machine image for a cloud is a separate step that
 runs only on request: HI-009 does it for AWS, for the Cluster API host
 pools of `12-host-pool.md`. An AMI is usable only by a MachineDeployment
-whose `version` matches its Kubernetes version tag.
+whose `version` matches its Kubernetes version tag. An AMI has one
+architecture, where the container image has both, so HI-009 takes the
+architecture as a request and records it as a tag: a MachineDeployment
+that boots the AMI needs an instance type of that architecture, and on
+AWS an `aarch64` Host is a Graviton metal instance, because Graviton's VM
+sizes have no nested virtualization. `bootc-image-builder` builds for the
+machine it runs on, so each architecture's AMI is made on a machine of
+that architecture.
 
 ## Kernel and KVM {#kernel-and-kvm}
 

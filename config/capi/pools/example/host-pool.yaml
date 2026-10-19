@@ -27,9 +27,13 @@ data:
   # The pool size: the number of Hosts.
   replicas: "1"
   # One instance type. A Host needs KVM, so a metal instance, and an
-  # instance-store disk for the thin pool.
+  # instance-store disk for the thin pool. Its architecture must be the
+  # AMI's, the AMI's battery.liquidmetal-x.dev/architecture tag: x86_64
+  # here. For an arm64 AMI, a Graviton metal size, such as c7gd.metal or
+  # c8gd.metal-24xl; Graviton's VM sizes have no nested virtualization.
   instanceType: m6id.metal
-  # The AMI published from the Host Image (make host-image-ami), by id.
+  # The AMI published from the Host Image (make host-image-ami), by id, of
+  # the instance type's architecture.
   amiID: ami-REPLACE
   # The subnet the Hosts run in, by id.
   subnetID: subnet-REPLACE
