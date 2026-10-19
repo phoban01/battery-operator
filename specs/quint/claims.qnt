@@ -5,14 +5,18 @@
 // What it models (docs/requirements/02-claims.md, ADR 0001 consequences 2
 // to 4):
 //
-// - the Claim Controller's steps: add the finalizer, ClaimVM, write the
-//   binding, relay a renewal as Heartbeat and write battery's expiry,
-//   expire a claim from the Events stream (CL-013) or its passed expiry
-//   (CL-014, once ListLeases confirms it: CL-016), release with ReleaseVM
-//   and then remove the finalizer, and recover after a restart;
+// - the Claim Controller's steps: add the finalizer, ClaimVM with the
+//   claim's uid as the request id (CL-060), write the binding, relay a
+//   renewal as Heartbeat and write battery's expiry, expire a claim from
+//   the Events stream (CL-013) or its passed expiry (CL-014, once
+//   ListLeases confirms it: CL-016), release with ReleaseVM and then
+//   remove the finalizer, and recover after a restart;
 // - battery's steps: replenish the Pool, answer ClaimVM, Heartbeat and
 //   ReleaseVM, sweep the Leases nobody renewed, report deleted MicroVMs on
-//   the Events stream;
+//   the Events stream. battery v0.4.0 stores the request id on the Lease
+//   (BA-007), and a ClaimVM whose request id names a Lease it still holds
+//   gets that Lease back, a replay (BA-008), so the retry after a lost
+//   answer binds the claim to the Lease the first call created;
 // - the environment: Holders create, renew and delete claims, time passes,
 //   the controller crashes (between any two of its steps, including between
 //   ClaimVM and the status write), battery stops and starts, and the
@@ -65,7 +69,9 @@ module claims {
   // status write that records its answer. A crash loses it.
   type InFlight =
     | Idle
-    | ClaimAnswered(Lease)
+    // battery's answer to ClaimVM, and when it came: the time of binding
+    // the status write records. A replayed Lease is older than its answer.
+    | ClaimAnswered({ lease: Lease, at: Time })
     | HeartbeatAnswered({ leaseId: LeaseId, expiresAt: Time, renewTime: int })
     // battery released the Lease, or reported it unknown; the finalizer
     // write is next (CL-020)
@@ -132,6 +138,16 @@ module claims {
     failures: Set[str],
     // claims whose ReleaseVM answer was lost in transit
     releaseLostBy: Set[ClaimName],
+    // every Lease battery ever created, with the claim whose request id
+    // created it (BA-007)
+    created: Set[(ClaimName, LeaseId)],
+    // (l, m): battery still held Lease l when it created Lease m. Lease
+    // ids grow, so Lease l ended before Lease m was created exactly when
+    // l < m and (l, m) is not here.
+    heldWhenCreated: Set[(LeaseId, LeaseId)],
+    // claims whose ClaimVM battery answered with a replay (BA-008): the
+    // Lease an earlier ClaimVM for the claim created, whose answer was lost
+    replays: Set[ClaimName],
   }
 
   var now: Time
@@ -171,16 +187,29 @@ module claims {
   // lease ids battery has answered that the controller has not written yet
   def inFlightLeases: Set[LeaseId] =
     CLAIMS.map(c => match ctrl.mem.get(c) {
-      | ClaimAnswered(l) => Set(l.id)
+      | ClaimAnswered(a) => Set(a.lease.id)
       | _ => Set()
     }).flatten()
 
   // Leases battery holds that no claim records and the controller is not
   // about to record: the orphans of ADR 0001, consequence 2, left by a
-  // crash or by a ClaimVM answer lost in transit.
+  // crash or by a ClaimVM answer lost in transit. One stays an orphan
+  // until its claim's retry replays it (BA-008), or the sweep deletes it;
+  // a claim deleted while Pending leaves its orphan to the sweep (CL-021).
   def orphans: Set[LeaseId] =
     battery.leases.keys().filter(l =>
       not(recordedByLiveClaims.contains(l)) and not(inFlightLeases.contains(l)))
+
+  // The Lease battery holds that claim c's request id created, if any:
+  // what a ClaimVM for c gets back (BA-008). oneLeasePerClaim says there
+  // is at most one.
+  def leaseFor(c: ClaimName): Set[LeaseId] =
+    battery.leases.keys().filter(l => battery.leases.get(l).requestId == c)
+
+  def hasReplay(c: ClaimName): bool = leaseFor(c) != Set()
+
+  // The one Lease of leaseFor(c); 0 if there is none.
+  def replayLease(c: ClaimName): LeaseId = leaseFor(c).fold(0, (_, l) => l)
 
   // ---------------------------------------------------------------------
   // Init
@@ -200,7 +229,7 @@ module claims {
       events: Set(),
     },
     ctrl' = { ...CTRL_ON_START, recovering: false },
-    hist' = { recorded: Set(), released: Set(), expiredVia: Set(), answered: Set(), failures: Set(), releaseLostBy: Set() },
+    hist' = NO_HISTORY,
   }
 
   // ---------------------------------------------------------------------
@@ -446,10 +475,22 @@ module claims {
 
   def canClaimVM(c: ClaimName): bool = canCallClaimVM(c) and battery.up
 
-  // battery commits a Lease on vm in ClaimVM.
-  pure def newLease(b: BatteryState, vm: VMId, t: Time): Lease = {
+  //@= docs/requirements/02-claims.md#claim-retry
+  //@# The Claim Controller SHALL send with every `ClaimVM` for a
+  //@# claim a request id equal to the claim's `metadata.uid`.
+  //
+  //@= docs/requirements/10-battery.md#claiming
+  //@# When `ClaimVM` carries a request id that no Lease battery
+  //@# holds was created with, and the call succeeds, battery SHALL store the
+  //@# request id on the Lease it creates
+  //
+  // battery commits a Lease on vm in ClaimVM for claim c. The model's
+  // controller sends the claim's uid as the request id on every ClaimVM
+  // (CL-060), and the model names the uid by the claim, so the Lease
+  // records c.
+  pure def newLease(b: BatteryState, c: ClaimName, vm: VMId, t: Time): Lease = {
     id: b.nextLease, pool: POOL, vm: vm, host: VM_HOST.get(vm),
-    claimedAt: t, expiresAt: t + EXPIRY,
+    claimedAt: t, expiresAt: t + EXPIRY, requestId: c,
   }
 
   pure def commitLease(b: BatteryState, l: Lease): BatteryState = {
@@ -460,22 +501,61 @@ module claims {
     nextLease: b.nextLease + 1,
   }
 
+  // The history once battery has created Lease l for claim c, for the
+  // invariants: which Leases it held at the time says whether l is a
+  // second Lease for its claim (retryYieldsSameLease).
+  def noteCreated(h: History, c: ClaimName, l: Lease): History = { ...h,
+    created: h.created.union(Set((c, l.id))),
+    heldWhenCreated: h.heldWhenCreated.union(battery.leases.keys().map(k => (k, l.id))),
+  }
+
   //@= docs/requirements/10-battery.md#claiming
   //@# When `ClaimVM` succeeds, battery SHALL choose a new lease id,
   //@# and set the Lease's expiry to the time of the claim plus the Pool's
   //@# `heartbeat_expiry_threshold`.
   //
-  // ClaimVM succeeds. battery chooses the lease id and answers; the
-  // controller holds the answer until it writes the status.
+  //@= docs/requirements/10-battery.md#claiming
+  //@# When `ClaimVM` carries a request id, and battery holds a Lease
+  //@# created with that request id for the Pool the call names, whose MicroVM
+  //@# has a record and is not in the phase `DELETING`, battery SHALL answer
+  //@# with that Lease's id and MicroVM, create no Lease, and leave the Lease's
+  //@# expiry unchanged.
+  //
+  //@= docs/requirements/02-claims.md#claim-retry
+  //@# When battery answers a retried `ClaimVM` for a claim with the
+  //@# Lease that an earlier `ClaimVM` for that claim created, the Claim
+  //@# Controller SHALL record that Lease as CL-002 says, as for any successful
+  //@# `ClaimVM`.
+  //
+  // ClaimVM succeeds, and the controller holds the answer until it writes
+  // the status. If battery still holds the Lease that an earlier ClaimVM
+  // for c created, whose answer was lost in a crash or in transit, the
+  // answer is that Lease, a replay: battery changes nothing, not even the
+  // Lease's expiry, and vm plays no part. Otherwise battery leases vm,
+  // which must be warm, under a new lease id. The model's sweep deletes a
+  // Lease and its MicroVM in one step, so no Lease ever has a deleting
+  // MicroVM, and battery's ABORTED (BA-009, CL-062) is not modelled
+  // (10-battery.md, "Where the stand-ins differ").
   action ctlClaimVM(c: ClaimName, vm: VMId): bool = all {
     canClaimVM(c),
-    battery.warm.contains(vm),
-    val lease = newLease(battery, vm, now)
-    all {
-      battery' = commitLease(battery, lease),
-      setMem(c, ClaimAnswered(lease)),
-      hist' = { ...hist, answered: hist.answered.union(Set((c, lease.id))) },
-    },
+    if (hasReplay(c)) (
+      val lease = battery.leases.get(replayLease(c))
+      all {
+        battery' = battery,
+        setMem(c, ClaimAnswered({ lease: lease, at: now })),
+        hist' = { ...hist,
+          answered: hist.answered.union(Set((c, lease.id))),
+          replays: hist.replays.union(Set(c)) },
+      }
+    ) else (
+      val lease = newLease(battery, c, vm, now)
+      all {
+        battery.warm.contains(vm),
+        battery' = commitLease(battery, lease),
+        setMem(c, ClaimAnswered({ lease: lease, at: now })),
+        hist' = { ...noteCreated(hist, c, lease), answered: hist.answered.union(Set((c, lease.id))) },
+      }
+    ),
     now' = now, claims' = claims,
   }
 
@@ -493,16 +573,33 @@ module claims {
   //@# Once battery has committed a Lease in `ClaimVM`, battery SHALL
   //@# answer that `ClaimVM` with success.
   //
-  // ClaimVM fails in transit after battery committed the Lease: the answer
-  // is lost without a crash, and the Lease is an orphan. The claim stays
-  // Pending and canCallClaimVM holds again, which is the retry. battery
-  // itself answered success (BA-004); the transport lost it.
+  //@= docs/requirements/10-battery.md#claiming
+  //@# When `ClaimVM` carries a request id, and battery holds a Lease
+  //@# created with that request id for the Pool the call names, whose MicroVM
+  //@# has a record and is not in the phase `DELETING`, battery SHALL answer
+  //@# with that Lease's id and MicroVM, create no Lease, and leave the Lease's
+  //@# expiry unchanged.
+  //
+  // ClaimVM fails in transit after battery answered: the answer is lost
+  // without a crash. The claim stays Pending and canCallClaimVM holds
+  // again, which is the retry. battery itself answered success (BA-004);
+  // the transport lost it. A first call commits the Lease, which is an
+  // orphan until the retry replays it. A replay whose answer is lost
+  // changes nothing in battery (BA-008).
   action ctlClaimVMLost(c: ClaimName, vm: VMId): bool = all {
     canClaimVM(c),
-    battery.warm.contains(vm),
-    battery' = commitLease(battery, newLease(battery, vm, now)),
+    if (hasReplay(c)) all {
+      battery' = battery,
+      hist' = { ...hist, failures: hist.failures.union(Set("claimLost")) },
+    } else (
+      val lease = newLease(battery, c, vm, now)
+      all {
+        battery.warm.contains(vm),
+        battery' = commitLease(battery, lease),
+        hist' = { ...noteCreated(hist, c, lease), failures: hist.failures.union(Set("claimLost")) },
+      }
+    ),
     setClaim(c, claimUnavailable(obj(c))),
-    hist' = { ...hist, failures: hist.failures.union(Set("claimLost")) },
     now' = now, ctrl' = ctrl,
   }
 
@@ -523,8 +620,13 @@ module claims {
   //@# If a Pool has no MicroVM in the phase `AVAILABLE`, then battery
   //@# SHALL answer `ClaimVM` for that Pool with `RESOURCE_EXHAUSTED` and create no
   //@# Lease.
+  //
+  // battery looks the request id up before it looks at the Pool, so a
+  // ClaimVM that replays a Lease succeeds whether or not the Pool has a
+  // warm MicroVM (BA-008).
   action ctlPoolExhausted(c: ClaimName): bool = all {
     canClaimVM(c),
+    not(hasReplay(c)),
     battery.warm == Set(),
     setClaim(c, { ...obj(c), status: { ...obj(c).status, phase: Pending, bound: { status: CondFalse, reason: PoolExhausted }, synced: synced } }),
     now' = now, battery' = battery, ctrl' = ctrl, hist' = hist,
@@ -537,10 +639,10 @@ module claims {
   //@# to `Bound` and set the condition `Bound` true, before it makes any other
   //@# call to battery for that claim.
   // The answer the controller holds for c, if it is one of these.
-  pure val noLease: Lease = { id: 0, pool: "", vm: "", host: "", claimedAt: 0, expiresAt: 0 }
-  pure def claimAnswer(f: InFlight): Lease = match f {
-    | ClaimAnswered(l) => l
-    | _ => noLease
+  pure val noLease: Lease = { id: 0, pool: "", vm: "", host: "", claimedAt: 0, expiresAt: 0, requestId: "" }
+  pure def claimAnswer(f: InFlight): { lease: Lease, at: Time } = match f {
+    | ClaimAnswered(a) => a
+    | _ => { lease: noLease, at: 0 }
   }
   pure def isClaimAnswer(f: InFlight): bool = match f {
     | ClaimAnswered(_) => true
@@ -562,27 +664,29 @@ module claims {
   // The renewTime the claim has now is recorded as relayed: the new Lease
   // runs from later than any renewal before it. The time of binding is
   // when battery answered ClaimVM, which can be ticks before the status
-  // write, as the Claim Controller records it (#62).
+  // write, as the Claim Controller records it (#62); for a replayed Lease
+  // it is later than the Lease's claimedAt. A replay is written like any
+  // other answer (CL-061).
   action ctlWriteBound(c: ClaimName): bool = all {
     canWriteBound(c),
-    val l = claimAnswer(ctrl.mem.get(c))
+    val a = claimAnswer(ctrl.mem.get(c))
     all {
       setClaim(c, {
         ...obj(c),
         observedRenewTime: obj(c).spec.renewTime,
         status: {
           phase: Bound,
-          leaseId: Some(l.id),
-          microVM: Some(l.vm),
-          nodeName: Some(l.host),
-          boundTime: Some(l.claimedAt),
+          leaseId: Some(a.lease.id),
+          microVM: Some(a.lease.vm),
+          nodeName: Some(a.lease.host),
+          boundTime: Some(a.at),
           leaseExpiresAt: None,
           bound: { status: CondTrue, reason: ClaimBound },
           synced: synced,
         },
       }),
       setMem(c, Idle),
-      hist' = { ...hist, recorded: hist.recorded.union(Set(l.id)) },
+      hist' = { ...hist, recorded: hist.recorded.union(Set(a.lease.id)) },
     },
     now' = now, battery' = battery,
   }
@@ -1290,14 +1394,53 @@ module claims {
   //@# claim.
   //
   // A Lease whose answer was lost, in a crash or in transit, is never
-  // adopted by any claim.
+  // adopted by another claim. Its own claim's retry gets it back, as
+  // battery's answer to that claim's own ClaimVM (BA-008, CL-061).
   val recordedOnlyFromOwnAnswer: bool =
     CLAIMS.forall(c => not(isUnborn(slot(c))) implies
       obj(c).status.leaseId.optToSet().forall(l => hist.answered.contains((c, l))))
 
+  //@= docs/requirements/10-battery.md#claiming
+  //@# When `ClaimVM` carries a request id, and battery holds a Lease
+  //@# created with that request id for the Pool the call names, whose MicroVM
+  //@# has a record and is not in the phase `DELETING`, battery SHALL answer
+  //@# with that Lease's id and MicroVM, create no Lease
+  //
+  // A retried bind yields the same Lease, never a second MicroVM, part
+  // one: battery holds at most one Lease per request id, so per claim.
+  // A ClaimVM that finds one replays it and creates none (BA-008).
+  val oneLeasePerClaim: bool =
+    CLAIMS.forall(c => leaseFor(c).size() <= 1)
+
+  //@= docs/requirements/02-claims.md#claim-retry
+  //@# When battery answers a retried `ClaimVM` for a claim with the
+  //@# Lease that an earlier `ClaimVM` for that claim created, the Claim
+  //@# Controller SHALL record that Lease as CL-002 says, as for any successful
+  //@# `ClaimVM`.
+  //
+  //@= docs/requirements/10-battery.md#claiming
+  //@# When `ClaimVM` carries a request id that no Lease battery
+  //@# holds was created with, and the call succeeds, battery SHALL store the
+  //@# request id on the Lease it creates
+  //
+  // Part two: once a claim records a Lease, every Lease battery ever
+  // created for the claim is that Lease, or one that ended before it was
+  // created. So the retry after a lost answer took the Lease the first
+  // call created back (BA-008, CL-061), and battery leased a second
+  // MicroVM to the claim only once the first was gone (BA-007). Lease ids
+  // grow, so l ended before m was created when l < m and battery did not
+  // hold l when it created m.
+  val retryYieldsSameLease: bool =
+    CLAIMS.forall(c => not(isUnborn(slot(c))) implies
+      obj(c).status.leaseId.optToSet().forall(m =>
+        hist.created.forall(p => (p._1 == c and p._2 != m) implies
+          (p._2 < m and not(hist.heldWhenCreated.contains((p._2, m)))))))
+
   // All the invariants CI checks.
   val safety: bool = and {
     recordedOnlyFromOwnAnswer,
+    oneLeasePerClaim,
+    retryYieldsSameLease,
     expiredOnlyAfterLeaseEnds,
     pendingRenewalKeptWhileHeld,
     vmLeasedToAtMostOneClaim,
@@ -1456,14 +1599,18 @@ module claims {
     warm: Set("v2"),
     handedOut: Set("v1"),
     retired: Set(),
-    leases: Map(1 -> { id: 1, pool: POOL, vm: "v1", host: VM_HOST.get("v1"), claimedAt: 0, expiresAt: EXPIRY }),
+    leases: Map(1 -> { id: 1, pool: POOL, vm: "v1", host: VM_HOST.get("v1"), claimedAt: 0, expiresAt: EXPIRY, requestId: LIVE_CLAIM }),
     nextLease: 2,
     events: Set(),
   }
 
   pure val NO_HISTORY: History = {
     recorded: Set(), released: Set(), expiredVia: Set(), answered: Set(), failures: Set(), releaseLostBy: Set(),
+    created: Set(), heldWhenCreated: Set(), replays: Set(),
   }
+
+  // The history once LIVE_CLAIM's ClaimVM has created Lease 1.
+  pure val HISTORY_AFTER_CLAIM: History = { ...NO_HISTORY, created: Set((LIVE_CLAIM, 1)) }
 
   // LIVE_CLAIM Bound at time 0 to v1, with no expiry read yet, and time
   // passed to its Lease's expiry: the state after createClaim,
@@ -1487,13 +1634,15 @@ module claims {
     }) else Unborn),
     battery: BATTERY_AFTER_CLAIM,
     ctrl: { ...CTRL_ON_START, recovering: false },
-    hist: { ...NO_HISTORY, recorded: Set(1), answered: Set((LIVE_CLAIM, 1)) },
+    hist: { ...HISTORY_AFTER_CLAIM, recorded: Set(1), answered: Set((LIVE_CLAIM, 1)) },
   }
 
   // An orphan claimed at time 0, and time passed to its expiry: the state
   // after createClaim, ctlAddFinalizer, replenish(v1), replenish(v2), a
   // ClaimVM for v1 whose answer was lost in transit, and three ticks,
   // LIVE_CLAIM still Pending (claims_test.qnt, orphanRunOutReachableTest).
+  // The orphan carries LIVE_CLAIM's request id, so the claim's retry can
+  // still replay it until the sweep.
   pure val ORPHAN_RUN_OUT: State = {
     now: EXPIRY,
     claims: CLAIMS.mapBy(c => if (c == LIVE_CLAIM)
@@ -1501,7 +1650,7 @@ module claims {
       else Unborn),
     battery: BATTERY_AFTER_CLAIM,
     ctrl: { ...CTRL_ON_START, recovering: false },
-    hist: { ...NO_HISTORY, failures: Set("claimLost") },
+    hist: { ...HISTORY_AFTER_CLAIM, failures: Set("claimLost") },
   }
 
   action initClaimRunOut: bool = initAt(CLAIM_RUN_OUT)
@@ -1511,8 +1660,10 @@ module claims {
   // Each is one outcome of a call battery answers, or a write the
   // controller makes; none is a failure in transit.
   //
-  // ClaimVM succeeds (ctlClaimVM): battery is up and has a warm MicroVM.
-  def enabledClaimVM(c: ClaimName): bool = canClaimVM(c) and battery.warm != Set()
+  // ClaimVM succeeds (ctlClaimVM): battery is up and has a warm MicroVM,
+  // or holds a Lease to replay for the claim.
+  def enabledClaimVM(c: ClaimName): bool =
+    canClaimVM(c) and (battery.warm != Set() or hasReplay(c))
   // battery answers the Heartbeat: it renews (ctlHeartbeat) or does not
   // know the Lease (ctlHeartbeatUnknown).
   def enabledHeartbeat(c: ClaimName): bool = canHeartbeat(c)
@@ -1673,8 +1824,9 @@ module claims {
   // (BA-020), whatever the controller does. With no quantifier over a
   // temporal formula, it says that again and again no orphan that has run
   // out is left. That is the same as each one going: an orphan stays one
-  // until battery deletes it, and battery hands out one Lease per MicroVM,
-  // so new ones stop coming. Checked from ORPHAN_RUN_OUT.
+  // until battery deletes it or its claim's retry replays it (BA-008),
+  // after which it is no orphan, and battery hands out one Lease per
+  // MicroVM, so new ones stop coming. Checked from ORPHAN_RUN_OUT.
   temporal orphanEventuallyGone =
     sweepAssumptions implies always(eventually(not(orphanRunOut)))
   // The witness is not(sweepAssumptions and eventually(orphanRunOut)),
@@ -1693,10 +1845,20 @@ module claims {
   val witnessExpired: bool = CLAIMS.exists(c => live(c) and obj(c).status.phase == Expired)
   // a Bound claim has been released and is gone
   val witnessReleased: bool = CLAIMS.exists(c => isGone(slot(c)) and isSome(obj(c).status.leaseId))
-  // an orphan exists beside a Bound claim, as after the retry that follows
-  // a crash in the window
-  val witnessOrphanBesideBound: bool =
-    orphans != Set() and CLAIMS.exists(c => live(c) and obj(c).status.phase == Bound)
+  // an orphan no retry can replay, since its claim was deleted while
+  // Pending after a lost answer (CL-021), beside another claim that is
+  // Bound. Before the request id, this was an orphan beside its own claim,
+  // bound to a second MicroVM by the retry; now the retry replays the
+  // orphan instead (witnessReplayBound).
+  val witnessOrphanBesideBound: bool = and {
+    orphans.exists(l => isGone(slot(battery.leases.get(l).requestId))),
+    CLAIMS.exists(c => live(c) and obj(c).status.phase == Bound),
+  }
+  // a claim is Bound to a Lease that battery replayed: the answer to an
+  // earlier ClaimVM for the claim was lost in transit or in a crash, and
+  // the retry got the same Lease back (BA-008, CL-061)
+  val witnessReplayBound: bool =
+    hist.replays.exists(c => live(c) and obj(c).status.phase == Bound)
   // a claim went Expired from battery's Events stream (CL-013)
   val witnessExpiredByEvent: bool = hist.expiredVia.contains("event")
   // a claim went Expired from a deletion the controller remembered from

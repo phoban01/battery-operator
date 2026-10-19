@@ -32,12 +32,16 @@ import (
 )
 
 // ReportsDeletion reports whether battery's event e says that a leased
-// MicroVM was deleted: battery records these only once flintlockd has
-// confirmed the deletion (BA-051), after the Lease row is gone.
+// MicroVM was deleted. battery records an expiry's or a release's only
+// once flintlockd has confirmed the deletion (BA-051), after the Lease
+// row is gone. A deleted Pool's (battery v0.4.0) is recorded before
+// flintlockd is asked, but the Pool's Leases went in the same transaction
+// as the Pool, so the claim's Lease is gone either way.
 func ReportsDeletion(e *battery.Event) bool {
 	return e.VMUID != "" &&
 		(e.Type == poolmgrv1.EventType_VM_DELETED_DUE_TO_EXPIRY ||
-			e.Type == poolmgrv1.EventType_VM_DELETED_ON_RELEASE)
+			e.Type == poolmgrv1.EventType_VM_DELETED_ON_RELEASE ||
+			e.Type == poolmgrv1.EventType_VM_DELETED_ON_POOL_DELETE)
 }
 
 // DeletedVMs is the set of MicroVMs battery's Events stream has reported

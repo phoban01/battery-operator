@@ -48,9 +48,11 @@ func failedInTransit(err error) bool {
 }
 
 // answered reports whether battery answered a call with something about
-// the Lease or the Pool: success, NOT_FOUND or RESOURCE_EXHAUSTED.
+// the Lease or the Pool: success, NOT_FOUND, RESOURCE_EXHAUSTED, or the
+// ABORTED of a ClaimVM whose Lease is on its way out (CL-062).
 func answered(err error) bool {
-	return err == nil || errors.Is(err, battery.ErrNotFound) || errors.Is(err, battery.ErrExhausted)
+	return err == nil || errors.Is(err, battery.ErrNotFound) || errors.Is(err, battery.ErrExhausted) ||
+		errors.Is(err, battery.ErrAborted)
 }
 
 // Synced sets the claim's Synced condition from the scope's BatteryCall,

@@ -130,8 +130,10 @@ func (b *Battery) updatePool(spec poolSpec) (*pool, error) {
 	return &pool{Spec: spec, Status: b.countsLocked(ps.key).status()}, nil
 }
 
-// deletePool implements PoolAdmin.DeletePool. As in battery, it refuses
-// while the Pool owns any MicroVM, in any phase, and deletes none of them.
+// deletePool implements PoolAdmin.DeletePool. It refuses while the Pool
+// owns any MicroVM, in any phase, and deletes none of them, as battery
+// v0.3.3 did; battery v0.4.0 refuses only for a leased or claiming
+// MicroVM and deletes the rest with the Pool (BA-070, #199).
 func (b *Battery) deletePool(ref PoolRef) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -145,9 +147,10 @@ func (b *Battery) deletePool(ref PoolRef) error {
 	}
 
 	//= docs/requirements/10-battery.md#delete-pool
-	//# If a Pool owns a MicroVM in any phase, then battery SHALL
-	//# answer `DeletePool` for it with `FAILED_PRECONDITION` and keep the Pool
-	//# and its MicroVMs.
+	//# If a Pool owns a MicroVM in the phase `LEASED` or
+	//# `PRE_LEASE_HOOK_RUNNING`, then battery SHALL answer a `DeletePool`
+	//# without `force` for it with `FAILED_PRECONDITION` and keep the Pool and
+	//# its MicroVMs.
 	for _, vm := range b.vms {
 		if vm.pool == ps.key {
 			return status.Errorf(codes.FailedPrecondition, "pool %s still has VMs, delete or drain them first", ps.key)
@@ -203,14 +206,21 @@ type claimResult struct {
 //= docs/requirements/08-test-doubles.md#fake-battery
 //# The fake battery SHALL replenish Pools, expire Leases that are
 //# not renewed within the Pool's expiry threshold, and answer `ClaimVM` on an
-//# empty Pool with `RESOURCE_EXHAUSTED`, as battery v0.3.3 does.
+//# empty Pool with `RESOURCE_EXHAUSTED`, as battery v0.4.0 does.
+
+// maxRequestIDLength is the longest request id battery accepts, in bytes.
+const maxRequestIDLength = 255
 
 // claimVM implements Lease.ClaimVM: after the injected claim latency it
 // takes the longest-available MicroVM, runs the pre-lease hooks, creates the
 // Lease and starts the strategy's replacement. It returns
 // RESOURCE_EXHAUSTED when nothing is AVAILABLE and NOT_FOUND for an unknown
-// Pool.
-func (b *Battery) claimVM(ctx context.Context, ref PoolRef) (*claimResult, error) {
+// Pool. A request id that a Lease the fake holds was created with gets
+// that Lease back, as battery v0.4.0 replays a claim (BA-007 to BA-009).
+func (b *Battery) claimVM(ctx context.Context, ref PoolRef, requestID string) (*claimResult, error) {
+	if len(requestID) > maxRequestIDLength {
+		return nil, status.Errorf(codes.InvalidArgument, "request_id is %d bytes, at most %d allowed", len(requestID), maxRequestIDLength)
+	}
 	//= docs/requirements/10-battery.md#claiming
 	//# If a Pool has no MicroVM in the phase `AVAILABLE`, then battery
 	//# SHALL answer `ClaimVM` for that Pool with `RESOURCE_EXHAUSTED` and create no
@@ -238,6 +248,13 @@ func (b *Battery) claimVM(ctx context.Context, ref PoolRef) (*claimResult, error
 		b.mu.Unlock()
 		return nil, err
 	}
+	if requestID != "" {
+		if ls := b.leaseByRequestIDLocked(requestID); ls != nil {
+			res, err := b.replayLocked(ls, ps.key)
+			b.mu.Unlock()
+			return b.withInterfaces(ctx, res), err
+		}
+	}
 	vm := b.oldestAvailableLocked(ps.key)
 	if vm == nil {
 		b.mu.Unlock()
@@ -263,6 +280,23 @@ func (b *Battery) claimVM(ctx context.Context, ref PoolRef) (*claimResult, error
 		b.mu.Unlock()
 		return nil, errNotFound("pool %s was deleted during the claim", ps.key)
 	}
+	if requestID != "" {
+		if ls := b.leaseByRequestIDLocked(requestID); ls != nil {
+			// Two claims with the same request id passed the lookup, and
+			// the other committed first. As battery's yieldClaim, put
+			// this MicroVM back and answer with the winner's Lease.
+			vm.leaseID = ""
+			b.setPhaseLocked(vm, poolmgrv1.VMPhase_AVAILABLE)
+			res, err := b.replayLocked(ls, ps.key)
+			b.mu.Unlock()
+			return b.withInterfaces(ctx, res), err
+		}
+	}
+	//= docs/requirements/10-battery.md#claiming
+	//# When `ClaimVM` carries a request id that no Lease battery
+	//# holds was created with, and the call succeeds, battery SHALL store the
+	//# request id on the Lease it creates, and SHALL report it in that Lease's
+	//# record in `ListLeases`.
 	now := b.cfg.Clock.Now()
 	leaseID := newLeaseID()
 	b.leases[leaseID] = &leaseState{rec: LeaseRecord{
@@ -272,6 +306,7 @@ func (b *Battery) claimVM(ctx context.Context, ref PoolRef) (*claimResult, error
 		ClaimedAt:       now,
 		LastHeartbeatAt: now,
 		ExpiresAt:       now.Add(ps.spec.HeartbeatExpiryThreshold),
+		RequestID:       requestID,
 	}}
 	vm.leaseID = leaseID
 	b.setPhaseLocked(vm, poolmgrv1.VMPhase_LEASED)
@@ -279,16 +314,64 @@ func (b *Battery) claimVM(ctx context.Context, ref PoolRef) (*claimResult, error
 	b.provisionNLocked(ps, strategyOf(ps.spec).onClaimed(), "claim")
 	res := &claimResult{leaseID: leaseID, vmUID: vm.uid, host: vm.host}
 	b.mu.Unlock()
+	return b.withInterfaces(ctx, res), nil
+}
 
-	// Best effort, as in battery: the Lease exists whether or not the Host
-	// answers, so a failure here only leaves the interfaces empty.
+// leaseByRequestIDLocked is the Lease a ClaimVM with requestID created,
+// or nil. The request id is as unique as the Lease (battery's unique
+// index): a second Lease with it is never created.
+func (b *Battery) leaseByRequestIDLocked(requestID string) *leaseState {
+	for _, ls := range b.leases {
+		if ls.rec.RequestID == requestID {
+			return ls
+		}
+	}
+	return nil
+}
+
+// replayLocked answers a ClaimVM whose request id a Lease the fake holds
+// was created with, as battery's replayClaim does.
+func (b *Battery) replayLocked(ls *leaseState, key poolKey) (*claimResult, error) {
+	rec := ls.rec
+	if keyOf(rec.Pool) != key {
+		return nil, status.Errorf(codes.InvalidArgument, "request_id %q was used to claim from pool %s, not %s", rec.RequestID, keyOf(rec.Pool), key)
+	}
+	//= docs/requirements/10-battery.md#claiming
+	//# If `ClaimVM` carries a request id, and battery holds a Lease
+	//# created with that request id whose MicroVM is in the phase `DELETING` or
+	//# has no record, then battery SHALL answer it with `ABORTED` and create no
+	//# Lease.
+	vm := b.vmByUID[rec.VMUID]
+	if vm == nil || vm.phase == poolmgrv1.VMPhase_DELETING {
+		return nil, status.Errorf(codes.Aborted, "lease %s for request_id %q is being released, retry", rec.LeaseID, rec.RequestID)
+	}
+	//= docs/requirements/10-battery.md#claiming
+	//# When `ClaimVM` carries a request id, and battery holds a Lease
+	//# created with that request id for the Pool the call names, whose MicroVM
+	//# has a record and is not in the phase `DELETING`, battery SHALL answer
+	//# with that Lease's id and MicroVM, create no Lease, and leave the Lease's
+	//# expiry unchanged.
+	//
+	// Nothing here touches the Lease: a replay is not a heartbeat, and
+	// no event or replenishment comes of it.
+	return &claimResult{leaseID: rec.LeaseID, vmUID: vm.uid, host: vm.host}, nil
+}
+
+// withInterfaces fills a claim's answer with the Host's address and the
+// MicroVM's network interfaces. Best effort, as in battery: the Lease
+// exists whether or not the Host answers, so a failure here only leaves
+// the interfaces empty. A nil res, from a failed claim, is passed through.
+func (b *Battery) withInterfaces(ctx context.Context, res *claimResult) *claimResult {
+	if res == nil {
+		return nil
+	}
 	if h, err := b.cfg.Hosts.get(res.host); err == nil {
 		res.address = h.address
 		if resp, err := h.vm.GetMicroVM(ctx, &mvmv1.GetMicroVMRequest{Uid: res.vmUID}); err == nil {
 			res.ifaces = resp.GetMicrovm().GetStatus().GetNetworkInterfaces()
 		}
 	}
-	return res, nil
+	return res
 }
 
 // claimLatency waits out Faults.ClaimLatency on the fake's clock.

@@ -196,14 +196,14 @@ func poolShortfall(s *poolScope) (int32, bool) {
 // a claim or a deletion (BA-076). A Pool whose seed fails, or whose
 // replacement fails, then stays short for good. poolReseed notices such a
 // stalled Pool and, once it has made no progress for the reseed wait,
-// sends battery the Pool's unchanged spec with UpdatePool. battery v0.3.3
+// sends battery the Pool's unchanged spec with UpdatePool. battery v0.4.0
 // restarts the Pool's reconciler on every UpdatePool, even with an
 // unchanged spec, and the new reconciler seeds the Pool again (BA-074).
 // battery does not promise that restart; this relies on it.
 //
 // poolReseed also tells poolReadiness when a reseed has not filled the
 // Pool, so that the Ready condition says so (PO-039, PO-040): battery
-// v0.3.3 reports a failed provision nowhere the Operator can read.
+// v0.4.0 reports a failed provision nowhere the Operator can read.
 //
 // Remove poolReseed, and PO-035 to PO-038, once battery retries a failed
 // seed on its tick. Refactor the NotFilling reason of PO-039 and PO-040

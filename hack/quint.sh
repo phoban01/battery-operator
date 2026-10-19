@@ -66,7 +66,7 @@ check specs/quint/claims.qnt safety \
   witnessOrphanFromLostAnswer witnessReleasedAfterLostAnswer \
   witnessUnsweptLease witnessLateHeartbeat witnessIdleWithBound \
   witnessIdleWithBoundAfterRestart witnessExpiryRecordedForHeldLease \
-  witnessExpiredWithPendingRenewal
+  witnessExpiredWithPendingRenewal witnessReplayBound
 
 check specs/quint/certificates.qnt safety \
   witnessAgentFullyCertified witnessForeignApprovalFailed witnessForeignApprovalSigned \

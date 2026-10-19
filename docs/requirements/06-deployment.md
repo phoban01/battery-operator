@@ -30,7 +30,7 @@ How the Operator runs, how it reaches battery, and what the Manifests deploy
 
 battery's API must be private to the Operator, because a client that can
 reach it directly can claim and use a MicroVM without a claim, bypassing the
-Holder and the Exec Agent's checks. battery v0.3.3 listens on TCP only;
+Holder and the Exec Agent's checks. battery v0.4.0 listens on TCP only;
 loopback in the Operator's pod, which only that pod's containers can reach,
 keeps it private with battery unchanged (DP-001).
 
@@ -40,7 +40,7 @@ replica, and losing its database would orphan MicroVMs on the Hosts
 Operator's lifecycle to battery's.
 
 The configuration the Manifests supply (DP-004) sets no `sweep_interval`,
-so battery uses its default, 10 seconds in battery v0.3.3
+so battery uses its default, 10 seconds in battery v0.4.0
 ([10-battery.md](10-battery.md#expiry)). That interval is part of the
 orphan bound (02-claims.md, Binding; ADR 0001, consequence 2): an orphan is
 gone within the Pool's `heartbeat_expiry_threshold` plus one
@@ -53,7 +53,7 @@ shared process namespace, or battery can be restarted by the kubelet when
 its configuration changes. Whichever is chosen is written down where it is
 built.
 
-battery v0.3.3 reads its client certificate once, when it starts, and
+battery v0.4.0 reads its client certificate once, when it starts, and
 presents it to every Host until it exits (BA-061). cert-manager renews the
 certificate before it expires and the kubelet updates the mounted files,
 but battery goes on presenting the old certificate, and once that expires
@@ -85,7 +85,7 @@ remove the restart; it is one of the upstream asks.
 
 `ClaimVM` runs the Pool's pre-lease hooks in the MicroVM before battery
 commits the Lease, so it can take much longer than any other unary call. If
-its deadline passes during the hooks, battery v0.3.3 treats that as a hook
+its deadline passes during the hooks, battery v0.4.0 treats that as a hook
 failure: it applies the Pool's hook failure policy, which deletes or
 quarantines the MicroVM, and creates no Lease (`internal/api/lease.go`).
 The Claim Controller then retries (CL-007), and a deadline that is always

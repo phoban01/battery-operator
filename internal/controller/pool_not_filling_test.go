@@ -177,7 +177,7 @@ func recorded(r *events.FakeRecorder) []string {
 // TestAFailedHookIsRecordedOnThePool covers PO-041: each VM_HOOK_FAILED
 // becomes a Warning Event on the Pool that names the MicroVM, and the
 // hook and its error when the payload gives them, as the fake battery's
-// does; battery v0.3.3's has no payload. A replayed event is not recorded
+// does; battery v0.4.0's has no payload. A replayed event is not recorded
 // again, and other events, and events for a Pool the cluster does not
 // hold, record nothing.
 func TestAFailedHookIsRecordedOnThePool(t *testing.T) {

@@ -21,7 +21,7 @@ limitations under the License.
 //
 // # Configuration
 //
-// battery (poolmgrd v0.3.3) reads one JSON file at startup, with the
+// battery (poolmgrd v0.4.0) reads one JSON file at startup, with the
 // schema of its internal/config package, mirrored here as File. The
 // Manifests ship it in a ConfigMap the Operator may update (DP-004), and
 // the Inventory Controller renders a new one with Render whenever its
@@ -30,7 +30,7 @@ limitations under the License.
 // Manifests mount them on. battery's gRPC API and its metrics listen on
 // loopback only (DP-001).
 //
-// poolmgrd v0.3.3 refuses to start with no Hosts. An empty inventory
+// poolmgrd v0.4.0 refuses to start with no Hosts. An empty inventory
 // therefore renders one placeholder Host, PlaceholderHostName, whose name
 // is not a valid Node name and whose address, under the reserved .invalid
 // top-level domain, never resolves. battery connects to a Host lazily and
@@ -39,7 +39,7 @@ limitations under the License.
 //
 // # Restarting battery (DP-006)
 //
-// poolmgrd v0.3.3 reads its configuration once. It handles SIGINT and
+// poolmgrd v0.4.0 reads its configuration once. It handles SIGINT and
 // SIGTERM by stopping gracefully and exiting, has no reload and does not
 // handle SIGHUP (which, unhandled, kills a Go program without running its
 // deferred cleanup, the SQLite store's Close among them). It does not watch

@@ -198,8 +198,8 @@ func (c *Connection) ListPools(ctx context.Context, namespace string) ([]*Pool, 
 }
 
 // ClaimVM implements Client.
-func (c *Connection) ClaimVM(ctx context.Context, pool PoolRef) (*Claim, error) {
-	resp, err := c.lease.ClaimVM(ctx, &poolmgrv1.ClaimVMRequest{Pool: refToProto(pool)})
+func (c *Connection) ClaimVM(ctx context.Context, pool PoolRef, requestID string) (*Claim, error) {
+	resp, err := c.lease.ClaimVM(ctx, &poolmgrv1.ClaimVMRequest{Pool: refToProto(pool), RequestId: requestID})
 	if err != nil {
 		return nil, mapErr(ctx, err)
 	}
@@ -362,6 +362,8 @@ func mapErr(ctx context.Context, err error) error {
 		sentinel = ErrInvalid
 	case codes.FailedPrecondition:
 		sentinel = ErrFailedPrecondition
+	case codes.Aborted:
+		sentinel = ErrAborted
 	case codes.Canceled, codes.DeadlineExceeded:
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr

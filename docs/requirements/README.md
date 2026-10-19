@@ -24,7 +24,7 @@ The design these requirements specify is recorded in
 | `07-client.md` | `CC` | The Client Library that consumers use to claim and use a MicroVM |
 | `08-test-doubles.md` | `TD` | The fake battery and fake `flintlockd` that stand in for KVM and battery during development |
 | `09-certificates.md` | `CT` | The Operator as approver and signer of the Hosts' certificates, and the SPIFFE identities they carry |
-| `10-battery.md` | `BA` | What the Operator assumes battery v0.3.3 does, each with a pointer into battery's source |
+| `10-battery.md` | `BA` | What the Operator assumes battery v0.4.0 does, each with a pointer into battery's source |
 | `11-host-image.md` | `HI` | The Host Image: the bootc image a Host boots from, its units, guest network and checks |
 | `12-host-pool.md` | `HP` | The Host Pool Templates: Cluster API host pools that boot the Host Image's AMI and join it with kubeadm |
 | `13-guest-image.md` | `GI` | The Guest Images: the kernel image and the root filesystem image a Pool's MicroVMs boot from, their checks, and how a release publishes them |
@@ -184,6 +184,8 @@ of date. `make duvet-models-write` rewrites it. `type=test` and
 | BA-004 | `specs/quint/claims.qnt` |
 | BA-005 | `specs/quint/claims.qnt` |
 | BA-006 | `specs/quint/claims.qnt` |
+| BA-007 | `specs/quint/claims.qnt` |
+| BA-008 | `specs/quint/claims.qnt` |
 | BA-010 | `specs/quint/claims.qnt` |
 | BA-011 | `specs/quint/claims.qnt` |
 | BA-020 | `specs/quint/claims.qnt` |
@@ -221,6 +223,8 @@ of date. `make duvet-models-write` rewrites it. `type=test` and
 | CL-032 | `specs/quint/claims.qnt` |
 | CL-040 | `specs/quint/claims.qnt` |
 | CL-042 | `specs/quint/claims.qnt` |
+| CL-060 | `specs/quint/claims.qnt` |
+| CL-061 | `specs/quint/claims.qnt` |
 | CT-001 | `specs/quint/certificates.qnt` |
 | CT-002 | `specs/quint/certificates.qnt` |
 | CT-003 | `specs/quint/certificates.qnt` |

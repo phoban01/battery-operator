@@ -133,7 +133,7 @@ func TestMicroVMClaimRecoveryAgainstTheFakeBattery(t *testing.T) {
 			p, err := conn.GetPool(ctx, ref)
 			return err == nil && p.Status.Available > 0
 		})
-		l, err := conn.ClaimVM(ctx, ref)
+		l, err := conn.ClaimVM(ctx, ref, "")
 		if err != nil {
 			t.Fatalf("ClaimVM: %v", err)
 		}

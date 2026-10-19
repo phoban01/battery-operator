@@ -158,7 +158,7 @@ func TestPoolStatusFollowsBatteryEvents(t *testing.T) {
 		return st.Available == 3 && isReady(st)
 	}))
 
-	if _, err := bc.ClaimVM(ctx, ref); err != nil {
+	if _, err := bc.ClaimVM(ctx, ref, ""); err != nil {
 		t.Fatalf("ClaimVM: %v", err)
 	}
 	eventually(t, "the lease and its replacement", status(func(st batteryv1alpha1.PoolStatus) bool {
@@ -171,7 +171,7 @@ func TestPoolStatusFollowsBatteryEvents(t *testing.T) {
 	eventually(t, "a new subscription", func() (bool, string) {
 		return events.Connected(), fmt.Sprintf("connected %v", events.Connected())
 	})
-	if _, err := bc.ClaimVM(ctx, ref); err != nil {
+	if _, err := bc.ClaimVM(ctx, ref, ""); err != nil {
 		t.Fatalf("ClaimVM: %v", err)
 	}
 	eventually(t, "the second lease", status(func(st batteryv1alpha1.PoolStatus) bool {

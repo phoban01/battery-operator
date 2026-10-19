@@ -83,11 +83,11 @@ func (g Gated) ListPools(ctx context.Context, namespace string) ([]*battery.Pool
 }
 
 // ClaimVM implements battery.Client.
-func (g Gated) ClaimVM(ctx context.Context, pool battery.PoolRef) (*battery.Claim, error) {
+func (g Gated) ClaimVM(ctx context.Context, pool battery.PoolRef, requestID string) (*battery.Claim, error) {
 	if err := g.Gate.Wait(ctx); err != nil {
 		return nil, err
 	}
-	return g.Client.ClaimVM(ctx, pool)
+	return g.Client.ClaimVM(ctx, pool, requestID)
 }
 
 // Heartbeat implements battery.Client.

@@ -1,4 +1,4 @@
-# battery's configuration file (poolmgrd v0.3.3's JSON schema), mounted into
+# battery's configuration file (poolmgrd v0.4.0's JSON schema), mounted into
 # both the manager and battery at /etc/battery/config/config.json.
 #
 # The Inventory Controller replaces config.json with
@@ -6,7 +6,7 @@
 # restarts battery (DP-006); the Operator's RBAC lets it update this
 # ConfigMap by name (battery-operator-battery-config, after kustomize's
 # namePrefix). What ships here is Render with no Hosts, which
-# internal/batterysidecar's tests check byte for byte: poolmgrd v0.3.3
+# internal/batterysidecar's tests check byte for byte: poolmgrd v0.4.0
 # refuses to start with an empty Hosts list, so it holds one placeholder
 # Host that no Pool names and whose address never resolves.
 #

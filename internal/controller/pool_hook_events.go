@@ -46,7 +46,7 @@ const (
 
 // poolHookEvents records a Kubernetes Event on a Pool for each
 // VM_HOOK_FAILED that battery reports for it (PO-041). It is the one
-// failure in provisioning that battery v0.3.3 reports; a CreateMicroVM
+// failure in provisioning that battery v0.4.0 reports; a CreateMicroVM
 // that flintlockd refuses records no event. Refactor it, with the
 // NotFilling reason of PO-039, once battery reports why a provision
 // fails.
@@ -68,7 +68,7 @@ type poolHookEvents struct {
 }
 
 // hookFailedPayload is the payload_json of a VM_HOOK_FAILED as the fake
-// battery writes it. battery v0.3.3 writes none.
+// battery writes it. battery v0.4.0 writes none.
 type hookFailedPayload struct {
 	Hook  string `json:"hook"`
 	Error string `json:"error"`

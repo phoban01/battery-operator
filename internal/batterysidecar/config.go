@@ -73,7 +73,7 @@ const (
 	MetricsAddress = "127.0.0.1:9090"
 
 	// PlaceholderHostName and PlaceholderHostAddress name the one Host an
-	// empty inventory renders, because poolmgrd v0.3.3 refuses to start
+	// empty inventory renders, because poolmgrd v0.4.0 refuses to start
 	// with none. The name is not a valid Node name, so it never collides
 	// with a real Host, and the address, under the reserved .invalid
 	// top-level domain, never resolves.
@@ -81,7 +81,7 @@ const (
 	PlaceholderHostAddress = "no-hosts.invalid:9090"
 )
 
-// File is battery's configuration file: the schema of poolmgrd v0.3.3's
+// File is battery's configuration file: the schema of poolmgrd v0.4.0's
 // internal/config package, whose JSON tags these repeat.
 type File struct {
 	Hosts         []HostConfig `json:"hosts"`

@@ -9,7 +9,7 @@ code. They do not replace Go tests. How they cite requirements is in
 | Module | Covers |
 |--------|--------|
 | `types.qnt` | The shared types: `Pool` and `MicroVMClaim` (spec, status, phase, conditions) and their places in the API server, battery's Leases, MicroVMs and Pools, Nodes, Node reports and Hosts |
-| `claims.qnt` | The claim lifecycle against battery (CL-001 to CL-042; ADR 0001, consequences 2 to 4), with battery as `docs/requirements/10-battery.md` describes it (BA-*) |
+| `claims.qnt` | The claim lifecycle against battery (CL-001 to CL-042, CL-060, CL-061; ADR 0001, consequences 2 to 4), with battery as `docs/requirements/10-battery.md` describes it (BA-*) |
 | `claims_test.qnt` | Scenario tests for `claims.qnt`, one interleaving each |
 | `claims_replay.qnt` | The random traces of `claims.qnt` that the Claim Controller's replay test replays: `claims.qnt`'s steps, weighted towards the controller's (#62) |
 | `claims_picks.qnt` | `claims.qnt`'s steps that take arguments, each recording them as the replay's picks, for the scenario tests the replay replays as fixed traces (#149) |
@@ -35,7 +35,7 @@ quint run specs/quint/claims.qnt --invariant safety --max-steps 60 --max-samples
   witnessExpiredByEvent witnessExpiredByTime witnessOrphanFromLostAnswer \
   witnessReleasedAfterLostAnswer witnessUnsweptLease witnessLateHeartbeat \
   witnessIdleWithBound witnessIdleWithBoundAfterRestart \
-  witnessExpiryRecordedForHeldLease witnessExpiredWithPendingRenewal
+  witnessExpiryRecordedForHeldLease witnessExpiredWithPendingRenewal witnessReplayBound
 quint run specs/quint/certificates.qnt --invariant safety --max-steps 60 --max-samples 20000 \
   --witnesses witnessAgentFullyCertified witnessForeignApprovalFailed witnessForeignApprovalSigned \
   witnessAnotherHostDenied witnessSubjectIgnored witnessApprovedAwaitingCA \
@@ -136,9 +136,11 @@ and as an ITF trace.
 `claims.qnt` has one Pool, three claims and six MicroVMs over two Hosts.
 The steps are:
 
-- **the Claim Controller:** add the finalizer, `ClaimVM`, write the binding,
-  relay a pending renewal as `Heartbeat`, write battery's expiry with the
-  relayed `renewTime`, expire a Bound claim when the Events stream reports
+- **the Claim Controller:** add the finalizer, `ClaimVM` with the claim's
+  uid as the request id (CL-060; the model names the uid by the claim),
+  write the binding, relay a pending renewal as `Heartbeat`, write
+  battery's expiry with the relayed `renewTime`, expire a Bound claim when
+  the Events stream reports
   its MicroVM deleted (CL-013) or, once no renewal is pending and after
   reading its Lease with `ListLeases`, when battery's expiry has passed or
   battery no longer lists the Lease (CL-012, CL-014, CL-016), release with `ReleaseVM` and then remove the
@@ -162,14 +164,24 @@ The steps are:
     `Heartbeat`, and expires a Lease that ran out (#136).
 - **battery:** replenish the Pool, answer the `Lease` calls, sweep the
   Leases nobody renewed, and report each deleted MicroVM on its `Events`
-  stream. These steps cite `docs/requirements/10-battery.md`. A `Heartbeat`
-  renews any Lease battery still holds, including one past its expiry
-  (BA-010). The sweep is a step of its own: time can pass a Lease's expiry
-  by up to one sweep interval (`SWEEP`) before a sweep deletes it (BA-020),
-  and battery's first sweep after a start is one interval later (BA-022).
+  stream. These steps cite `docs/requirements/10-battery.md`. battery
+  v0.4.0 stores the request id on the Lease a `ClaimVM` creates (BA-007).
+  A `ClaimVM` whose request id names a Lease battery still holds gets that
+  Lease back, a replay: no new Lease, no new MicroVM, the expiry unchanged
+  (BA-008), whether or not the Pool has a warm MicroVM. Once the Lease is
+  gone, swept or released, the request id is free and the call claims
+  afresh. The model's sweep deletes a Lease and its MicroVM in one step,
+  so no Lease ever has a deleting MicroVM, and battery's `ABORTED`
+  (BA-009, CL-062) is not modelled. A `Heartbeat` renews any Lease battery
+  still holds, including one past its expiry (BA-010). The sweep is a step
+  of its own: time can pass a Lease's expiry by up to one sweep interval
+  (`SWEEP`) before a sweep deletes it (BA-020), and battery's first sweep
+  after a start is one interval later (BA-022).
 - **the environment:** claims are created, renewed and deleted, and time
   passes. The controller can crash between any two of its steps, which
   loses the answer it held, as between `ClaimVM` and the status write.
+  The Lease is then an orphan until the claim's retry replays it (CL-061),
+  or, if the claim is deleted while Pending (CL-021), until the sweep.
   battery can stop and start again. The Events stream can drop any event,
   and loses them all when battery stops.
 - **calls that fail in transit:** `ClaimVM`, `Heartbeat`, `ListLeases` and
@@ -184,12 +196,14 @@ Invariants, all in `safety`:
 |-----------|--------|
 | `vmLeasedToAtMostOneClaim` | a MicroVM is leased to at most one claim (BA-005, BA-003, CL-008) |
 | `releasedVMNeverReused` | a released or expired MicroVM is never handed out again (BA-006) |
-| `orphanLeaseBounded` | an orphan, from a crash or a `ClaimVM` answer lost in transit, is never renewed (CL-019), and is gone within the expiry threshold plus one sweep interval, or one sweep interval after battery starts (BA-003, BA-020, BA-022) |
+| `orphanLeaseBounded` | an orphan, from a crash or a `ClaimVM` answer lost in transit, is never renewed (CL-019), and, unless its claim's retry replays it first, is gone within the expiry threshold plus one sweep interval, or one sweep interval after battery starts (BA-003, BA-020, BA-022) |
 | `finalizerRemovedOnlyAfterRelease` | a claim is gone only after battery has released its Lease (CL-020) |
 | `leaseOnlyUnderFinalizer` | a Lease is claimed and recorded only under the finalizer (CL-001) |
 | `statusExpiryIsBatterys` | a claim's `leaseExpiresAt` is never later than battery's (CL-011, BA-010) |
 | `onlyRecordedLeasesReleased` | the controller releases only Leases a claim recorded (CL-031) |
-| `recordedOnlyFromOwnAnswer` | a claim records only a lease id from an answer to its own `ClaimVM`, so no orphan is adopted (CL-008) |
+| `recordedOnlyFromOwnAnswer` | a claim records only a lease id from an answer to its own `ClaimVM`, so no claim adopts another's orphan (CL-008); a replay is an answer to the claim's own `ClaimVM` (CL-061) |
+| `oneLeasePerClaim` | battery holds at most one Lease per request id, so per claim: a `ClaimVM` that finds one replays it and creates none (BA-008) |
+| `retryYieldsSameLease` | once a claim records a Lease, every Lease battery ever created for that claim is that Lease, or one that ended before it was created: a retried bind yields the same Lease, never a second MicroVM (BA-007, BA-008, CL-061) |
 | `boundClaimIsComplete` | a Bound claim carries its lease id, MicroVM, node name, time of binding and a true `Bound` (CL-002, RS-024); its expiry comes later, from `ListLeases` (CL-016), since battery's answer to `ClaimVM` carries none |
 | `idleMirrorsBattery` | once the controller is idle, every Bound claim's Lease is one battery holds and has not run out (CL-032, CL-013, CL-014) |
 | `expiredOnlyAfterLeaseEnds` | a claim goes Expired only once battery no longer holds its Lease or the Lease has run out (CL-016, #57) |
@@ -212,6 +226,22 @@ answer the renewal is still pending: CL-014 and CL-016 wait, and the
 and `heartbeatAnswerLostTest` show the claim kept Bound with battery's
 expiry.
 
+`oneLeasePerClaim` and `retryYieldsSameLease` are what battery v0.4.0's
+request id buys (#197). Before it, the retry after a crash in the window
+or a lost `ClaimVM` answer leased a second MicroVM, and the first Lease
+was an orphan until the sweep. Now the retry carries the same request id
+and gets the first Lease back. `claimVMAnswerLostTest` and
+`crashWindowReplayTest` show the claim bound to the replayed Lease, with
+the time of the retry's answer as its time of binding, and the second
+warm MicroVM still warm; `replayWithExhaustedPoolTest` a replay while the
+Pool has no warm MicroVM; `retryAfterSweepClaimsAfreshTest` a retry after
+the sweep deleted the lost Lease, which claims a new MicroVM under a new
+lease id; and `replayPastExpiryTest` a replay of a Lease past its expiry
+that the sweep has not deleted, after which CL-016's `ListLeases` and
+CL-014 expire the claim. `retryYieldsSameLease` reads the history: every
+Lease battery created, with its claim, and which Leases battery held
+when it created each.
+
 `pendingRenewalKeptWhileHeld` did not hold while CL-014 expired a claim as
 soon as its expiry passed: battery keeps a Lease past its expiry until the
 next sweep, and a `Heartbeat` then still renews it (BA-010, BA-020), so a
@@ -230,14 +260,22 @@ test that reaches the violation:
 | `orphanGoneByExpiry` | an orphan is gone within the expiry threshold, as ADR 0001, consequence 2, first said; 02-claims.md, Binding, and the ADR's correction note now state `orphanLeaseBounded` | the sweep can come up to one interval later (#86; `orphanOutlivesExpiryTest`) |
 
 The witnesses show that the simulation reaches the interleavings that
-matter: an orphan (`witnessOrphan`), an orphan beside a claim bound after
-the retry (`witnessOrphanBesideBound`), an expired claim, a released one,
-a claim expired by each of CL-013 and CL-014, an orphan from a `ClaimVM`
-answer lost in transit (`witnessOrphanFromLostAnswer`), a retried
-`ReleaseVM` that finds the Lease unknown after a lost answer
-(`witnessReleasedAfterLostAnswer`), a Lease past its expiry waiting for
-the sweep (`witnessUnsweptLease`), and a renewal the controller can relay
-for such a Lease (`witnessLateHeartbeat`). Others make an invariant's
+matter: an orphan (`witnessOrphan`), an orphan no retry can replay, since
+its claim was deleted while Pending, beside another claim that is Bound
+(`witnessOrphanBesideBound`), a claim Bound to a Lease battery replayed
+after its first answer was lost in transit or in a crash
+(`witnessReplayBound`), an expired claim, a released one, a claim expired
+by each of CL-013 and CL-014, an orphan from a `ClaimVM` answer lost in
+transit (`witnessOrphanFromLostAnswer`), a retried `ReleaseVM` that finds
+the Lease unknown after a lost answer (`witnessReleasedAfterLostAnswer`),
+a Lease past its expiry waiting for the sweep (`witnessUnsweptLease`), and
+a renewal the controller can relay for such a Lease
+(`witnessLateHeartbeat`). `witnessOrphanBesideBound` was an orphan beside
+its own claim, bound to a second MicroVM by the retry; with the request
+id the retry replays the orphan instead, so that state is unreachable,
+and the witness now names the orphan the model can still reach: one whose
+claim went without a call to battery (CL-021), which only the sweep ends.
+Others make an invariant's
 left-hand side true, so it is not checked only where it holds trivially:
 the controller idle with a claim Bound, before and after a battery restart
 (`witnessIdleWithBound`, `witnessIdleWithBoundAfterRestart`, for
@@ -270,7 +308,7 @@ properties say that the controller, and battery, get somewhere. Each is
 | `deletedClaimGone` | a deleted claim is eventually gone, its finalizer removed, with a Lease or without (CL-020, CL-021) | battery eventually up; the controller eventually stable; the controller fair | `init` |
 | `pendingClaimBinds` | a Pending claim eventually binds, is deleted, or battery has no MicroVM left to give it (CL-001 to CL-003) | those, and battery replenishing its Pool | `init` |
 | `unrenewedClaimExpires` | a Bound claim with no renewal pending whose Lease has run out eventually goes Expired, unless its Holder renews or deletes it first (#45; CL-032, CL-014) | those of `deletedClaimGone` | `CLAIM_RUN_OUT` |
-| `orphanEventuallyGone` | an orphaned Lease that has run out is eventually gone, whatever the controller does (ADR 0001, consequence 2; CL-019, BA-020) | battery eventually up; its sweep | `ORPHAN_RUN_OUT` |
+| `orphanEventuallyGone` | an orphaned Lease that has run out is eventually gone, whatever the controller does: the sweep deletes it, or its claim's retry replays it and it is an orphan no more (ADR 0001, consequence 2; CL-019, BA-008, BA-020) | battery eventually up; its sweep | `ORPHAN_RUN_OUT` |
 
 The assumptions, each a `temporal` in `claims.qnt`:
 
@@ -369,9 +407,13 @@ left-hand side early enough to fit their bounds as they are.
 `internal/controller/claim_replay_test.go` replays traces of `claims.qnt`
 against the Claim Controller's subreconciler chain, with controller-runtime's
 fake client, a scripted battery and a fake clock, and compares the claims,
-battery's Leases and what the controller holds in memory with the trace
-after every step (#62). Between them, the traces must take every step of
-the model at least once, or the test fails.
+battery's Leases, with the request id each was created with, and what the
+controller holds in memory with the trace after every step (#62). Between
+them, the traces must take every step of the model at least once, or the
+test fails. The replay gives each claim it creates the model's claim name
+as its uid, which the fake client keeps, so the request id the controller
+sends with `ClaimVM` (CL-060) is the claim the model's Lease records, and
+the scripted battery replays a Lease as battery does (BA-008).
 
 `make claims-traces` ([hack/claims-traces.sh](../../hack/claims-traces.sh))
 writes the traces to `internal/controller/testdata/claims-traces`. They are
@@ -533,7 +575,7 @@ its pin.
 
 ## The pools and inventory model
 
-`pools.qnt` has three Hosts, two Pools and battery v0.3.3 as a sidecar
+`pools.qnt` has three Hosts, two Pools and battery v0.4.0 as a sidecar
 that reads its Hosts from its configuration, and its client certificate,
 only when it starts (ADR 0001, consequence 1; BA-061). The steps are:
 

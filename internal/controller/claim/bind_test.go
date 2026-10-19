@@ -20,7 +20,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"testing"
+	"time"
 
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -175,11 +177,19 @@ func TestBindWaitsForTheFinalizerToBeWritten(t *testing.T) {
 	}
 }
 
-// TestBindLeavesPendingFailuresToPending: an exhausted or unknown Pool, or
-// a ClaimVM that fails in transit, is recorded in the scope and the chain
-// goes on; the status is Pending's to write.
+//= docs/requirements/02-claims.md#claim-retry
+//= type=test
+//# If battery answers a `ClaimVM` for a claim with `ABORTED`,
+//# then the Claim Controller SHALL keep the claim in the phase `Pending`
+//# with the condition `Bound` false and the reason `ClaimAborted`, and SHALL
+//# retry `ClaimVM` with backoff.
+
+// TestBindLeavesPendingFailuresToPending: an exhausted or unknown Pool, a
+// ClaimVM that fails in transit, or one battery aborts (CL-062), is
+// recorded in the scope and the chain goes on; the status is Pending's to
+// write.
 func TestBindLeavesPendingFailuresToPending(t *testing.T) {
-	for _, want := range []error{battery.ErrExhausted, battery.ErrNotFound, battery.ErrUnavailable, context.DeadlineExceeded} {
+	for _, want := range []error{battery.ErrExhausted, battery.ErrNotFound, battery.ErrUnavailable, context.DeadlineExceeded, battery.ErrAborted} {
 		t.Run(want.Error(), func(t *testing.T) {
 			s, _ := newScope(t, aClaim(batteryv1alpha1.ReleaseFinalizer), answers(nil, fmt.Errorf("ClaimVM: %w", want)))
 
@@ -237,7 +247,9 @@ func TestBindReturnsOtherFailures(t *testing.T) {
 // TestBindWritesOnlyTheLeaseItsClaimVMReturned covers CL-008: a ClaimVM
 // whose answer was lost leaves no lease id, and Bind makes no other call to
 // battery to look for the lost Lease (any would panic in the stub); the
-// retry writes the lease id of its own answer.
+// retry writes the lease id of its own answer, whichever Lease battery
+// gives it. This stub gives a second one, as a battery that swept the
+// first would (02-claims.md, Retrying ClaimVM).
 func TestBindWritesOnlyTheLeaseItsClaimVMReturned(t *testing.T) {
 	ctx := context.Background()
 	answersInTurn := []error{battery.ErrUnavailable, nil}
@@ -275,4 +287,102 @@ func TestBindWritesOnlyTheLeaseItsClaimVMReturned(t *testing.T) {
 	if got.Status.LeaseID != second.LeaseID {
 		t.Errorf("leaseID = %q, want lease-2", got.Status.LeaseID)
 	}
+}
+
+//= docs/requirements/02-claims.md#claim-retry
+//= type=test
+//# The Claim Controller SHALL send with every `ClaimVM` for a
+//# claim a request id equal to the claim's `metadata.uid`.
+
+// TestBindSendsTheClaimUIDAsRequestID covers CL-060: every ClaimVM for a
+// claim, the first and each retry, carries the claim's uid as its request
+// id.
+func TestBindSendsTheClaimUIDAsRequestID(t *testing.T) {
+	ctx := context.Background()
+	c := newFakeClient(t, aClaim(batteryv1alpha1.ReleaseFinalizer))
+	answersInTurn := []error{battery.ErrUnavailable, battery.ErrExhausted, nil}
+	b := &stubBattery{claimVM: func(battery.PoolRef) (*battery.Claim, error) {
+		err := answersInTurn[0]
+		answersInTurn = answersInTurn[1:]
+		if err != nil {
+			return nil, err
+		}
+		return leased, nil
+	}}
+
+	for range 3 {
+		s := scopeFor(t, c, claimKey, b)
+		if _, err := pendingChain().Run(ctx, s); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Patch(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := []string{testClaimUID, testClaimUID, testClaimUID}
+	if got := b.claimRequestIDs(); !slices.Equal(got, want) {
+		t.Errorf("request ids = %q, want the claim's uid on every call %q", got, want)
+	}
+}
+
+//= docs/requirements/02-claims.md#claim-retry
+//= type=test
+//# When battery answers a retried `ClaimVM` for a claim with the
+//# Lease that an earlier `ClaimVM` for that claim created, the Claim
+//# Controller SHALL record that Lease as CL-002 says, as for any successful
+//# `ClaimVM`.
+
+// TestBindRetryGetsTheSameLeaseBack covers CL-061 against a battery that
+// replays by request id, as battery v0.4.0 does: after a ClaimVM whose
+// answer was lost in transit, and after one whose answer a crash lost
+// before the status write, the retry's ClaimVM gets the first Lease back,
+// the claim binds to it, and battery leased one MicroVM in all.
+func TestBindRetryGetsTheSameLeaseBack(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("answer lost in transit", func(t *testing.T) {
+		c := newFakeClient(t, aClaim(batteryv1alpha1.ReleaseFinalizer))
+		b := newReplayingBattery()
+		b.lose = true
+
+		_, got := reconcileAt(t, c, b, start)
+		assertPending(t, got, batteryv1alpha1.ReasonBatteryUnavailable)
+		if n := b.leased(); n != 1 {
+			t.Fatalf("battery leased %d MicroVMs on the lost call, want 1", n)
+		}
+
+		_, got = reconcileAt(t, c, b, start.Add(time.Second))
+		if got.Status.Phase != batteryv1alpha1.MicroVMClaimBound || got.Status.LeaseID != testLease {
+			t.Errorf("status = %+v, want Bound on %s, the Lease the lost answer carried", got.Status, testLease)
+		}
+		if n := b.leased(); n != 1 {
+			t.Errorf("battery leased %d MicroVMs, want 1: the retry replays, it does not claim again", n)
+		}
+		if ids := b.requestIDs(); !slices.Equal(ids, []string{testClaimUID, testClaimUID}) {
+			t.Errorf("request ids = %q, want the claim's uid twice", ids)
+		}
+	})
+
+	t.Run("crash before the status write", func(t *testing.T) {
+		c := newFakeClient(t, aClaim(batteryv1alpha1.ReleaseFinalizer))
+		b := newReplayingBattery()
+
+		// The first reconcile gets its answer and then crashes: its scope
+		// is never patched.
+		s := scopeFor(t, c, claimKey, b)
+		if _, err := pendingChain().Run(ctx, s); err != nil {
+			t.Fatal(err)
+		}
+		if s.Object.Status.LeaseID != testLease {
+			t.Fatalf("held leaseID = %q, want %s", s.Object.Status.LeaseID, testLease)
+		}
+
+		_, got := reconcileAt(t, c, b, start.Add(time.Second))
+		if got.Status.Phase != batteryv1alpha1.MicroVMClaimBound || got.Status.LeaseID != testLease {
+			t.Errorf("status = %+v, want Bound on %s, the Lease the crash lost", got.Status, testLease)
+		}
+		if n := b.leased(); n != 1 {
+			t.Errorf("battery leased %d MicroVMs, want 1", n)
+		}
+	})
 }

@@ -36,14 +36,18 @@ func drained(spec poolSpec) poolSpec {
 }
 
 // TestDeletePoolRefusesWhileThePoolOwnsAMicroVM covers BA-070 and BA-071:
-// DeletePool refuses a Pool with a MicroVM in any phase and deletes
-// nothing, and deletes the Pool once its last MicroVM has gone.
+// DeletePool refuses a Pool with a leased MicroVM and deletes nothing, and
+// deletes the Pool once its last MicroVM has gone. The fake refuses for a
+// MicroVM in any phase, as battery v0.3.3 did, where battery v0.4.0
+// refuses only for a leased one and deletes the rest with the Pool
+// (#199); the leased case is the one both refuse.
 func TestDeletePoolRefusesWhileThePoolOwnsAMicroVM(t *testing.T) {
 	//= docs/requirements/10-battery.md#delete-pool
 	//= type=test
-	//# If a Pool owns a MicroVM in any phase, then battery SHALL
-	//# answer `DeletePool` for it with `FAILED_PRECONDITION` and keep the Pool
-	//# and its MicroVMs.
+	//# If a Pool owns a MicroVM in the phase `LEASED` or
+	//# `PRE_LEASE_HOOK_RUNNING`, then battery SHALL answer a `DeletePool`
+	//# without `force` for it with `FAILED_PRECONDITION` and keep the Pool and
+	//# its MicroVMs.
 
 	//= docs/requirements/10-battery.md#delete-pool
 	//= type=test
@@ -168,11 +172,13 @@ func TestADrainedPoolIsNotReplenished(t *testing.T) {
 
 // TestAQuarantinedMicroVMIsNeverDeleted covers BA-073: a quarantined
 // MicroVM outlives ticks, a drain and every Lease expiry, and keeps its
-// Pool from being deleted.
+// Pool from being deleted in the fake, where battery v0.4.0's DeletePool
+// would take it with the Pool (#199).
 func TestAQuarantinedMicroVMIsNeverDeleted(t *testing.T) {
 	//= docs/requirements/10-battery.md#delete-pool
 	//= type=test
-	//# battery SHALL NOT delete a MicroVM in the phase `QUARANTINED`.
+	//# battery SHALL NOT delete a MicroVM in the phase `QUARANTINED`
+	//# other than in a `DeletePool` of its Pool.
 	h := newHarness(t, Config{}, hostA)
 	host := h.stubs[hostA]
 	spec := h.spec("pool", 1, hostA)

@@ -152,7 +152,7 @@ func (b *stubBattery) DeletePool(_ context.Context, ref battery.PoolRef) error {
 	return nil
 }
 
-func (b *stubBattery) ClaimVM(_ context.Context, ref battery.PoolRef) (*battery.Claim, error) {
+func (b *stubBattery) ClaimVM(_ context.Context, ref battery.PoolRef, _ string) (*battery.Claim, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.record("ClaimVM " + ref.String())

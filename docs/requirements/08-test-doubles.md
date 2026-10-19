@@ -9,17 +9,17 @@ flintlock-runner, where `10-test-doubles.md` specifies them.
 
 ## The fake battery {#fake-battery}
 
-- **TD-001** The fake battery SHALL serve battery v0.3.3's `PoolAdmin`,
+- **TD-001** The fake battery SHALL serve battery v0.4.0's `PoolAdmin`,
   `Lease` and `Events` services over gRPC with the generated server stubs.
 - **TD-002** The fake battery SHALL create, place and delete MicroVMs only
   through the fake `flintlockd`.
 - **TD-003** The fake battery SHALL replenish Pools, expire Leases that are
   not renewed within the Pool's expiry threshold, and answer `ClaimVM` on an
-  empty Pool with `RESOURCE_EXHAUSTED`, as battery v0.3.3 does.
+  empty Pool with `RESOURCE_EXHAUSTED`, as battery v0.4.0 does.
 - **TD-004** The fake battery SHALL run on an injectable clock, so that a
   test can expire a Lease without waiting.
 - **TD-005** The fake battery SHALL document every behaviour in which it
-  deliberately differs from battery v0.3.3.
+  deliberately differs from battery v0.4.0.
 - **TD-006** The fake battery SHALL let a test make it unavailable for a
   period, delay its answers to `ClaimVM`, refuse heartbeats, fail a Pool's
   hooks, and drop its `Events` streams.
@@ -27,7 +27,7 @@ flintlock-runner, where `10-test-doubles.md` specifies them.
   provision for a Pool whose replenishment strategy is `IMMEDIATE_ON_LEASE`
   or `REPLACE_ON_DELETE` on its tick only on the first tick after each
   `CreatePool` or `UpdatePool` of the Pool, whether or not those provisions
-  succeed, as battery v0.3.3 seeds such a Pool (BA-075, BA-076).
+  succeed, as battery v0.3.3 seeded such a Pool.
 
 ## The fake flintlockd {#fake-flintlockd}
 

@@ -3,7 +3,7 @@
 // The shared types of the battery-operator models.
 //
 // These mirror the v1alpha1 resources (docs/requirements/01-resources.md,
-// api/v1alpha1/), battery v0.3.3's Leases and MicroVMs, and the Hosts and
+// api/v1alpha1/), battery v0.4.0's Leases and MicroVMs, and the Hosts and
 // Nodes of the inventory (docs/requirements/04-inventory.md), and the
 // CertificateSigningRequests and certificates of 09-certificates.md. They
 // keep only the fields a model reasons about, rather than every field of
@@ -235,7 +235,7 @@ module types {
   }
 
   // ---------------------------------------------------------------------
-  // battery v0.3.3: Leases and MicroVMs
+  // battery v0.4.0: Leases and MicroVMs
 
   type VMPhase = Provisioning | Available | Leased | Quarantined | Deleted
 
@@ -246,7 +246,10 @@ module types {
     phase: VMPhase,
   }
 
-  // A Lease as battery's database holds it.
+  // A Lease as battery's database holds it. requestId is the request id
+  // of the ClaimVM that created it (BA-007): the claim's uid, which the
+  // models name by the claim (CL-060). A later ClaimVM with the same
+  // request id gets this Lease back while battery holds it (BA-008).
   type Lease = {
     id: LeaseId,
     pool: PoolName,
@@ -254,6 +257,7 @@ module types {
     host: HostName,
     claimedAt: Time,
     expiresAt: Time,
+    requestId: ClaimName,
   }
 
   // battery's PoolSpec, as the Pool Controller declares it (PO-001, PO-010).

@@ -164,12 +164,27 @@ func (b *scriptedBattery) call(method string) (acts bool, err error) {
 	return true, nil
 }
 
-// ClaimVM leases b.vm, which must be warm, or answers RESOURCE_EXHAUSTED
-// if nothing is.
-func (b *scriptedBattery) ClaimVM(_ context.Context, _ battery.PoolRef) (*battery.Claim, error) {
+// ClaimVM answers the Lease that requestID created, if battery still holds
+// it, as battery v0.4.0 replays a claim (BA-008): nothing changes, not
+// even the Lease's expiry. Otherwise it leases b.vm, which must be warm,
+// under requestID (BA-007), or answers RESOURCE_EXHAUSTED if nothing is.
+// The model names a claim's uid by the claim, so requestID is one of
+// modelClaims.
+func (b *scriptedBattery) ClaimVM(_ context.Context, _ battery.PoolRef, requestID string) (*battery.Claim, error) {
 	acts, lost := b.call(methodClaimVM)
 	if !acts {
 		return nil, lost
+	}
+	if !slices.Contains(modelClaims, requestID) {
+		return nil, fmt.Errorf("scripted ClaimVM: the request id %q is not a claim of the model", requestID)
+	}
+	for _, l := range b.leases {
+		if l.RequestID == requestID {
+			if lost != nil {
+				return nil, lost
+			}
+			return &battery.Claim{LeaseID: l.LeaseID, VMUID: l.VMUID, Host: battery.HostRef{Name: modelVMHost[l.VMUID]}}, nil
+		}
 	}
 	if len(b.warm) == 0 {
 		return nil, fmt.Errorf("scripted ClaimVM: %w", battery.ErrExhausted)
@@ -188,6 +203,7 @@ func (b *scriptedBattery) ClaimVM(_ context.Context, _ battery.PoolRef) (*batter
 		ClaimedAt:       now,
 		LastHeartbeatAt: now,
 		ExpiresAt:       now.Add(modelExpiry * replayTick),
+		RequestID:       requestID,
 	}
 	if lost != nil {
 		return nil, lost

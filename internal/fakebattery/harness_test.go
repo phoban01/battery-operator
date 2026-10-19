@@ -483,7 +483,7 @@ func (h *harness) pool(name string) *pool {
 // claim changed under the lock is visible to the next GetPool.
 func (h *harness) claim(name string) *claimed {
 	h.t.Helper()
-	c, err := h.client.ClaimVM(h.ctx, h.ref(name))
+	c, err := h.client.ClaimVM(h.ctx, h.ref(name), "")
 	if err != nil {
 		h.t.Fatalf("ClaimVM(%s): %v", name, err)
 	}

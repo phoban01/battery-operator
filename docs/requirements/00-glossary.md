@@ -52,8 +52,9 @@ use. It contains no requirements.
 
 - **battery**: the flintlock warm-pool manager
   ([liquidmetal-dev/battery](https://github.com/liquidmetal-dev/battery)),
-  v0.3.3, run unchanged as a sidecar of the Operator. Its gRPC services are
-  `PoolAdmin`, `Lease` and `Events`.
+  v0.4.0, run unchanged as a sidecar of the Operator. Its gRPC services are
+  `PoolAdmin`, `Lease`, `Events` and `HostAdmin`; the Operator uses the
+  first three.
 - **local `flintlockd`**: the `flintlockd` on the Exec Agent's own Host,
   which it reaches on one of that Host's addresses over mutual TLS
   (ADR 0002).
@@ -78,7 +79,7 @@ use. It contains no requirements.
   answer saying what battery did: the connection to battery is down, or the
   call's deadline (DP-010) passes first. DP-011 reports both as an
   unavailable battery, and battery's own `UNAVAILABLE` answer the same way;
-  battery v0.3.3 gives that answer when `ReleaseVM` could not yet delete the
+  battery v0.4.0 gives that answer when `ReleaseVM` could not yet delete the
   MicroVM. battery may or may not have acted on a call that fails in
   transit.
 - **Pending renewal**: a Bound claim has one while its `spec.renewTime`

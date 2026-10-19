@@ -93,10 +93,10 @@ func TestSyncedFalseOnAnUnnamedError(t *testing.T) {
 //# SHALL set the claim's condition `Synced` true.
 
 // TestSyncedTrueWhenBatteryAnswers covers CL-042: success, and the answers
-// NOT_FOUND and RESOURCE_EXHAUSTED, all set Synced true, including after an
-// earlier failure.
+// NOT_FOUND, RESOURCE_EXHAUSTED and ABORTED (CL-062), all set Synced true,
+// including after an earlier failure.
 func TestSyncedTrueWhenBatteryAnswers(t *testing.T) {
-	for _, err := range []error{nil, battery.ErrNotFound, battery.ErrExhausted} {
+	for _, err := range []error{nil, battery.ErrNotFound, battery.ErrExhausted, battery.ErrAborted} {
 		cond, _ := syncedAfter(t, batteryv1alpha1.MicroVMClaimPending, err)
 		if cond == nil || cond.Status != metav1.ConditionTrue || cond.Reason != batteryv1alpha1.ReasonSynced {
 			t.Errorf("%v: Synced = %+v, want true", err, cond)

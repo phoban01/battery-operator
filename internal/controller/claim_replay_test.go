@@ -75,6 +75,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -332,8 +333,12 @@ func (r *claimReplay) replayStep(next *modelState) error {
 		if err != nil {
 			return err
 		}
+		// The claim's uid is the model's claim name: the request id the
+		// controller sends with ClaimVM (CL-060) is then the one the
+		// model's Lease records. The fake client keeps a uid given on
+		// Create, and sets none itself.
 		return r.kube.Create(r.ctx, &batteryv1alpha1.MicroVMClaim{
-			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: replayNamespace, Generation: 1},
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: replayNamespace, Generation: 1, UID: types.UID(name)},
 			Spec: batteryv1alpha1.MicroVMClaimSpec{
 				PoolRef:            batteryv1alpha1.PoolReference{Name: replayPool},
 				ServiceAccountName: "holder",
@@ -651,6 +656,8 @@ type leaseView struct {
 	Host      string
 	ClaimedAt int64
 	ExpiresAt int64
+	// RequestID is the claim whose ClaimVM created the Lease (BA-007).
+	RequestID string
 }
 
 // batteryView is battery's state projected onto claims.qnt's.
@@ -682,7 +689,13 @@ func modelBatteryView(b modelBattery) batteryView {
 		NextLease: int64(b.NextLease),
 	}
 	for id, l := range b.Leases {
-		v.Leases[int64(id)] = leaseView{VM: l.VM, Host: l.Host, ClaimedAt: int64(l.ClaimedAt), ExpiresAt: int64(l.ExpiresAt)}
+		v.Leases[int64(id)] = leaseView{
+			VM:        l.VM,
+			Host:      l.Host,
+			ClaimedAt: int64(l.ClaimedAt),
+			ExpiresAt: int64(l.ExpiresAt),
+			RequestID: l.RequestID,
+		}
 	}
 	return v
 }
@@ -701,6 +714,7 @@ func (b *scriptedBattery) view() batteryView {
 			Host:      modelVMHost[l.VMUID],
 			ClaimedAt: tickOf(l.ClaimedAt),
 			ExpiresAt: tickOf(l.ExpiresAt),
+			RequestID: l.RequestID,
 		}
 	}
 	return v
@@ -713,9 +727,9 @@ func modelMemView(x itfVariant) (string, error) {
 	case idle:
 		return idle, nil
 	case claimAnswered:
-		var l modelLease
-		err := x.into(&l)
-		return fmt.Sprintf("%s(%d)", x.Tag, l.ID), err
+		var a modelClaimAnswer
+		err := x.into(&a)
+		return fmt.Sprintf("%s(%d, at %d)", x.Tag, a.Lease.ID, a.At), err
 	case heartbeatAnswered:
 		var h modelHeartbeatAnswer
 		err := x.into(&h)
@@ -734,6 +748,14 @@ func goMemView(h held, ok bool) string {
 	}
 	st := h.scope.Object.Status
 	switch h.kind {
+	case claimAnswered:
+		// The time of binding is when battery answered (CL-002): for a
+		// replayed Lease, the retry's answer, not the Lease's claimedAt.
+		var at int64
+		if st.BoundTime != nil {
+			at = tickOf(st.BoundTime.Time)
+		}
+		return fmt.Sprintf("%s(%d, at %d)", h.kind, leaseNum(st.LeaseID), at)
 	case heartbeatAnswered:
 		var exp int64
 		if st.LeaseExpiresAt != nil {

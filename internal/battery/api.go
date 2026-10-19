@@ -56,8 +56,12 @@ var (
 	// PoolSpec that does not validate.
 	ErrInvalid = errors.New("battery: invalid request")
 	// ErrFailedPrecondition is FAILED_PRECONDITION, which battery answers
-	// DeletePool with while the Pool still has MicroVMs or Leases.
+	// DeletePool with while the Pool still has leased MicroVMs.
 	ErrFailedPrecondition = errors.New("battery: failed precondition")
+	// ErrAborted is ABORTED from ClaimVM: the Lease the request id names
+	// is on its way out, or the MicroVM battery had picked was deleted
+	// during the claim. battery's own advice is to retry (BA-009).
+	ErrAborted = errors.New("battery: aborted")
 )
 
 // PoolRef identifies a Pool (proto PoolRef).
@@ -148,6 +152,9 @@ type LeaseRecord struct {
 	// in the past: battery keeps an expired Lease until its sweeper removes
 	// it, and a Heartbeat before then still renews it.
 	ExpiresAt time.Time
+	// RequestID is the request id of the ClaimVM that created the Lease
+	// (BA-007); empty if that call sent none.
+	RequestID string
 }
 
 // Event is one proto Event.
@@ -200,7 +207,14 @@ type Client interface {
 	ListPools(ctx context.Context, namespace string) ([]*Pool, error)
 	// ClaimVM leases a warm MicroVM from the Pool. It returns ErrExhausted
 	// when none is AVAILABLE and ErrNotFound for an unknown Pool.
-	ClaimVM(ctx context.Context, pool PoolRef) (*Claim, error)
+	//
+	// requestID makes the call retriable: battery stores it on the Lease
+	// it creates, and a later ClaimVM with the same requestID gets that
+	// Lease back for as long as it exists (BA-007, BA-008). ErrAborted
+	// means that Lease is on its way out and the call is to be retried
+	// (BA-009). An empty requestID is not retriable: each call leases
+	// another MicroVM.
+	ClaimVM(ctx context.Context, pool PoolRef, requestID string) (*Claim, error)
 	// Heartbeat extends a Lease and returns its new expiry. ErrNotFound
 	// means the Lease no longer exists.
 	Heartbeat(ctx context.Context, leaseID string) (expiresAt time.Time, err error)

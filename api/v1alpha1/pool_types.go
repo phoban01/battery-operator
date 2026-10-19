@@ -26,9 +26,9 @@ import (
 //# each of the `PoolSpec` fields `microvm_template`, `size`,
 //# `replenishment_strategy`, `create_commands`, `pre_lease_commands`,
 //# `hook_failure_policy`, `heartbeat_interval` and
-//# `heartbeat_expiry_threshold` of battery v0.3.3.
+//# `heartbeat_expiry_threshold` of battery v0.4.0.
 
-// PoolSpec is battery v0.3.3's PoolSpec
+// PoolSpec is battery v0.4.0's PoolSpec
 // (api/proto/poolmgr/v1alpha1/types.proto in github.com/liquidmetal-dev/battery)
 // as the spec of a namespaced resource. Each PoolSpec field maps to a Pool as
 // follows:
@@ -68,12 +68,12 @@ import (
 //
 //   - flintlock_hosts: a Pool selects Nodes by label instead, and the Pool
 //     Controller resolves the selector to Host names.
-//   - placement.strategy, from the proposal on battery#46: v0.3.3's PoolSpec
+//   - placement.strategy, from the proposal on battery#46: v0.4.0's PoolSpec
 //     has no such field, and battery places a MicroVM on the Host with the
 //     fewest MicroVMs.
 //   - MicroVMSpec's id, namespace, uid, created_at, updated_at and
 //     deleted_at: they identify one MicroVM rather than describe a template.
-//     battery v0.3.3 gives each MicroVM its own id, the Pool's name and a
+//     battery v0.4.0 gives each MicroVM its own id, the Pool's name and a
 //     random suffix, and the Pool's namespace unless the template has one;
 //     flintlock sets the rest.
 //   - MicroVMSpec's allow_guest_agent: battery forces it true for every
@@ -93,7 +93,7 @@ type PoolSpec struct {
 
 	//= docs/requirements/01-resources.md#pool
 	//# The CRDs SHALL reject a `Pool` whose `spec.size` is negative or
-	//# whose enumerated fields hold a value that battery v0.3.3 does not define.
+	//# whose enumerated fields hold a value that battery v0.4.0 does not define.
 
 	// size is the number of MicroVMs the Pool keeps (PoolSpec.size).
 	// +required

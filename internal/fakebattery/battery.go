@@ -97,10 +97,10 @@ type Config struct {
 	// SeedOnce makes the tick top up an IMMEDIATE_ON_LEASE or
 	// REPLACE_ON_DELETE Pool only on the first tick after its CreatePool or
 	// UpdatePool, whether or not those provisions succeed, as battery
-	// v0.3.3 seeds such a Pool once per reconciler (BA-075, BA-076). After
-	// that, only the strategy's claims and deletions provision for it, so a
-	// Pool whose seed fails stays short, as in battery. False, the default,
-	// tops up every Pool on every tick.
+	// v0.3.3 seeded such a Pool once per reconciler (TD-007). After that,
+	// only the strategy's claims and deletions provision for it, so a Pool
+	// whose seed fails stays short, as in v0.3.3. False, the default, tops
+	// up every Pool on every tick, as battery v0.4.0 does (BA-075).
 	SeedOnce bool
 }
 
@@ -481,6 +481,9 @@ type LeaseRecord struct {
 	ClaimedAt       time.Time
 	LastHeartbeatAt time.Time
 	ExpiresAt       time.Time
+	// RequestID is the request id of the ClaimVM that created the Lease,
+	// empty if it sent none (BA-007).
+	RequestID string
 }
 
 // VMRecord is one MicroVM the fake manages, as VMs reports it.

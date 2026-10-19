@@ -48,26 +48,50 @@ func (h *harness) failSeed(host *testHost, spec poolSpec) {
 //# provision for a Pool whose replenishment strategy is `IMMEDIATE_ON_LEASE`
 //# or `REPLACE_ON_DELETE` on its tick only on the first tick after each
 //# `CreatePool` or `UpdatePool` of the Pool, whether or not those provisions
-//# succeed, as battery v0.3.3 seeds such a Pool (BA-075, BA-076).
+//# succeed, as battery v0.3.3 seeded such a Pool.
 
 //= docs/requirements/10-battery.md#seeding
 //= type=test
-//# When a Pool's reconciler starts, battery SHALL provision for
-//# the Pool once, whether or not those provisions succeed, its size less its
-//# available and provisioning MicroVMs for `IMMEDIATE_ON_LEASE`, and its size
-//# less its available, leased and provisioning MicroVMs for
-//# `REPLACE_ON_DELETE`.
+//# When a Pool's reconciler starts, and on each of its ticks
+//# after that, battery SHALL provision for the Pool its size less its
+//# available, claiming and provisioning MicroVMs for `IMMEDIATE_ON_LEASE`,
+//# and its size less its available, claiming, leased and provisioning
+//# MicroVMs for `REPLACE_ON_DELETE`.
 
-//= docs/requirements/10-battery.md#seeding
-//= type=test
-//# While a Pool's replenishment strategy is `IMMEDIATE_ON_LEASE`
-//# or `REPLACE_ON_DELETE`, battery SHALL provision a MicroVM for it only when
-//# its reconciler starts, on a claim for `IMMEDIATE_ON_LEASE`, and on a
-//# deletion for `REPLACE_ON_DELETE`.
+// TestTickTopsUpAnEventDrivenPool covers BA-075: without SeedOnce, an
+// event-driven Pool whose seed fails is filled by the next tick, as
+// battery v0.4.0's reconciler provisions the shortfall on every tick, and
+// a Pool at its size gets nothing more.
+func TestTickTopsUpAnEventDrivenPool(t *testing.T) {
+	for _, typ := range []poolmgrv1.ReplenishmentStrategyType{
+		poolmgrv1.ReplenishmentStrategyType_IMMEDIATE_ON_LEASE,
+		poolmgrv1.ReplenishmentStrategyType_REPLACE_ON_DELETE,
+	} {
+		t.Run(typ.String(), func(t *testing.T) {
+			h := newHarness(t, Config{}, hostA)
+			host := h.stubs[hostA]
+			spec := h.spec("pool", 2, hostA)
+			spec.Replenishment = replenishment{Type: typ}
+			h.failSeed(host, spec)
 
-// TestSeedOnce covers TD-007, BA-075 and BA-076: with Config.SeedOnce, an
-// event-driven Pool whose seed fails stays short however many ticks pass,
-// and UpdatePool, which starts a new reconciler, seeds it again. A
+			h.tick()
+			for range spec.Size {
+				h.waitEvent(poolmgrv1.EventType_VM_AVAILABLE)
+			}
+			if st := h.pool("pool").Status; st.Available != 2 {
+				t.Fatalf("status after the tick = %+v, want 2 available", st)
+			}
+			h.tick()
+			if created, _ := host.counts(); created != 2 {
+				t.Fatalf("host created %d microvms after a tick at size, want 2", created)
+			}
+		})
+	}
+}
+
+// TestSeedOnce covers TD-007: with Config.SeedOnce, an event-driven Pool
+// whose seed fails stays short however many ticks pass, as in battery
+// v0.3.3, and UpdatePool, which starts a new reconciler, seeds it again. A
 // MIN_SIZE_THRESHOLD Pool still tops up on the tick.
 func TestSeedOnce(t *testing.T) {
 	for _, typ := range []poolmgrv1.ReplenishmentStrategyType{

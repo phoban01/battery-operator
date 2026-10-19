@@ -50,7 +50,7 @@ STATE_DIR="${STATE_DIR:-${HERE}/.state}"
 KUBECONFIG_OUT="${STATE_DIR}/kubeconfig"
 API_HOST_PORT="${API_HOST_PORT:-16443}"
 
-# Versions. flintlockd v0.15.2 is the oldest battery v0.3.3 provisions on
+# Versions. flintlockd v0.15.2 is the oldest battery v0.4.0 provisions on
 # (battery's flintlockclient.MinFlintlockVersion).
 K3S_VERSION="${K3S_VERSION:-v1.35.8+k3s1}"
 CONTAINERD_VERSION="${CONTAINERD_VERSION:-1.7.22}"

@@ -28,7 +28,13 @@ import (
 //= type=test
 //# The fake battery SHALL replenish Pools, expire Leases that are
 //# not renewed within the Pool's expiry threshold, and answer `ClaimVM` on an
-//# empty Pool with `RESOURCE_EXHAUSTED`, as battery v0.3.3 does.
+//# empty Pool with `RESOURCE_EXHAUSTED`, as battery v0.4.0 does.
+
+//= docs/requirements/10-battery.md#seeding
+//= type=test
+//# When a MicroVM of a Pool is claimed, for `IMMEDIATE_ON_LEASE`,
+//# and when one is deleted, for `REPLACE_ON_DELETE`, battery SHALL provision
+//# the shortfall of BA-075 at once, without waiting for the tick.
 
 // TestReplenishmentStrategies drives each of the three strategies declared
 // in a PoolSpec on the fake clock. Each case asserts both what the strategy

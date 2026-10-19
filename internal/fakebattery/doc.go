@@ -16,7 +16,7 @@ limitations under the License.
 
 // Package fakebattery is the fake battery
 // (docs/requirements/08-test-doubles.md#fake-battery): a minimal but real
-// pool manager on battery v0.3.3's protos. It serves the poolmgr.v1alpha1
+// pool manager on battery v0.4.0's protos. It serves the poolmgr.v1alpha1
 // PoolAdmin, Lease and Events services over gRPC with the generated server
 // stubs, and creates, places and deletes MicroVMs only through the
 // flintlock MicroVM and MicroVMExec clients of the Hosts it is given, which
@@ -31,38 +31,39 @@ limitations under the License.
 // configured clock; RPCs work before Run starts, but provisioning waits for
 // it.
 //
-// Behaviour follows battery v0.3.3 where the two overlap: least-VM-count
+// Behaviour follows battery v0.4.0 where the two overlap: least-VM-count
 // placement per Pool, RESOURCE_EXHAUSTED from ClaimVM on a Pool with
-// nothing AVAILABLE, the host field on ClaimVMResponse, ListLeases, the
-// MicroVM ids, the three replenishment strategies, the hook failure
-// policies, the event types, DeletePool's refusal while a Pool owns any
-// MicroVM, and UpdatePool cancelling the Pool's provisioning under the old
-// spec's hook failure policy.
+// nothing AVAILABLE, the request id on ClaimVM and the replay of a claim
+// by it, the host field on ClaimVMResponse, ListLeases, the MicroVM ids,
+// the three replenishment strategies topped up on every tick, the hook
+// failure policies, the event types, and UpdatePool cancelling the Pool's
+// provisioning under the old spec's hook failure policy.
 //
 // What the Operator assumes battery does is listed in
-// docs/requirements/10-battery.md (BA-*), from battery v0.3.3's source; the
+// docs/requirements/10-battery.md (BA-*), from battery v0.4.0's source; the
 // fake cites each assumption where it implements it, with a test, and cites
 // the ones it does not meet as exceptions. In particular, as in battery, a
 // Lease past its expiry is held until the next tick sweeps it, and a
 // heartbeat in that time renews it (BA-010, BA-020); ReleaseVM answers
 // UNAVAILABLE and keeps the Lease until the Host confirms the deletion
-// (BA-031); and VM_EXPIRING_SOON comes again after every heartbeat that
+// (BA-031); a ClaimVM whose request id a Lease was created with gets that
+// Lease back, or ABORTED while its MicroVM is deleting (BA-007 to
+// BA-009); and VM_EXPIRING_SOON comes again after every heartbeat that
 // moves a Lease's expiry, since battery warns once per expiry.
 //
 // The fake deliberately differs from battery in these ways:
 //
-//   - The control loop's tick tops every Pool up to its target, whatever
-//     its replenishment strategy. battery's tick does that only for
-//     MIN_SIZE_THRESHOLD; for the event-driven strategies battery tops a
-//     Pool up once, when its reconciler starts (at startup, CreatePool and
-//     UpdatePool), and otherwise relies on the strategy's events. So the
-//     fake recovers from a failed create or a quarantined MicroVM on the
-//     next tick, where battery waits for the next event or restart, and a
-//     Pool whose first provisioning fails fills in the fake but stays
-//     short in battery (BA-075, BA-076). Config.SeedOnce turns this
-//     difference off: the tick then tops up an event-driven Pool only on
-//     the first tick after its CreatePool or UpdatePool, as battery seeds
-//     it, so a test can reach the Pool that stays short.
+//   - DeletePool refuses while the Pool owns a MicroVM in any phase and
+//     deletes none of them, as battery v0.3.3 did. battery v0.4.0 refuses
+//     only for a leased or claiming MicroVM, and otherwise deletes the
+//     Pool with its MicroVMs, quarantined ones included, recording
+//     VM_DELETED_ON_POOL_DELETE for each (BA-070, BA-073). #199 brings
+//     the fake and the Pool Controller to that.
+//   - With Config.SeedOnce, the control loop's tick tops up an
+//     event-driven Pool only on the first tick after its CreatePool or
+//     UpdatePool, as battery v0.3.3 seeded such a Pool, so that a test
+//     can reach a Pool that stays short (TD-007). Without it the tick
+//     tops every Pool up to its target, as battery v0.4.0 does (BA-075).
 //   - The fake does not check a Host's flintlock version; battery refuses
 //     to create a MicroVM on a Host whose ServerInfo reports a version
 //     older than v0.15.2.
@@ -94,4 +95,11 @@ package fakebattery
 
 //= docs/requirements/08-test-doubles.md#fake-battery
 //# The fake battery SHALL document every behaviour in which it
-//# deliberately differs from battery v0.3.3.
+//# deliberately differs from battery v0.4.0.
+
+//= docs/requirements/10-battery.md#restarts
+//= type=exception
+//= reason=The fake keeps its state in memory and loses it when Run returns, so it has no database to migrate; the e2e suite upgrades battery's real poolmgrd from v0.3.3 (test/e2e/upgrade_test.go).
+//# When battery starts on a database that battery v0.3.3 wrote,
+//# battery SHALL migrate the database's schema before it serves, and SHALL
+//# keep the Pools, MicroVMs and Leases in it.
