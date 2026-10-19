@@ -54,7 +54,8 @@ func (b Backoff) after(pending time.Duration) time.Duration {
 }
 
 // Pending records why battery's ClaimVM could not bind a claim, from the
-// scope's BatteryCall: the claim stays Pending, its Bound condition is
+// scope's BatteryCall, or that Bind made no ClaimVM call because the
+// claim's Pool is being deleted: the claim stays Pending, its Bound condition is
 // false with the reason, and the chain asks for a retry after Backoff.
 type Pending struct {
 	Backoff Backoff
@@ -65,12 +66,29 @@ var _ reconcile.SubReconciler[*claimscope.Scope] = Pending{}
 // Reconcile implements reconcile.SubReconciler[*claimscope.Scope].
 func (p Pending) Reconcile(_ context.Context, s *claimscope.Scope) (reconcile.Result, error) {
 	call := s.BatteryCall
-	if call == nil || call.Method != methodClaimVM || call.Err == nil {
+	claimFailed := call != nil && call.Method == methodClaimVM && call.Err != nil
+	if !s.PoolDeleting && !claimFailed {
 		return reconcile.Result{}, nil
+	}
+	var err error
+	if claimFailed {
+		err = call.Err
 	}
 	pool := s.Object.Spec.PoolRef.Name
 	var reason, message string
-	switch err := call.Err; {
+	switch {
+	//= docs/requirements/02-claims.md#binding
+	//# If the Pool of a claim that has no lease id in its status has
+	//# a deletion timestamp, then the Claim Controller SHALL NOT call battery's
+	//# `ClaimVM` for the claim, SHALL keep the claim in the phase `Pending` with
+	//# the condition `Bound` false and the reason `PoolDeleting`, and SHALL
+	//# retry with backoff.
+	//
+	// Bind made no ClaimVM call. Once the Pool is gone, the retry gets
+	// PoolNotFound (CL-004).
+	case s.PoolDeleting:
+		reason = batteryv1alpha1.ReasonPoolDeleting
+		message = fmt.Sprintf("Pool %s is being deleted", pool)
 	//= docs/requirements/02-claims.md#binding
 	//# If battery's `ClaimVM` fails because the Pool has no warm
 	//# MicroVM, then the Claim Controller SHALL keep the claim in the phase

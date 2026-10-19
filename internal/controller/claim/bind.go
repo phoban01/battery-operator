@@ -57,6 +57,10 @@ import (
 // (CL-061). ABORTED, a Lease on its way out, leaves the claim Pending too
 // (CL-062).
 //
+// Bind calls ClaimVM only for a claim whose Pool is not being deleted. For
+// one whose Pool is, it sets the scope's PoolDeleting and the chain goes
+// on to Pending (CL-063).
+//
 // With Slots set, Bind calls ClaimVM only while it holds one of their
 // slots, so that a slow ClaimVM never holds up every reconcile (CL-018).
 type Bind struct {
@@ -99,6 +103,25 @@ func (b Bind) Reconcile(ctx context.Context, s *claimscope.Scope) (reconcile.Res
 	case !controllerutil.ContainsFinalizer(fresh, batteryv1alpha1.ReleaseFinalizer):
 		// EnsureFinalizer added it, but it is not written yet.
 		return reconcile.Result{Stop: true}, nil
+	}
+
+	deleting, err := poolDeleting(ctx, s)
+	if err != nil {
+		return reconcile.Result{}, err
+	}
+	//= docs/requirements/02-claims.md#binding
+	//# If the Pool of a claim that has no lease id in its status has
+	//# a deletion timestamp, then the Claim Controller SHALL NOT call battery's
+	//# `ClaimVM` for the claim, SHALL keep the claim in the phase `Pending` with
+	//# the condition `Bound` false and the reason `PoolDeleting`, and SHALL
+	//# retry with backoff.
+	//
+	// battery would lease one of the warm MicroVMs a deleted Pool keeps,
+	// and the claim would hold the deletion up. Pending writes the status.
+	if deleting {
+		s.PoolDeleting = true
+		s.Log.V(1).Info("Skipped ClaimVM for a MicroVMClaim whose Pool is being deleted", "pool", s.Object.Spec.PoolRef.Name)
+		return reconcile.Result{}, nil
 	}
 
 	//= docs/requirements/02-claims.md#renewal
@@ -207,4 +230,21 @@ func (b Bind) Reconcile(ctx context.Context, s *claimscope.Scope) (reconcile.Res
 	})
 	s.Log.Info("Bound MicroVMClaim", "lease", claimed.LeaseID, "microVM", claimed.VMUID, "node", claimed.Host.Name)
 	return reconcile.Result{Stop: true}, nil
+}
+
+// poolDeleting reports whether the API server shows the claim's Pool with
+// a deletion timestamp. It reads past the cache, as Bind's read of the
+// claim does, so that a cache behind the deletion does not let a claim
+// bind. A Pool that does not exist is not being deleted: ClaimVM then
+// gets battery's NotFound (CL-004).
+func poolDeleting(ctx context.Context, s *claimscope.Scope) (bool, error) {
+	key := client.ObjectKey{Namespace: s.Object.Namespace, Name: s.Object.Spec.PoolRef.Name}
+	pool := &batteryv1alpha1.Pool{}
+	if err := s.APIReader.Get(ctx, key, pool); err != nil {
+		if apierrors.IsNotFound(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("reading Pool %s before claiming a MicroVM: %w", key, err)
+	}
+	return !pool.DeletionTimestamp.IsZero(), nil
 }

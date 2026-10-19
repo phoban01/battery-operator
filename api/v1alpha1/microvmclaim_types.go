@@ -54,6 +54,9 @@ const (
 	ReasonPoolExhausted = "PoolExhausted"
 	// ReasonPoolNotFound means the Pool the claim names does not exist.
 	ReasonPoolNotFound = "PoolNotFound"
+	// ReasonPoolDeleting means the Pool the claim names is being deleted;
+	// the claim stays Pending and is not bound to any of its MicroVMs.
+	ReasonPoolDeleting = "PoolDeleting"
 	// ReasonNoEligibleHost means no Host can run a MicroVM for the Pool.
 	ReasonNoEligibleHost = "NoEligibleHost"
 	// ReasonLeaseExpired means the Holder stopped renewing and the Lease

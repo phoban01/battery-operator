@@ -127,6 +127,71 @@ func TestBindSkipsABoundClaim(t *testing.T) {
 	}
 }
 
+//= docs/requirements/02-claims.md#binding
+//= type=test
+//# If the Pool of a claim that has no lease id in its status has
+//# a deletion timestamp, then the Claim Controller SHALL NOT call battery's
+//# `ClaimVM` for the claim, SHALL keep the claim in the phase `Pending` with
+//# the condition `Bound` false and the reason `PoolDeleting`, and SHALL
+//# retry with backoff.
+
+// TestBindSkipsClaimVMOnADeletingPool covers CL-063 from Bind's side: a
+// claim whose Pool is being deleted gets no ClaimVM, the scope says why,
+// and the chain goes on to Pending. A Bound claim on that Pool is left
+// alone.
+func TestBindSkipsClaimVMOnADeletingPool(t *testing.T) {
+	t.Run("unbound", func(t *testing.T) {
+		b := answers(leased, nil)
+		c := newFakeClient(t, aClaim(batteryv1alpha1.ReleaseFinalizer), deletingPool())
+		s := scopeFor(t, c, claimKey, b)
+
+		res, err := Bind{}.Reconcile(context.Background(), s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res != (reconcile.Result{}) {
+			t.Errorf("result = %+v, want the chain to continue", res)
+		}
+		if n := len(b.claimCalls()); n != 0 {
+			t.Errorf("ClaimVM was called %d times for a claim on a deleting Pool", n)
+		}
+		if !s.PoolDeleting {
+			t.Error("PoolDeleting is not set")
+		}
+		if s.BatteryCall != nil {
+			t.Errorf("BatteryCall = %+v, want none", s.BatteryCall)
+		}
+		if s.Object.Status.LeaseID != "" || s.Object.Status.Phase != "" {
+			t.Errorf("status = %+v, want it left to Pending", s.Object.Status)
+		}
+	})
+	t.Run("bound", func(t *testing.T) {
+		cl := aClaim(batteryv1alpha1.ReleaseFinalizer)
+		cl.Status.LeaseID = testLease
+		cl.Status.Phase = batteryv1alpha1.MicroVMClaimBound
+		b := answers(leased, nil)
+		c := newFakeClient(t, cl, deletingPool())
+		s := scopeFor(t, c, claimKey, b)
+
+		res, err := Bind{}.Reconcile(context.Background(), s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res != (reconcile.Result{}) {
+			t.Errorf("result = %+v, want the chain to continue", res)
+		}
+		if n := len(b.claimCalls()); n != 0 {
+			t.Errorf("ClaimVM was called %d times for a Bound claim", n)
+		}
+		if s.PoolDeleting {
+			t.Error("PoolDeleting is set for a Bound claim")
+		}
+		if s.Object.Status.Phase != batteryv1alpha1.MicroVMClaimBound || s.Object.Status.LeaseID != testLease {
+			t.Errorf("status = %+v, want it Bound on %s", s.Object.Status, testLease)
+		}
+	})
+}
+
 // TestBindTrustsTheAPIServerOverTheCache: a cached copy that has not seen
 // an earlier bind's status does not make battery lease a second MicroVM.
 func TestBindTrustsTheAPIServerOverTheCache(t *testing.T) {

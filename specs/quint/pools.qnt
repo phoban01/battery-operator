@@ -31,7 +31,8 @@
 // - the environment: Nodes are labelled, cordoned, uncordoned, deleted and
 //   created again, their Node reports flip between ready and not ready,
 //   Pools are created, changed (to a spec battery refuses, too) and
-//   deleted, claims lease available MicroVMs and release them,
+//   deleted, claims lease available MicroVMs of a Pool that is not being
+//   deleted (CL-063) and release them,
 //   cert-manager renews battery's client certificate,
 //   and time passes.
 //
@@ -443,10 +444,21 @@ module pools {
     battery' = battery, inv' = inv,
   }
 
-  // A claim leases an available MicroVM of the Pool on the Host.
+  //@= docs/requirements/02-claims.md#binding
+  //@# If the Pool of a claim that has no lease id in its status has
+  //@# a deletion timestamp, then the Claim Controller SHALL NOT call battery's
+  //@# `ClaimVM` for the claim, SHALL keep the claim in the phase `Pending` with
+  //@# the condition `Bound` false and the reason `PoolDeleting`, and SHALL
+  //@# retry with backoff.
+  //
+  // A claim leases an available MicroVM of the Pool on the Host, and only
+  // of a Pool that is not being deleted. The model takes the Claim
+  // Controller's read of the Pool and its ClaimVM as one step, so it
+  // leaves out a deletion that races the ClaimVM.
   action leaseVM(p: PoolName, h: HostName): bool = all {
     battery.up,
     inBattery(p),
+    not(live(p) and obj(p).deleting),
     val free = battery.vms.filter(v => v.pool == p and v.host == h and not(v.leased))
     all {
       free != Set(),

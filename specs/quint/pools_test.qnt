@@ -106,6 +106,20 @@ module pools_test {
         safety,
       })
 
+  // CL-063 (#229): no claim leases a MicroVM of a deleted Pool, though
+  // battery still holds the Pool with an available one.
+  run noLeaseOnDeletedPoolTest =
+    init
+      .then(declare("p1", Set(ZONE_A), 2))
+      .then(batteryProvision("p1", "h1"))
+      .then(batteryProvision("p1", "h2"))
+      .then(leaseVM("p1", "h1"))
+      .then(deletePool("p1"))
+      .then(ctlDrainSpec("p1"))
+      .expect(and { deletionRefused("p1"), vmsOf("p1").exists(v => not(v.leased)) })
+      .then(leaseVM("p1", "h2"))
+      .fail()
+
   // BA-070: battery deletes a Pool no claim holds with its available
   // MicroVMs, in one DeletePool.
   run deleteAvailablePoolTest =

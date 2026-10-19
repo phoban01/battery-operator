@@ -48,6 +48,10 @@ type Scope struct {
 	// BatteryCall is the last call to battery the chain made for the claim
 	// in this reconcile, or nil if it made none.
 	BatteryCall *BatteryCall
+
+	// PoolDeleting is set when the claim's Pool is being deleted, so the
+	// chain made no ClaimVM call for the claim (CL-063).
+	PoolDeleting bool
 }
 
 // BatteryCall is a call to battery and how it ended.

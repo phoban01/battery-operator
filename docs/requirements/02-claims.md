@@ -35,6 +35,29 @@ battery said (consequence 4).
 - **CL-008** The Claim Controller SHALL write to a claim's status only a
   lease id that battery returned in its answer to a `ClaimVM` call for that
   claim.
+- **CL-063** If the Pool of a claim that has no lease id in its status has
+  a deletion timestamp, then the Claim Controller SHALL NOT call battery's
+  `ClaimVM` for the claim, SHALL keep the claim in the phase `Pending` with
+  the condition `Bound` false and the reason `PoolDeleting`, and SHALL
+  retry with backoff.
+
+A deleted Pool stays in battery while a claim holds one of its MicroVMs,
+and it keeps its warm MicroVMs until battery deletes the Pool
+([03-pools.md](03-pools.md#deletion)). battery would still lease one of
+them, so CL-063 keeps a new claim off them. Such a claim would hold the
+Pool's deletion up until it ends, and its Holder would get a MicroVM from
+a Pool that is going away. The claim stays `Pending` rather than failing,
+as a claim whose Pool does not exist does (CL-004): a claim has no phase
+for failure, and a Pool of the same name may come back. Once the Pool is
+gone, the retry calls `ClaimVM` and gets `PoolNotFound`; once a new Pool
+of that name exists, it binds. The Claim Controller reads the Pool from
+the API server, not from its cache, just before `ClaimVM`, so a cache
+behind the deletion does not let a claim through. A Pool deleted between
+that read and `ClaimVM` can still lose a MicroVM to the claim; the claim
+is then an ordinary Bound claim, and the deletion waits for it as for any
+other (PO-043). CL-063 makes no call to battery, so it leaves the claim's
+condition `Synced` as it was. A Bound claim is untouched: it keeps its
+Lease until it is released or expires.
 
 battery chooses the lease id, so a claim learns it only from battery's
 answer to `ClaimVM`. battery commits the Lease before it answers, so an

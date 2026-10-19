@@ -131,10 +131,11 @@ claim ends, and battery then deletes the Pool with its warm MicroVMs.
 While battery refuses, it keeps the Pool and its reconciler, and would
 replace each MicroVM a new claim takes. The drained spec (glossary) stops
 that: a `MIN_SIZE_THRESHOLD` Pool of size 0 creates no MicroVM (BA-072).
-So the deletion waits at most for the claims there are, and for claims
-that bind to the warm MicroVMs the Pool still has; nothing replaces
-those. The drained spec keeps the Pool's hooks and hook failure policy,
-since a claim that binds meanwhile is a real one. `UpdatePool` cancels
+So the deletion waits at most for the claims there are; nothing replaces
+the MicroVMs they hold. The Claim Controller binds no new claim to a
+deleted Pool (CL-063), but a claim whose `ClaimVM` raced the deletion can
+still take a warm MicroVM. The drained spec keeps the Pool's hooks and
+hook failure policy, since such a claim is a real one. `UpdatePool` cancels
 any provisioning MicroVM under the Pool's hook failure policy (BA-074),
 which may quarantine it; battery deletes a quarantined MicroVM with its
 Pool (BA-073), so that does not hold the deletion up.

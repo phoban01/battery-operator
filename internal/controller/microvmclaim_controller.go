@@ -88,6 +88,7 @@ const DefaultClaimConcurrentReconciles = 4
 // +kubebuilder:rbac:groups=battery.liquidmetal-x.dev,resources=microvmclaims,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=battery.liquidmetal-x.dev,resources=microvmclaims/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=battery.liquidmetal-x.dev,resources=microvmclaims/finalizers,verbs=update
+// +kubebuilder:rbac:groups=battery.liquidmetal-x.dev,resources=pools,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch
 
 // Reconcile runs the claim's subreconcilers and writes what they changed.
