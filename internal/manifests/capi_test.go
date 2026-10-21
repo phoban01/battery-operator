@@ -90,10 +90,12 @@ type machineDeployment struct {
 	} `json:"spec"`
 }
 
-// The names of the two pools in testdata/capi.
+// The names of the three pools in testdata/capi. Only hosts-c takes the
+// options: nested virtualization and a data volume.
 const (
 	testPoolA = "hosts-a"
 	testPoolB = "hosts-b"
+	testPoolC = "hosts-c"
 )
 
 // awsMachineTemplate is the part of an AWSMachineTemplate the tests read,
@@ -116,7 +118,11 @@ type awsMachineTemplate struct {
 				RootVolume struct {
 					Size int `json:"size"`
 				} `json:"rootVolume"`
-				CloudInit struct {
+				CPUOptions *struct {
+					NestedVirtualization string `json:"nestedVirtualization"`
+				} `json:"cpuOptions"`
+				NonRootVolumes []ebsVolume `json:"nonRootVolumes"`
+				CloudInit      struct {
 					InsecureSkipSecretsManager bool `json:"insecureSkipSecretsManager"`
 				} `json:"cloudInit"`
 				InstanceMetadataOptions struct {
@@ -128,6 +134,14 @@ type awsMachineTemplate struct {
 		} `json:"template"`
 	} `json:"spec"`
 	raw map[string]any
+}
+
+// ebsVolume is a volume of an AWSMachineTemplate besides the root volume.
+type ebsVolume struct {
+	DeviceName string `json:"deviceName"`
+	Size       int    `json:"size"`
+	Type       string `json:"type"`
+	Encrypted  *bool  `json:"encrypted"`
 }
 
 // kubeadmConfigTemplate is the part of a KubeadmConfigTemplate the tests
@@ -383,6 +397,8 @@ func TestHostPoolSettingsLand(t *testing.T) {
 			map[string]string{"GUEST_SUBNET": "10.220.0.0/16", "FLINTLOCKD_CLIENT_CIDRS": "192.168.0.0/16"}},
 		testPoolB: {"workload-a", "v1.35.7", "c6id.metal", "ami-0fedcba9876543210", "subnet-0bbbbbbbbbbbbbbbb", 5, 7200, 600,
 			map[string]string{"GUEST_SUBNET": "10.230.0.0/24", "THIN_POOL_DEVICE": "/dev/nvme2n1"}},
+		testPoolC: {"workload-a", "v1.35.8", "m8i.xlarge", "ami-0c0c0c0c0c0c0c0c0", "subnet-0cccccccccccccccc", 2, 4500, 300,
+			map[string]string{"THIN_POOL_DEVICE": "/dev/nvme1n1"}},
 	}
 	objs := buildCAPI(t, capiTestdata)
 	pools := hostPools(t, objs)
@@ -437,7 +453,7 @@ func TestHostPoolSettingsLand(t *testing.T) {
 			}
 		}
 	}
-	placeholders := regexp.MustCompile(`\b(POOL|CLUSTER|KUBERNETES_VERSION|INSTANCE_TYPE|AMI_ID|SUBNET_ID|SECURITY_GROUP_ID|HOST_CONF)\b`)
+	placeholders := regexp.MustCompile(`\b(POOL|CLUSTER|KUBERNETES_VERSION|INSTANCE_TYPE|AMI_ID|SUBNET_ID|SECURITY_GROUP_ID|HOST_CONF|NESTED_VIRTUALIZATION|DATA_VOLUME_TYPE)\b`)
 	for _, dir := range capiRenders {
 		for _, o := range buildCAPI(t, dir) {
 			if o.Kind == "ConfigMap" {
@@ -462,6 +478,7 @@ func TestHostPoolSecurityGroups(t *testing.T) {
 	wants := map[string][]string{
 		testPoolA: {"sg-0aaaaaaaaaaaaaaa1", "sg-0aaaaaaaaaaaaaaa2"},
 		testPoolB: {"sg-0bbbbbbbbbbbbbbb1"},
+		testPoolC: {"sg-0ccccccccccccccc1"},
 	}
 	for _, dir := range capiRenders {
 		for _, p := range hostPools(t, buildCAPI(t, dir)) {
@@ -494,7 +511,7 @@ func TestHostPoolSecurityGroups(t *testing.T) {
 // its AWSMachineTemplate, and a size on every pool's.
 func TestHostPoolRootVolume(t *testing.T) {
 	t.Parallel()
-	wants := map[string]int{testPoolA: 150, testPoolB: 400}
+	wants := map[string]int{testPoolA: 150, testPoolB: 400, testPoolC: 80}
 	for _, dir := range capiRenders {
 		for _, p := range hostPools(t, buildCAPI(t, dir)) {
 			name := p.md.Metadata.Name
@@ -504,6 +521,73 @@ func TestHostPoolRootVolume(t *testing.T) {
 			}
 			if dir == capiTestdata && got != wants[name] {
 				t.Errorf("%s/%s: the root volume is %d GiB; want %d", dir, name, got, wants[name])
+			}
+		}
+	}
+}
+
+//= docs/requirements/12-host-pool.md#host-pool
+//= type=test
+//# Where a Host pool's settings enable nested virtualization, the Host
+//# Pool Templates SHALL enable nested virtualization in the CPU options of
+//# the pool's AWSMachineTemplate.
+
+// TestHostPoolNestedVirtualization finds nested virtualization enabled on
+// the pool that takes the option, and no CPU options on the pools that do
+// not. `make capi-check` validates the field against the pinned CAPA CRDs.
+func TestHostPoolNestedVirtualization(t *testing.T) {
+	t.Parallel()
+	for _, dir := range capiRenders {
+		for _, p := range hostPools(t, buildCAPI(t, dir)) {
+			name := p.md.Metadata.Name
+			cpu := p.machine.Spec.Template.Spec.CPUOptions
+			if dir == capiTestdata && name == testPoolC {
+				if cpu == nil || cpu.NestedVirtualization != "enabled" {
+					t.Errorf("%s/%s: the CPU options are %+v; want nestedVirtualization enabled", dir, name, cpu)
+				}
+				continue
+			}
+			if cpu != nil {
+				t.Errorf("%s/%s: the CPU options are %+v; the pool does not take the option", dir, name, *cpu)
+			}
+		}
+	}
+}
+
+//= docs/requirements/12-host-pool.md#host-pool
+//= type=test
+//# Where a Host pool's settings give a data volume, the Host Pool
+//# Templates SHALL attach to every Host of the pool one EBS volume, as the
+//# device `/dev/sdb`, of the size, type and encryption that the settings
+//# give.
+
+// TestHostPoolDataVolume finds the data volume of the pool that takes the
+// option, with its settings, and a THIN_POOL_DEVICE in its host.conf,
+// because the Host Image never takes an EBS volume on its own. The pools
+// that do not take the option have no volume besides the root volume.
+func TestHostPoolDataVolume(t *testing.T) {
+	t.Parallel()
+	encrypted := false
+	want := ebsVolume{DeviceName: "/dev/sdb", Size: 250, Type: "gp3", Encrypted: &encrypted}
+	for _, dir := range capiRenders {
+		for _, p := range hostPools(t, buildCAPI(t, dir)) {
+			name := p.md.Metadata.Name
+			got := p.machine.Spec.Template.Spec.NonRootVolumes
+			if dir != capiTestdata || name != testPoolC {
+				if len(got) != 0 {
+					t.Errorf("%s/%s: the volumes besides the root volume are %+v; the pool does not take the option", dir, name, got)
+				}
+				continue
+			}
+			if len(got) != 1 {
+				t.Fatalf("%s/%s: the volumes besides the root volume are %+v; want one data volume", dir, name, got)
+			}
+			v := got[0]
+			if v.DeviceName != want.DeviceName || v.Size != want.Size || v.Type != want.Type || v.Encrypted == nil || *v.Encrypted != *want.Encrypted {
+				t.Errorf("%s/%s: the data volume is %+v; want %+v", dir, name, v, want)
+			}
+			if !strings.HasPrefix(hostConf(t, p)["THIN_POOL_DEVICE"], "/dev/nvme") {
+				t.Errorf("%s/%s: host.conf names no NVMe THIN_POOL_DEVICE for the data volume", dir, name)
 			}
 		}
 	}

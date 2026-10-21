@@ -46,6 +46,13 @@ The AMI the templates boot is made by HI-009, in `11-host-image.md`.
   additional security groups that the pool's settings list by id.
 - **HP-007** The Host Pool Templates SHALL set the size of every Host's
   root volume, in GiB, from the pool's settings.
+- **HP-008** Where a Host pool's settings enable nested virtualization, the
+  Host Pool Templates SHALL enable nested virtualization in the CPU options
+  of the pool's AWSMachineTemplate.
+- **HP-009** Where a Host pool's settings give a data volume, the Host Pool
+  Templates SHALL attach to every Host of the pool one EBS volume, as the
+  device `/dev/sdb`, of the size, type and encryption that the settings
+  give.
 
 The pool size is the MachineDeployment's replica count. One instance type
 per pool keeps the capacity of a pool simple to reason about, and one AMI
@@ -74,6 +81,18 @@ system. containerd keeps the MicroVMs' kernel and root filesystem images
 there, and a consumer's pods keep their emptyDir volumes there, such as a
 cache for services on the guest bridge. How much room that needs depends
 on the pool, not on the Host Image.
+
+HP-008 and HP-009 exist for Hosts that are not metal. A Host needs KVM
+(HI-011). On EC2, a metal instance gives it, and so does nested
+virtualization, which AWS offers on the C8i, M8i and R8i families. CAPA
+sets it from v2.13, through `cpuOptions.nestedVirtualization`. Graviton
+has no nested virtualization, so an arm64 Host is still a metal size.
+These families have no instance-store disk, so the thin pool needs an EBS
+volume. The Host Image never takes an EBS volume on its own (HI-020), so
+the pool's Host configuration file names it with `THIN_POOL_DEVICE`. Nitro
+shows `/dev/sdb` as an NVMe disk, normally `/dev/nvme1n1`. Both options are
+kustomize Components that a pool includes, because a pool on a metal size
+needs neither.
 
 A known gap: the MachineHealthCheck of HP-005 watches the Host's own Node.
 A Host that cannot run MicroVMs, for want of KVM (HI-011) or of a thin pool

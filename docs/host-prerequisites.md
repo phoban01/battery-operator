@@ -79,6 +79,20 @@ opens. On bare metal that means virtualization is enabled in the firmware
 and the `kvm_intel` or `kvm_amd` module is loaded; on a virtual machine, it
 means nested virtualization.
 
+On EC2 there are two ways to get KVM:
+
+- A metal instance, such as `m6id.metal`. This is the only way on
+  Graviton, which has no nested virtualization, so an arm64 Host is a
+  metal size, such as `c7gd.metal`.
+- Nested virtualization, on the C8i, M8i and R8i families, such as
+  `m8i.xlarge`. It is off unless the instance's CPU options enable it. The
+  host pool templates in `config/capi` enable it with an option
+  ([Options](../config/capi/README.md#options)).
+
+The C8i, M8i and R8i families have no instance-store disk, so the thin pool
+of such a Host is on an EBS volume (see
+[containerd's thin pool](#containerds-thin-pool)).
+
 The Exec Agent checks two things, and passes only when both hold:
 
 - the kernel lists the device in sysfs: `/sys/class/misc/kvm/dev` exists,
@@ -120,6 +134,13 @@ resolve. So the DaemonSet needs no mount for this check, and
 
 The check is that the pool is present. It does not check that the device is
 a thin pool rather than some other device of that name, nor how full it is.
+
+The pool's device holds every MicroVM's disks, so its speed is the
+MicroVMs' disk speed. On a metal size it is an instance-store disk, which
+the Host Image finds on its own. A C8i, M8i or R8i instance has none, so
+the pool is on an EBS volume that the Host configuration file names with
+`THIN_POOL_DEVICE`. EBS is slower than a local disk: gp3 gives 3,000 IOPS
+and 125 MiB/s at any size. Size a pool's MicroVMs' disk I/O against that.
 
 ### Guest networking
 

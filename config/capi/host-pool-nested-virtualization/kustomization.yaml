@@ -1,0 +1,36 @@
+# An option for a Host pool: KVM from nested virtualization, on an instance
+# type that is not metal. A pool includes this Component after
+# host-pool-params, and sets nestedVirtualization in its host-pool.yaml.
+# AWS offers nested virtualization on the C8i, M8i and R8i families only,
+# and CAPA has the field from v2.13. Graviton has none: an arm64 Host is a
+# metal size. config/capi/README.md, "Options", says how to use it.
+#
+# The build fails if the pool's settings have no nestedVirtualization key,
+# so a pool that includes this Component cannot leave it out by mistake.
+#
+#= docs/requirements/12-host-pool.md#host-pool
+#/ Where a Host pool's settings enable nested virtualization, the Host
+#/ Pool Templates SHALL enable nested virtualization in the CPU options of
+#/ the pool's AWSMachineTemplate.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+patches:
+  - target:
+      kind: AWSMachineTemplate
+    patch: |-
+      - op: add
+        path: /spec/template/spec/cpuOptions
+        value:
+          nestedVirtualization: NESTED_VIRTUALIZATION
+
+replacements:
+  # enabled or disabled, CAPA's two values.
+  - source:
+      kind: ConfigMap
+      fieldPath: data.nestedVirtualization
+    targets:
+      - select:
+          kind: AWSMachineTemplate
+        fieldPaths:
+          - spec.template.spec.cpuOptions.nestedVirtualization

@@ -1,0 +1,28 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: host-pool-c
+  annotations:
+    config.kubernetes.io/local-config: "true"
+data:
+  name: hosts-c
+  clusterName: workload-a
+  replicas: "2"
+  instanceType: m8i.xlarge
+  amiID: ami-0c0c0c0c0c0c0c0c0
+  subnetID: subnet-0cccccccccccccccc
+  additionalSecurityGroups:
+    - id: sg-0ccccccccccccccc1
+  rootVolumeGiB: "80"
+  kubernetesVersion: v1.35.8
+  nodeDrainTimeoutSeconds: "4500"
+  unhealthySeconds: "300"
+  nestedVirtualization: enabled
+  dataVolumeGiB: "250"
+  dataVolumeType: gp3
+  dataVolumeEncrypted: "false"
+  host.conf: |
+    GUEST_SUBNET=10.220.0.0/16
+    THIN_POOL_DEVICE=/dev/nvme1n1
+    PROTECTED_CIDRS=10.0.0.0/16,192.168.0.0/16,10.96.0.0/12
+    FLINTLOCKD_CLIENT_CIDRS=192.168.0.0/16,10.0.0.0/16

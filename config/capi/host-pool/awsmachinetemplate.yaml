@@ -24,8 +24,10 @@ metadata:
 spec:
   template:
     spec:
-      # Replaced from host-pool.yaml. A Host needs KVM, so a metal instance,
-      # and an instance-store device for the thin pool (HI-020).
+      # Replaced from host-pool.yaml. A Host needs KVM: a metal instance, or
+      # C8i, M8i or R8i with the host-pool-nested-virtualization Component.
+      # It also needs a disk for the thin pool (HI-020): an instance-store
+      # disk, or an EBS volume from the host-pool-data-volume Component.
       instanceType: INSTANCE_TYPE
       ami:
         id: AMI_ID

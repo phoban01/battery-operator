@@ -35,8 +35,8 @@ say what a Node needs.
 The Host Image is a bootc image that a Node boots from to become a Host. It
 gives the Host:
 
-- containerd with a thin pool, which it makes on the instance-store disk at
-  first boot;
+- containerd with a thin pool, which it makes at first boot on the
+  instance-store disk, or on the EBS volume that `host.conf` names;
 - Firecracker, Cloud Hypervisor and `flintlockd`, which serves over mutual
   TLS on port 9090 with certificates from the Exec Agent;
 - the guest bridge, with DHCP, NAT and a firewall between the MicroVMs and
@@ -52,6 +52,22 @@ ghcr.io/phoban01/battery-operator/host-image:<version>
 
 The [Host Image README](https://github.com/phoban01/battery-operator/blob/v0.3.2/hostimage/README.md)
 has the detail.
+
+## Pick an instance type
+
+A Host needs KVM, and a disk for the thin pool. On EC2 there are two kinds
+of Host:
+
+| Kind | KVM from | Thin pool on | Example |
+|------|----------|--------------|---------|
+| Metal | the hardware | the instance-store disk | `m6id.metal`; on arm64, `c7gd.metal` |
+| C8i, M8i or R8i | nested virtualization | an EBS data volume | `m8i.xlarge` |
+
+A small C8i, M8i or R8i pool costs much less than metal. But these
+families have no instance-store disk, so the MicroVMs' disks are on EBS.
+gp3 gives 3,000 IOPS and 125 MiB/s at any size, less than a local disk.
+Graviton has no nested virtualization, so an arm64 Host is always a metal
+size. A C8i, M8i or R8i pool needs CAPA v2.13 or later.
 
 ## The steps
 
@@ -71,8 +87,8 @@ has the detail.
 The Host pools boot the Host Image from an AMI in the region of the
 cluster. An AMI has one architecture, so you make one for x86_64 Hosts
 and another for arm64 Hosts. An arm64 Host is a Graviton metal instance,
-such as `c7gd.metal` or `c8gd.metal-24xl`: Graviton's VM sizes have no
-nested virtualization, and a Host needs KVM.
+such as `c7gd.metal` or `c8gd.metal-24xl`: Graviton has no nested
+virtualization, and a Host needs KVM.
 
 `make host-image-ami` makes the AMI with bootc-image-builder. You need:
 
@@ -346,6 +362,39 @@ Use only the keys that the
 [Host configuration file](https://github.com/phoban01/battery-operator/blob/v0.3.2/hostimage/README.md#host-configuration-file)
 section names. The Host skips any other key without an error.
 
+For a C8i, M8i or R8i pool, use the two options: nested virtualization,
+and an EBS data volume for the thin pool. Each is a kustomize Component
+and some keys. Add both Components to
+`config/capi/pools/example/kustomization.yaml`:
+
+```yaml
+components:
+  - ../../host-pool-params
+  - ../../host-pool-nested-virtualization
+  - ../../host-pool-data-volume
+```
+
+Then set their keys in `host-pool.yaml`, and name the data volume in
+`host.conf`. The volume is attached as `/dev/sdb`, which Nitro shows as
+`/dev/nvme1n1`:
+
+```yaml
+data:
+  instanceType: m8i.xlarge
+  nestedVirtualization: enabled
+  dataVolumeGiB: "200"
+  dataVolumeType: gp3
+  dataVolumeEncrypted: "true"
+  host.conf: |
+    THIN_POOL_DEVICE=/dev/nvme1n1
+    # and the keys above
+```
+
+The build fails if an included Component's key is missing. A key without
+its Component does nothing.
+[Options](https://github.com/phoban01/battery-operator/blob/main/config/capi/README.md#options)
+has the detail.
+
 Look at what the pool renders, then apply it to the management cluster:
 
 ```sh
@@ -372,7 +421,7 @@ kubectl get machinedeployment battery-hosts-example
 kubectl get machines -l battery.liquidmetal-x.dev/host-pool=battery-hosts-example
 ```
 
-A metal instance takes some minutes to boot. The first boot also makes the
+An instance takes some minutes to boot, a metal one longer. The first boot also makes the
 thin pool and pulls images. The MachineHealthCheck gives a Host 20 minutes
 before it replaces the Machine.
 
@@ -423,10 +472,12 @@ When the report says ready, the Operator gives the Node to battery as a
 Host. If it says `false`, the reason names the first missing prerequisite:
 
 - `HostImageNotReady`: a unit of the Host Image failed, for example
-  because the instance has no KVM or no free instance-store disk, or
+  because the instance has no KVM, no free instance-store disk and no
+  `THIN_POOL_DEVICE`, or
   `host.conf` is not valid. The message says which. See
   [Not ready reasons](https://github.com/phoban01/battery-operator/blob/v0.3.2/hostimage/README.md#not-ready-reasons).
-- `KVMUnavailable`: the instance type has no KVM. Use a metal instance.
+- `KVMUnavailable`: the instance type has no KVM. Use a metal instance,
+  or C8i, M8i or R8i with the nested virtualization option.
 - `ThinPoolMissing`: there is no thin pool.
 - `FlintlockdNotReady`: the Exec Agent cannot reach `flintlockd` yet.
 
