@@ -63,7 +63,10 @@ checks that battery cordons its Host and keeps it.
 
 `TestBatteryUpgrade` (`upgrade_test.go`) sets the sidecar back to
 `poolmgrd:0.4.0`, with the configuration file an Operator before v0.5
-wrote for it: the workers and a placeholder Host. It binds a claim, then
+wrote for it: the workers and a placeholder Host. battery v0.4.0 refuses
+a database a newer battery has migrated, so it starts on a database file of
+its own on the same volume, as a fresh v0.4.0 install would, and the
+feature puts the suite's back at the end. It binds a claim, then
 puts back the configuration the Manifests ship and the suite's image. The
 suite's battery migrates its database and keeps the Hosts in it without
 TLS settings (BA-086); the Inventory Controller gives them their settings

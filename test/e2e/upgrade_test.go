@@ -22,6 +22,7 @@ import (
 	"context"
 	"encoding/json"
 	"maps"
+	"strings"
 	"testing"
 	"time"
 
@@ -56,9 +57,16 @@ const (
 	rolloutTimeout = 5 * time.Minute
 )
 
-// upgradeKey is the context key of the poolmgrd image the suite deployed,
+// upgradeDB is the database battery v0.4.0 starts on, and the suite's
+// battery upgrades: a file of its own on battery's volume.
+const upgradeDB = "/data/upgrade.db"
+
+// upgradeKey is the context key of what the suite deployed, an upgraded,
 // which the feature puts back.
 type upgradeKey struct{}
+
+// upgraded is battery's image and database as the suite deployed them.
+type upgraded struct{ image, db string }
 
 // TestBatteryUpgrade: battery v0.4.0 runs as the Operator's sidecar with
 // its Hosts in its configuration file, as an Operator before v0.5 left it,
@@ -91,13 +99,18 @@ func upgradeFeature(ns string) features.Feature {
 				t.Fatalf("the suite deployed %s, which is the version the upgrade starts from", current)
 			}
 			hosts := readyHosts(ctx, t, c)
+			// battery v0.4.0 refuses the suite's database, which a newer
+			// battery has migrated, so it starts on a database of its own,
+			// on the same volume, as a fresh v0.4.0 install would.
+			db := batteryDB(ctx, t, c)
+			ctx = context.WithValue(ctx, upgradeKey{}, upgraded{image: current, db: db})
 			setBatteryConfig(ctx, t, c, v04Config(t, hosts))
-			setBatteryImage(ctx, t, c, previousPoolmgrdImage)
+			setBattery(ctx, t, c, previousPoolmgrdImage, upgradeDB)
 			// battery v0.4.0 has no AddHost or UpdateHost, so the Inventory
 			// Controller fails to bring its Hosts in step, but publishes the
 			// ones battery places on, and cordons the placeholder.
 			waitForBatteryHosts(ctx, t, cfg, hosts)
-			return context.WithValue(ctx, upgradeKey{}, current)
+			return ctx
 		}).
 		Assess("a Pool fills and a claim binds on battery v0.4.0", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
 			c := mustClient(t, cfg)
@@ -133,8 +146,8 @@ func upgradeFeature(ns string) features.Feature {
 			//# The Manifests SHALL keep battery's database on a persistent
 			//# volume.
 			c := mustClient(t, cfg)
-			image, _ := ctx.Value(upgradeKey{}).(string)
-			if image == "" {
+			was, _ := ctx.Value(upgradeKey{}).(upgraded)
+			if was.image == "" {
 				t.Fatal("the image the suite deployed was not recorded")
 			}
 			shipped, err := batterysidecar.Render()
@@ -142,7 +155,7 @@ func upgradeFeature(ns string) features.Feature {
 				t.Fatal(err)
 			}
 			setBatteryConfig(ctx, t, c, string(shipped))
-			setBatteryImage(ctx, t, c, image)
+			setBattery(ctx, t, c, was.image, upgradeDB)
 
 			// The configuration names no Host, so every Host battery holds
 			// came through the migrated database; each gets its TLS
@@ -229,21 +242,19 @@ func upgradeFeature(ns string) features.Feature {
 		}).
 		Teardown(deleteNamespace(ns)).
 		Teardown(func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
-			// Whatever happened above, leave the suite's battery running, with
-			// the configuration the Manifests ship.
-			image, _ := ctx.Value(upgradeKey{}).(string)
-			if image == "" {
+			// Whatever happened above, leave the suite's battery running on
+			// the suite's database, with the configuration the Manifests ship.
+			was, _ := ctx.Value(upgradeKey{}).(upgraded)
+			if was.image == "" {
 				return ctx
 			}
 			c := mustClient(t, cfg)
-			if batteryImage(ctx, t, c) != image {
-				shipped, err := batterysidecar.Render()
-				if err != nil {
-					t.Fatal(err)
-				}
-				setBatteryConfig(ctx, t, c, string(shipped))
-				setBatteryImage(ctx, t, c, image)
+			shipped, err := batterysidecar.Render()
+			if err != nil {
+				t.Fatal(err)
 			}
+			setBatteryConfig(ctx, t, c, string(shipped))
+			setBattery(ctx, t, c, was.image, was.db)
 			return ctx
 		}).
 		Feature()
@@ -277,11 +288,33 @@ func batteryImage(ctx context.Context, t *testing.T, c client.Client) string {
 	return ""
 }
 
-// setBatteryImage sets battery's container to image and waits for the
-// Operator's pod to be replaced and ready with it. The Deployment's
-// strategy is Recreate (DP-002), so battery's database has one writer
-// throughout.
-func setBatteryImage(ctx context.Context, t *testing.T, c client.Client, image string) {
+// batteryDB is the -db argument of battery's container: the path of its
+// database.
+func batteryDB(ctx context.Context, t *testing.T, c client.Client) string {
+	t.Helper()
+	var d appsv1.Deployment
+	if err := c.Get(ctx, types.NamespacedName{Namespace: namespace, Name: operatorDeployment}, &d); err != nil {
+		t.Fatalf("reading the Deployment %s: %v", operatorDeployment, err)
+	}
+	for _, ct := range d.Spec.Template.Spec.Containers {
+		if ct.Name != batteryContainer {
+			continue
+		}
+		for _, a := range ct.Args {
+			if db, ok := strings.CutPrefix(a, "-db="); ok {
+				return db
+			}
+		}
+	}
+	t.Fatal("battery's container has no -db argument")
+	return ""
+}
+
+// setBattery sets battery's container to image and its database to db,
+// and waits for the Operator's pod to be replaced and ready with them. The
+// Deployment's strategy is Recreate (DP-002), so battery's database has
+// one writer throughout.
+func setBattery(ctx context.Context, t *testing.T, c client.Client, image, db string) {
 	t.Helper()
 	var d appsv1.Deployment
 	key := types.NamespacedName{Namespace: namespace, Name: operatorDeployment}
@@ -290,8 +323,15 @@ func setBatteryImage(ctx context.Context, t *testing.T, c client.Client, image s
 	}
 	patch := client.MergeFrom(d.DeepCopy())
 	for i := range d.Spec.Template.Spec.Containers {
-		if d.Spec.Template.Spec.Containers[i].Name == batteryContainer {
-			d.Spec.Template.Spec.Containers[i].Image = image
+		ct := &d.Spec.Template.Spec.Containers[i]
+		if ct.Name != batteryContainer {
+			continue
+		}
+		ct.Image = image
+		for j, a := range ct.Args {
+			if strings.HasPrefix(a, "-db=") {
+				ct.Args[j] = "-db=" + db
+			}
 		}
 	}
 	if err := c.Patch(ctx, &d, patch); err != nil {
@@ -342,7 +382,7 @@ func batteryPod(ctx context.Context, c client.Client, image string) *corev1.Pod 
 }
 
 // setBatteryConfig sets battery's configuration file in its ConfigMap. The
-// battery container reads it when it next starts, which setBatteryImage
+// battery container reads it when it next starts, which setBattery
 // brings.
 func setBatteryConfig(ctx context.Context, t *testing.T, c client.Client, config string) {
 	t.Helper()
