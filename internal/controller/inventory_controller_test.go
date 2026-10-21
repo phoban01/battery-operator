@@ -18,9 +18,11 @@ package controller
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
+	"google.golang.org/grpc"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -30,66 +32,100 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 
+	"github.com/phoban01/battery-operator/internal/battery"
 	"github.com/phoban01/battery-operator/internal/batterysidecar"
 	"github.com/phoban01/battery-operator/internal/clock"
 	"github.com/phoban01/battery-operator/internal/controller/inventory"
+	"github.com/phoban01/battery-operator/internal/fakebattery"
+	"github.com/phoban01/battery-operator/internal/fakeflintlock"
 )
 
-// recordingRestarter is a Restarter that records each restart.
-type recordingRestarter struct{ restarts []batterysidecar.Mounts }
-
-func (r *recordingRestarter) Restart(_ context.Context, want batterysidecar.Mounts) error {
-	r.restarts = append(r.restarts, want)
-	return nil
-}
+// testNamespace is the Operator's namespace in the Inventory Controller's
+// tests; addrNodeA is node-a's flintlockd; reportReady is a ready Node
+// report.
+const (
+	testNamespace = "battery-system"
+	addrNodeA     = "10.0.0.1:9090"
+	reportReady   = "true"
+)
 
 // batteryClientSecret is battery's client certificate's Secret in these
 // tests.
-// testNamespace is the Operator's namespace in the Inventory Controller's tests.
-const testNamespace = "battery-system"
-
 var batteryClientSecret = client.ObjectKey{Namespace: testNamespace, Name: batterysidecar.DefaultClientSecret}
 
+// mountedCertificate is the Operator's mount of battery's client
+// certificate in these tests: what the test sets.
+type mountedCertificate struct {
+	mu   sync.Mutex
+	cert []byte
+}
+
+func (m *mountedCertificate) ClientCertificate() ([]byte, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.cert, nil
+}
+
+func (m *mountedCertificate) set(cert string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.cert = []byte(cert)
+}
+
+// startHostAdminFakeBattery starts the fake battery holding no Hosts, which
+// reaches every address through one fake flintlockd. It returns the
+// connection to it and the fake's Hosts.
+func startHostAdminFakeBattery(t *testing.T) (*battery.Connection, *fakebattery.Hosts) {
+	t.Helper()
+	fl := fakeflintlock.New(fakeflintlock.Config{Name: "flintlockd"})
+	t.Cleanup(func() { _ = fl.Close() })
+	flConn, err := fl.Conn()
+	if err != nil {
+		t.Fatalf("fake flintlockd: %v", err)
+	}
+	t.Cleanup(func() { _ = flConn.Close() })
+	hosts := fakebattery.NewHosts()
+	bc, _ := startPoolFakeBatteryWith(t, fakebattery.Config{
+		Hosts: hosts,
+		Dial:  func(string) (grpc.ClientConnInterface, error) { return flConn, nil },
+	})
+	conn, ok := bc.(*battery.Connection)
+	if !ok {
+		t.Fatalf("the battery client is a %T", bc)
+	}
+	return conn, hosts
+}
+
 // newInventoryReconciler is the Inventory Controller against the fake
-// client holding battery's shipped ConfigMap, its client certificate's
-// Secret holding cert, and objs.
+// battery and the fake client holding battery's client certificate's
+// Secret with cert, and objs. The mount holds cert too.
 func newInventoryReconciler(t *testing.T, cert string, objs ...client.Object) (
-	*InventoryReconciler, client.Client, *clock.Fake, *recordingRestarter,
+	*InventoryReconciler, client.Client, *clock.Fake, *fakebattery.Hosts, *mountedCertificate,
 ) {
 	t.Helper()
 	s := runtime.NewScheme()
 	if err := clientgoscheme.AddToScheme(s); err != nil {
 		t.Fatal(err)
 	}
-	raw, err := batterysidecar.Render(nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	key := client.ObjectKey{Namespace: testNamespace, Name: batterysidecar.DefaultConfigMap}
-	objs = append(objs,
-		&corev1.ConfigMap{
-			ObjectMeta: metav1.ObjectMeta{Namespace: key.Namespace, Name: key.Name},
-			Data:       map[string]string{batterysidecar.ConfigKey: string(raw)},
-		},
-		&corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{Namespace: batteryClientSecret.Namespace, Name: batteryClientSecret.Name},
-			Data:       map[string][]byte{batterysidecar.ClientCertKey: []byte(cert), "tls.key": []byte("key")},
-		},
-	)
+	objs = append(objs, &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Namespace: batteryClientSecret.Namespace, Name: batteryClientSecret.Name},
+		Data:       map[string][]byte{batterysidecar.ClientCertKey: []byte(cert), "tls.key": []byte("key")},
+	})
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(objs...).Build()
-	clk := clock.NewFake(time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC))
-	restarter := &recordingRestarter{}
+	clk := clock.NewFake(time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC))
+	admin, hosts := startHostAdminFakeBattery(t)
+	mount := &mountedCertificate{cert: []byte(cert)}
 	r := &InventoryReconciler{
 		Client:       c,
-		Store:        inventory.ConfigMapStore{Reader: c, Writer: c, Key: key},
-		Restarter:    restarter,
+		Admin:        admin,
 		Hosts:        inventory.NewHostSet(),
-		Options:      inventory.Options{SettleTime: 30 * time.Second, RestartWindow: time.Minute},
+		Mount:        mount,
+		Options:      inventory.Options{SettleTime: 30 * time.Second, RemoveRetry: 10 * time.Second},
 		Clock:        clk,
 		ClientSecret: batteryClientSecret,
 		Secrets:      c,
 	}
-	return r, c, clk, restarter
+	return r, c, clk, hosts, mount
 }
 
 // reconcileExpecting runs the controller once for each requeue it expects,
@@ -109,38 +145,47 @@ func reconcileExpecting(t *testing.T, r *InventoryReconciler, clk *clock.Fake, r
 }
 
 // TestInventoryReconcilerGivesBatteryAReadyHost drives the controller
-// itself through a Node joining: it requeues for the settle time and then
-// the window, and restarts battery once with the Node as a Host.
+// itself through a Node joining, against the fake battery: it requeues
+// for the settle time, then adds the Host to battery with mutual TLS and
+// publishes it.
 func TestInventoryReconcilerGivesBatteryAReadyHost(t *testing.T) {
-	r, _, clk, restarter := newInventoryReconciler(t, "certificate",
+	r, _, clk, hosts, _ := newInventoryReconciler(t, "certificate",
 		&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: nodeA, Annotations: map[string]string{
-			inventory.AnnotationReady:             "true",
-			inventory.AnnotationFlintlockdAddress: "10.0.0.1:9090",
+			inventory.AnnotationReady:             reportReady,
+			inventory.AnnotationFlintlockdAddress: addrNodeA,
 		}}},
 	)
-	reconcileExpecting(t, r, clk, 30*time.Second, time.Minute, 0)
-	if len(restarter.restarts) != 1 {
-		t.Fatalf("restarts = %d, want 1", len(restarter.restarts))
+	reconcileExpecting(t, r, clk, 30*time.Second, 0)
+	st, err := r.Admin.GetHost(context.Background(), nodeA)
+	if err != nil {
+		t.Fatalf("battery does not hold node-a: %v", err)
+	}
+	if st.Host.Address != addrNodeA || st.Host.Cordoned || st.Host.TLS != inventory.TLS {
+		t.Errorf("battery holds %+v", st.Host)
+	}
+	if hosts.Dials(nodeA) != 1 {
+		t.Errorf("battery connected to node-a %d times, want once", hosts.Dials(nodeA))
 	}
 	got, err := r.Hosts.Hosts()
-	if err != nil || len(got) != 1 || got[0] != (batterysidecar.Host{Name: nodeA, Address: "10.0.0.1:9090"}) {
+	if err != nil || len(got) != 1 || got[0] != (inventory.Host{Name: nodeA, Address: addrNodeA}) {
 		t.Errorf("published %v, %v, want node-a", got, err)
 	}
 }
 
-//= docs/requirements/06-deployment.md#battery-sidecar
-//= type=test
-//# When the client certificate in the Secret of DP-005 changes,
-//# the Operator SHALL restart battery through the mechanism of DP-006
-
-// TestInventoryReconcilerRestartsBatteryForARenewedCertificate drives the
-// controller through cert-manager renewing battery's client certificate:
-// it reads the Secret, waits one window, and restarts battery once, waiting
-// for the renewed certificate.
-func TestInventoryReconcilerRestartsBatteryForARenewedCertificate(t *testing.T) {
-	r, c, clk, restarter := newInventoryReconciler(t, "certificate 1")
+// TestInventoryReconcilerReloadsARenewedCertificate drives the controller
+// through cert-manager renewing battery's client certificate: it reads the
+// Secret, waits for its mount to hold the renewal, and then makes battery
+// connect to the Host again, without restarting anything.
+func TestInventoryReconcilerReloadsARenewedCertificate(t *testing.T) {
+	r, c, clk, hosts, mount := newInventoryReconciler(t, "certificate 1",
+		&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: nodeA, Annotations: map[string]string{
+			inventory.AnnotationReady:             reportReady,
+			inventory.AnnotationFlintlockdAddress: addrNodeA,
+		}}},
+	)
 	ctx := context.Background()
-	reconcileExpecting(t, r, clk, 0)
+	reconcileExpecting(t, r, clk, 30*time.Second, 0)
+	dials := hosts.Dials(nodeA)
 
 	secret := &corev1.Secret{}
 	if err := c.Get(ctx, batteryClientSecret, secret); err != nil {
@@ -150,25 +195,27 @@ func TestInventoryReconcilerRestartsBatteryForARenewedCertificate(t *testing.T) 
 	if err := c.Update(ctx, secret); err != nil {
 		t.Fatal(err)
 	}
-	reconcileExpecting(t, r, clk, time.Minute, 0)
-	if len(restarter.restarts) != 1 || string(restarter.restarts[0].ClientCertificate) != "certificate 2" {
-		t.Fatalf("restarts %+v, want one, waiting for the renewed certificate", restarter.restarts)
+	reconcileExpecting(t, r, clk, inventory.DefaultMountPoll)
+	if hosts.Dials(nodeA) != dials {
+		t.Fatal("battery reconnected before the mount held the renewal")
+	}
+	mount.set("certificate 2")
+	reconcileExpecting(t, r, clk, 0, 0)
+	if hosts.Dials(nodeA) != dials+1 {
+		t.Errorf("battery connected to node-a %d more times, want once", hosts.Dials(nodeA)-dials)
 	}
 }
 
 // TestInventoryReconcilerWithoutTheSecret checks that a missing Secret is
 // no certificate rather than an error.
 func TestInventoryReconcilerWithoutTheSecret(t *testing.T) {
-	r, c, clk, restarter := newInventoryReconciler(t, "certificate")
+	r, c, clk, _, _ := newInventoryReconciler(t, "certificate")
 	if err := c.Delete(context.Background(), &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
 		Namespace: batteryClientSecret.Namespace, Name: batteryClientSecret.Name,
 	}}); err != nil {
 		t.Fatal(err)
 	}
 	reconcileExpecting(t, r, clk, 0)
-	if len(restarter.restarts) != 0 {
-		t.Errorf("restarts = %d, want none", len(restarter.restarts))
-	}
 }
 
 // TestNodeReportChanged checks which Node updates reach the controller.
@@ -177,7 +224,7 @@ func TestNodeReportChanged(t *testing.T) {
 		return &corev1.Node{ObjectMeta: metav1.ObjectMeta{
 			Name:        nodeA,
 			Labels:      map[string]string{"pool": "fast"},
-			Annotations: map[string]string{inventory.AnnotationReady: "true"},
+			Annotations: map[string]string{inventory.AnnotationReady: reportReady},
 		}}
 	}
 	for name, tc := range map[string]struct {

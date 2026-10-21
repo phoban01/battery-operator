@@ -31,11 +31,15 @@ tmp=$(mktemp)
 trap 'rm -f "$tmp"' EXIT
 
 # check MODEL INVARIANT [WITNESS...]
+#
+# INIT and STEP, when set, name the model's init and step actions (quint
+# run's defaults are init and step).
 check() {
   local model=$1 invariant=$2
   shift 2
-  echo "==> quint run $model --invariant $invariant"
-  if ! "$QUINT" run "$model" --invariant "$invariant" --witnesses "$@" \
+  local actions=(--init "${INIT:-init}" --step "${STEP:-step}")
+  echo "==> quint run $model ${actions[*]} --invariant $invariant"
+  if ! "$QUINT" run "$model" "${actions[@]}" --invariant "$invariant" --witnesses "$@" \
       --max-steps "$QUINT_MAX_STEPS" --max-samples "$QUINT_MAX_SAMPLES" "${seed[@]}" >"$tmp" 2>&1; then
     cat "$tmp"
     echo "FAIL $model: quint run failed or found a violation of $invariant" >&2
@@ -74,10 +78,16 @@ check specs/quint/certificates.qnt safety \
   witnessKubeletLieRefused witnessRepinned
 
 check specs/quint/pools.qnt safety \
-  witnessFlapAbsorbed witnessRestart witnessBatchedRestart witnessTwoRestarts \
-  witnessRenewalRestart witnessRenewalWithHostChange \
+  witnessFlapAbsorbed witnessCordoned witnessUncordoned \
+  witnessRemoved witnessRemovalRefused witnessUpgradedHost witnessPlaceholderRemoved \
+  witnessRenewalRefreshed \
   witnessVMOnFormerHost witnessPlacementUpdated witnessNoEligibleHost \
-  witnessPoolDeleted witnessDrainedForPool witnessRejectedWithoutHost \
+  witnessPoolDeleted witnessRejectedWithoutHost witnessPoolDrained
+
+# A Pool that claims hold through its deletion takes a long interleaving,
+# which the full step relation reaches too seldom to rely on: this run
+# leaves out the Node, Pool spec and certificate steps.
+INIT=initPools STEP=stepPoolDeletion check specs/quint/pools.qnt safety \
   witnessPoolDrained witnessDeletionWaitsForClaim
 
 # The traces the Claim Controller's replay test replays are the ones the

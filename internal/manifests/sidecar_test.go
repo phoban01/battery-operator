@@ -31,6 +31,7 @@ import (
 
 	"github.com/phoban01/battery-operator/internal/battery"
 	"github.com/phoban01/battery-operator/internal/batterysidecar"
+	"github.com/phoban01/battery-operator/internal/controller/inventory"
 )
 
 // batteryImage is battery's published image at the version go.mod pins,
@@ -180,46 +181,40 @@ func TestBatteryDatabaseOnPersistentVolume(t *testing.T) {
 
 //= docs/requirements/06-deployment.md#battery-sidecar
 //= type=test
-//# The Manifests SHALL supply battery's configuration, its Hosts
-//# included, from an object the Operator may write.
+//# The Manifests SHALL supply battery's configuration from a
+//# ConfigMap that names no Hosts.
 
 // TestBatteryConfigFromConfigMap checks that battery reads its
-// configuration from a ConfigMap the Operator may update, the one its
-// --battery-config-map names, mounted in both containers from the same
-// volume at the path the Operator's --battery-config-file names; and that
-// what ships is what the Inventory Controller renders for no Hosts.
+// configuration from a ConfigMap, the one batterysidecar.DefaultConfigMap
+// names, at batterysidecar.DefaultConfigFile; that what ships is Render's
+// output, which names no Hosts, since battery v0.5.0 refuses a file that
+// does (BA-087); and that the Operator neither mounts it nor may write it,
+// since battery's Hosts reach it through its HostAdmin API.
 func TestBatteryConfigFromConfigMap(t *testing.T) {
 	t.Parallel()
 	objs := build(t, "config/default")
 	d, manager, bat := operator(t, objs)
 	cm, _ := batteryConfig(t, objs, d, bat)
 
-	want, err := batterysidecar.Render(nil)
+	want, err := batterysidecar.Render()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := cm.Data[batterysidecar.ConfigKey]; got != string(want) {
-		t.Errorf("the shipped configuration is not Render(nil):\n%s\nwant:\n%s", got, want)
+		t.Errorf("the shipped configuration is not Render():\n%s\nwant:\n%s", got, want)
 	}
-
-	if name, _ := flag(manager.Args, "battery-config-map"); name != cm.Name || name != batterysidecar.DefaultConfigMap {
-		t.Errorf("the Operator writes ConfigMap %q; battery reads %s; the default is %s", name, cm.Name, batterysidecar.DefaultConfigMap)
+	if strings.Contains(cm.Data[batterysidecar.ConfigKey], `"hosts"`) {
+		t.Error("the shipped configuration names Hosts")
 	}
-	file, _ := flag(manager.Args, "battery-config-file")
-	batFile, _ := flag(bat.Args, "config")
-	if file != batFile || file != batterysidecar.DefaultConfigFile {
-		t.Errorf("the Operator reads %q, battery %q; want both %s", file, batFile, batterysidecar.DefaultConfigFile)
+	if cm.Name != batterysidecar.DefaultConfigMap {
+		t.Errorf("battery reads ConfigMap %s, want %s", cm.Name, batterysidecar.DefaultConfigMap)
 	}
-	if mountAt(t, manager, path.Dir(file)).Name != mountAt(t, bat, path.Dir(batFile)).Name {
-		t.Error("the Operator and battery mount battery's configuration from different volumes")
+	if file, _ := flag(bat.Args, "config"); file != batterysidecar.DefaultConfigFile {
+		t.Errorf("battery reads %q, want %s", file, batterysidecar.DefaultConfigFile)
 	}
-
-	operatorSA := serviceAccount(operatorNamespace, d.Spec.Template.Spec.ServiceAccountName)
-	for _, verb := range []string{verbGet, verbUpdate} {
-		if !slices.ContainsFunc(grants(t, objs), func(g grant) bool {
-			return g.subject == operatorSA && g.allows(operatorNamespace, "", "configmaps", verb, cm.Name)
-		}) {
-			t.Errorf("the Operator may not %s ConfigMap %s", verb, cm.Name)
+	for _, m := range manager.VolumeMounts {
+		if v := volume(t, d, m.Name); v.ConfigMap != nil && v.ConfigMap.Name == cm.Name {
+			t.Errorf("the Operator mounts battery's configuration at %s", m.MountPath)
 		}
 	}
 }
@@ -230,15 +225,15 @@ func TestBatteryConfigFromConfigMap(t *testing.T) {
 //# certificate and key for `flintlockd` and the certificate authority that
 //# verifies the Hosts' `flintlockd` serving certificates.
 
-// TestBatteryTLSFromSecrets checks that the files battery's configuration
-// names for every Host are mounted from Secrets: its client certificate and
-// key from the Secret cert-manager issues its certificate into, and the
-// serving CA's certificate, without its key, from the serving CA's Secret.
+// TestBatteryTLSFromSecrets checks that the files the Inventory Controller
+// names for every Host (inventory.TLS) are mounted from Secrets: battery's
+// client certificate and key from the Secret cert-manager issues its
+// certificate into, and the serving CA's certificate, without its key,
+// from the serving CA's Secret.
 func TestBatteryTLSFromSecrets(t *testing.T) {
 	t.Parallel()
 	objs := build(t, "config/default")
 	d, _, bat := operator(t, objs)
-	_, f := batteryConfig(t, objs, d, bat)
 	clientSecret := one[certificate](t, objs, "Certificate", "battery-operator-battery-flintlockd-client").Spec.SecretName
 	servingCASecret := one[certificate](t, objs, "Certificate", "battery-operator-flintlockd-serving-ca").Spec.SecretName
 
@@ -270,63 +265,38 @@ func TestBatteryTLSFromSecrets(t *testing.T) {
 	if len(files) != len(want) {
 		t.Errorf("battery's TLS volume holds %v, want exactly %v", files, want)
 	}
-	if len(f.Hosts) == 0 {
-		t.Fatal("battery's configuration has no Hosts")
-	}
-	for _, h := range f.Hosts {
-		tls := h.TLS
-		if tls.Insecure || tls.CertFile != batterysidecar.ClientCertFile || tls.KeyFile != batterysidecar.ClientKeyFile ||
-			tls.CAFile != batterysidecar.ServingCAFile {
-			t.Errorf("host %s is reached with %+v, not the mounted client certificate and serving CA", h.Name, tls)
-		}
+	tls := inventory.TLS
+	if tls.Insecure || tls.CertFile != batterysidecar.ClientCertFile || tls.KeyFile != batterysidecar.ClientKeyFile ||
+		tls.CAFile != batterysidecar.ServingCAFile {
+		t.Errorf("Hosts are given %+v, not the mounted client certificate and serving CA", tls)
 	}
 }
 
-//= docs/requirements/06-deployment.md#battery-sidecar
-//= type=test
-//# The Operator SHALL restart battery through a single mechanism
-//# that the Inventory Controller invokes, and SHALL wait until battery answers
-//# again before any controller calls it.
-
-// TestRestartMechanism checks what the Restarter needs of the pod: a shared
-// process namespace, the two containers as the same user, and battery run
-// as the process the Restarter looks for, restarted by the kubelet when it
-// exits.
-func TestRestartMechanism(t *testing.T) {
+// TestNoSharedProcessNamespace checks that the Operator's pod does not
+// share its process namespace: nothing restarts battery since it takes its
+// Hosts through its HostAdmin API (ADR 0008), and a shared namespace would
+// let each container read the other's environment and files.
+func TestNoSharedProcessNamespace(t *testing.T) {
 	t.Parallel()
 	d, manager, bat := operator(t, build(t, "config/default"))
 	spec := d.Spec.Template.Spec
-	if spec.ShareProcessNamespace == nil || !*spec.ShareProcessNamespace {
-		t.Error("the Operator's pod does not share its process namespace")
-	}
-	if spec.SecurityContext == nil || spec.SecurityContext.RunAsUser == nil {
-		t.Fatal("the pod does not name the user its containers run as")
+	if spec.ShareProcessNamespace != nil && *spec.ShareProcessNamespace {
+		t.Error("the Operator's pod shares its process namespace")
 	}
 	for _, c := range []corev1.Container{manager, bat} {
-		if c.SecurityContext != nil && (c.SecurityContext.RunAsUser != nil || c.SecurityContext.RunAsGroup != nil) {
-			t.Errorf("the %s container runs as its own user", c.Name)
-		}
 		if c.SecurityContext == nil || c.SecurityContext.Capabilities == nil ||
 			!slices.Contains(c.SecurityContext.Capabilities.Drop, "ALL") || len(c.SecurityContext.Capabilities.Add) != 0 {
-			t.Errorf("the %s container keeps capabilities; the same user needs none to signal", c.Name)
+			t.Errorf("the %s container keeps capabilities", c.Name)
 		}
-	}
-	if path.Base(strings.TrimSpace(firstOr(bat.Command, "/"+batterysidecar.ProcessName))) != batterysidecar.ProcessName {
-		t.Errorf("battery runs %v, not %s", bat.Command, batterysidecar.ProcessName)
-	}
-	if spec.RestartPolicy != "" && spec.RestartPolicy != corev1.RestartPolicyAlways {
-		t.Errorf("the pod's restart policy is %s; the kubelet has to start battery again", spec.RestartPolicy)
 	}
 }
 
 //= docs/requirements/06-deployment.md#battery-sidecar
 //= type=test
-//# When the client certificate in the Secret of DP-005 changes,
-//# the Operator SHALL restart battery through the mechanism of DP-006, and
-//# SHALL signal battery only once the Operator's own mount of that Secret
-//# holds the new certificate.
+//# once the Operator's own mount of that Secret holds the
+//# certificate the Secret holds.
 
-// TestOperatorWatchesBatteryClientCertificate checks what a restart for a
+// TestOperatorWatchesBatteryClientCertificate checks what reloading a
 // renewed client certificate needs of the Manifests: the Operator watches
 // the Secret cert-manager issues battery's certificate into, the one its
 // --battery-client-secret names, and may read no other Secret by that
@@ -364,15 +334,6 @@ func TestOperatorWatchesBatteryClientCertificate(t *testing.T) {
 			t.Errorf("the Operator may read any Secret in its namespace: %+v", g.rule)
 		}
 	}
-}
-
-// firstOr returns list's first element, or def when it is empty: an image's
-// entrypoint when a container overrides no command.
-func firstOr(list []string, def string) string {
-	if len(list) == 0 {
-		return def
-	}
-	return list[0]
 }
 
 // ptrString renders an optional count.

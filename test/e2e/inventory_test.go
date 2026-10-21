@@ -19,10 +19,12 @@ limitations under the License.
 package e2e
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"maps"
+	"net"
+	"os/exec"
+	"strconv"
 	"testing"
 	"time"
 
@@ -31,59 +33,88 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
 	"sigs.k8s.io/e2e-framework/pkg/features"
-	"sigs.k8s.io/yaml"
 
+	"github.com/phoban01/battery-operator/internal/battery"
+	"github.com/phoban01/battery-operator/internal/batterysidecar"
 	"github.com/phoban01/battery-operator/internal/controller/inventory"
 )
 
 // batteryContainer is battery's container in the Operator's pod.
 const batteryContainer = "battery"
 
-// quietPeriod is how long battery is watched for a restart after its Hosts
-// are back: several times the settle time and restart window of the
-// suite's overlay (config/manager-inventory-timing.yaml), so that a restart
-// the Inventory Controller decided on would have come.
+// quietPeriod is how long battery is watched for a restart after the
+// Manifests are applied again: several times the settle time of the
+// suite's overlay (config/manager-inventory-timing.yaml).
 const quietPeriod = 30 * time.Second
 
-// TestReapplyingTheManifestsKeepsBatteryHosts: once battery runs with the
-// kind workers, applying the Manifests again, server-side by force as an
-// upgrade does and then client-side, resets battery's ConfigMap, and the
-// Inventory Controller writes battery's Hosts back without restarting
-// battery.
-func TestReapplyingTheManifestsKeepsBatteryHosts(t *testing.T) {
-	testenv.Test(t, features.New("Re-applying the Manifests").
-		Assess("battery's Hosts are written back, and battery is not restarted", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
-			//= docs/requirements/04-inventory.md#keeping
+// TestInventoryThroughHostAdmin: battery holds the kind workers with mutual
+// TLS; a cordoned worker's Host is cordoned in battery and kept, and
+// uncordoned with the Node; and applying the Manifests again changes
+// nothing battery runs with, and restarts nothing.
+func TestInventoryThroughHostAdmin(t *testing.T) {
+	testenv.Test(t, features.New("battery's Hosts through its HostAdmin API").
+		Assess("battery holds every Host, with mutual TLS", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+			//= docs/requirements/04-inventory.md#applying
 			//= type=test
-			//# If battery's configuration names Hosts other than those the
-			//# Inventory Controller last wrote to it, then the Inventory Controller SHALL
-			//# write those Hosts back to battery's configuration without restarting
-			//# battery.
+			//# While a Node is a Host, the Inventory Controller SHALL keep a
+			//# Host of the Node's name in battery, uncordoned, at the Node's `flintlockd`
+			//# address and with the TLS settings of IN-004, adding it with `AddHost`,
+			//# and changing its address or TLS settings with `UpdateHost` and uncordoning
+			//# it with `UncordonHost` wherever battery's Host differs.
 			c := mustClient(t, cfg)
-			s := settingsFromEnv()
 			want := readyHosts(ctx, t, c)
-			waitForBatteryHosts(ctx, t, c, want, "")
+			held := waitForBatteryHosts(ctx, t, cfg, want)
+			for _, h := range held {
+				if h.Host.TLS != inventory.TLS {
+					t.Errorf("battery reaches %s with %+v, want %+v", h.Host.Name, h.Host.TLS, inventory.TLS)
+				}
+			}
+			return ctx
+		}).
+		Assess("a cordoned Node's Host is cordoned in battery, and back with the Node", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+			//= docs/requirements/04-inventory.md#admission
+			//= type=test
+			//# When a Node that is a Host is cordoned, or its Node report
+			//# says the Host is not ready or gives no `flintlockd` address, the
+			//# Inventory Controller SHALL cordon the Host in battery with `CordonHost`,
+			//# and SHALL keep it in battery's Hosts.
+			c := mustClient(t, cfg)
+			want := readyHosts(ctx, t, c)
+			nodes, err := hostNodes(ctx, c)
+			if err != nil || len(nodes) == 0 {
+				t.Fatalf("listing the Hosts: %v", err)
+			}
+			name := nodes[0].Name
 			restarts := batteryRestarts(ctx, t, c)
+			setUnschedulable(ctx, t, c, name, true)
+			t.Cleanup(func() { setUnschedulable(context.Background(), t, c, name, false) })
 
-			before := batteryConfigMapVersion(ctx, t, c)
-			manifests, err := applyManifests(ctx, cfg, s)
-			if err != nil {
+			cordoned := maps.Clone(want)
+			delete(cordoned, name)
+			held := waitForBatteryHosts(ctx, t, cfg, cordoned)
+			if _, ok := held[name]; !ok {
+				t.Fatalf("battery no longer holds %s", name)
+			}
+
+			setUnschedulable(ctx, t, c, name, false)
+			waitForBatteryHosts(ctx, t, cfg, want)
+			if got := batteryRestarts(ctx, t, c); got != restarts {
+				t.Errorf("battery restarted %d times, want none", got-restarts)
+			}
+			return ctx
+		}).
+		Assess("applying the Manifests again changes nothing battery runs with", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+			//= docs/requirements/06-deployment.md#battery-sidecar
+			//= type=test
+			//# The Manifests SHALL supply battery's configuration from a
+			//# ConfigMap that names no Hosts.
+			c := mustClient(t, cfg)
+			want := readyHosts(ctx, t, c)
+			waitForBatteryHosts(ctx, t, cfg, want)
+			restarts := batteryRestarts(ctx, t, c)
+			if err := applyManifests(ctx, cfg, settingsFromEnv()); err != nil {
 				t.Fatal(err)
 			}
-			waitForBatteryHosts(ctx, t, c, want, before)
-
-			before = batteryConfigMapVersion(ctx, t, c)
-			cm, err := shippedBatteryConfigMap(manifests)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if _, err := run(ctx, cm, s.kubectl, "--kubeconfig", cfg.KubeconfigFile(), "apply", "-f", "-"); err != nil {
-				t.Fatalf("applying battery's ConfigMap client-side: %v", err)
-			}
-			waitForBatteryHosts(ctx, t, c, want, before)
-
-			// Nothing restarts battery for it, then or once a settle time
-			// and a restart window have passed.
 			deadline := time.Now().Add(quietPeriod)
 			for time.Now().Before(deadline) {
 				if got := batteryRestarts(ctx, t, c); got != restarts {
@@ -91,51 +122,119 @@ func TestReapplyingTheManifestsKeepsBatteryHosts(t *testing.T) {
 				}
 				time.Sleep(2 * time.Second)
 			}
-			if got, err := batteryHosts(ctx, c); err != nil || !maps.Equal(got, want) {
-				t.Fatalf("battery's Hosts are %v (%v), want %v", got, err, want)
+			if got, err := batteryHosts(ctx, cfg); err != nil || !maps.Equal(got, want) {
+				t.Fatalf("battery places on %v (%v), want %v", got, err, want)
 			}
 			return ctx
 		}).
 		Feature())
 }
 
-// waitForBatteryHosts waits until battery's ConfigMap names want and no
-// restart of battery is pending, and, unless changedFrom is empty, until
-// its resourceVersion is no longer changedFrom: the ConfigMap has been
-// written since.
-func waitForBatteryHosts(ctx context.Context, t *testing.T, c client.Client, want map[string]string, changedFrom string) {
+// setUnschedulable cordons or uncordons a Node, as kubectl cordon does.
+func setUnschedulable(ctx context.Context, t *testing.T, c client.Client, name string, unschedulable bool) {
 	t.Helper()
-	var got map[string]string
-	var cm corev1.ConfigMap
-	err := wait.PollUntilContextTimeout(ctx, time.Second, placementTimeout, true, func(ctx context.Context) (bool, error) {
-		if err := c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: batteryConfigMap}, &cm); err != nil {
-			return false, nil
-		}
-		var err error
-		if got, err = batteryHosts(ctx, c); err != nil {
-			return false, nil
-		}
-		return maps.Equal(got, want) && cm.Annotations[inventory.RestartPendingAnnotation] == "" &&
-			(changedFrom == "" || cm.ResourceVersion != changedFrom), nil
-	})
-	if err != nil {
-		t.Fatalf("battery's Hosts are %v, want %v; annotations %v", got, want, cm.Annotations)
+	n := &corev1.Node{}
+	if err := c.Get(ctx, client.ObjectKey{Name: name}, n); err != nil {
+		t.Fatal(err)
+	}
+	patch := client.MergeFrom(n.DeepCopy())
+	n.Spec.Unschedulable = unschedulable
+	if err := c.Patch(ctx, n, patch); err != nil {
+		t.Fatalf("setting %s unschedulable=%v: %v", name, unschedulable, err)
 	}
 }
 
-// batteryConfigMapVersion is battery's ConfigMap's resourceVersion.
-func batteryConfigMapVersion(ctx context.Context, t *testing.T, c client.Client) string {
-	t.Helper()
-	var cm corev1.ConfigMap
-	if err := c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: batteryConfigMap}, &cm); err != nil {
-		t.Fatal(err)
+// batteryHostStatuses reads battery's Hosts through its HostAdmin API.
+// battery listens on loopback in the Operator's pod (DP-001), so the call
+// goes over a port-forward to the pod, which reaches that loopback, and
+// the battery client's loopback check passes on this side.
+func batteryHostStatuses(ctx context.Context, cfg *envconf.Config) ([]*battery.HostStatus, error) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return nil, err
 	}
-	return cm.ResourceVersion
+	port := l.Addr().(*net.TCPAddr).Port
+	_ = l.Close()
+	_, remote, err := net.SplitHostPort(batterysidecar.APIAddress)
+	if err != nil {
+		return nil, err
+	}
+
+	pfCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	pf := exec.CommandContext(pfCtx, settingsFromEnv().kubectl, "--kubeconfig", cfg.KubeconfigFile(),
+		"--namespace", namespace, "port-forward", "deployment/"+operatorDeployment,
+		strconv.Itoa(port)+":"+remote)
+	if err := pf.Start(); err != nil {
+		return nil, fmt.Errorf("port-forward: %w", err)
+	}
+	defer func() { cancel(); _ = pf.Wait() }()
+
+	address := net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
+	if err := wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 15*time.Second, true, func(context.Context) (bool, error) {
+		conn, err := net.DialTimeout("tcp", address, time.Second)
+		if err != nil {
+			return false, nil
+		}
+		_ = conn.Close()
+		return true, nil
+	}); err != nil {
+		return nil, fmt.Errorf("port-forward to battery did not open: %w", err)
+	}
+	conn, err := battery.Dial(battery.Config{Address: address})
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = conn.Close() }()
+	return conn.ListHosts(ctx)
+}
+
+// batteryHosts are the Hosts battery places on, held and uncordoned, by
+// name, with their addresses.
+func batteryHosts(ctx context.Context, cfg *envconf.Config) (map[string]string, error) {
+	held, err := batteryHostStatuses(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]string{}
+	for _, h := range held {
+		if !h.Host.Cordoned {
+			out[h.Host.Name] = h.Host.Address
+		}
+	}
+	return out, nil
+}
+
+// waitForBatteryHosts waits until battery places on want, and returns every
+// Host battery holds, by name.
+func waitForBatteryHosts(ctx context.Context, t *testing.T, cfg *envconf.Config, want map[string]string) map[string]*battery.HostStatus {
+	t.Helper()
+	var got map[string]string
+	var held map[string]*battery.HostStatus
+	var lastErr error
+	err := wait.PollUntilContextTimeout(ctx, 2*time.Second, placementTimeout, true, func(ctx context.Context) (bool, error) {
+		statuses, err := batteryHostStatuses(ctx, cfg)
+		if err != nil {
+			lastErr = err
+			return false, nil
+		}
+		got, held = map[string]string{}, map[string]*battery.HostStatus{}
+		for _, h := range statuses {
+			held[h.Host.Name] = h
+			if !h.Host.Cordoned {
+				got[h.Host.Name] = h.Host.Address
+			}
+		}
+		return maps.Equal(got, want), nil
+	})
+	if err != nil {
+		t.Fatalf("battery places on %v, want %v (last error %v)", got, want, lastErr)
+	}
+	return held
 }
 
 // batteryRestarts is how many times battery's container has restarted in
-// the Operator's pod; the Inventory Controller's restarts of battery are
-// among them.
+// the Operator's pod.
 func batteryRestarts(ctx context.Context, t *testing.T, c client.Client) int32 {
 	t.Helper()
 	var pods corev1.PodList
@@ -153,24 +252,4 @@ func batteryRestarts(ctx context.Context, t *testing.T, c client.Client) int32 {
 	}
 	t.Fatalf("the Operator's pod has no container %s", batteryContainer)
 	return 0
-}
-
-// shippedBatteryConfigMap is battery's ConfigMap from the Manifests, alone.
-func shippedBatteryConfigMap(manifests []byte) ([]byte, error) {
-	for doc := range bytes.SplitSeq(manifests, []byte("\n---\n")) {
-		var obj struct {
-			Kind     string `json:"kind"`
-			Metadata struct {
-				Name      string `json:"name"`
-				Namespace string `json:"namespace"`
-			} `json:"metadata"`
-		}
-		if err := yaml.Unmarshal(doc, &obj); err != nil {
-			return nil, err
-		}
-		if obj.Kind == "ConfigMap" && obj.Metadata.Name == batteryConfigMap && obj.Metadata.Namespace == namespace {
-			return doc, nil
-		}
-	}
-	return nil, fmt.Errorf("the Manifests have no ConfigMap %s/%s", namespace, batteryConfigMap)
 }

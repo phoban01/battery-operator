@@ -23,7 +23,10 @@ fake battery and the models follow it.
 
 Links point at the tag, so line numbers stay valid. Where battery v0.4.0
 changed an assumption that held for v0.3.3, the section says so; see also
-[Changes since v0.3.3](#since-v033).
+[Changes since v0.3.3](#since-v033). The one exception is
+[Hosts](#hosts): battery's `HostAdmin` API for adding and removing Hosts
+is on battery's `main` branch and not yet released, so its links point at
+the commit the Operator builds against, until battery v0.5.0.
 
 ## Claiming {#claiming}
 
@@ -262,9 +265,7 @@ Lease is warned again
 
 - **BA-060** battery SHALL keep its Pools, MicroVMs and Leases across a
   restart, in its database.
-- **BA-061** battery SHALL read the client certificate, key and certificate
-  authority of each Host's TLS configuration only when it starts, and SHALL
-  present that client certificate to the Host until it exits.
+- **BA-061** (withdrawn): replaced by BA-081.
 - **BA-062** When battery starts on a database that battery v0.3.3 wrote,
   battery SHALL migrate the database's schema before it serves, and SHALL
   keep the Pools, MicroVMs and Leases in it.
@@ -291,16 +292,17 @@ file changes, so every Pool, MicroVM and Lease comes through. battery
 refuses a database whose version is newer than its own migrations list,
 so a later battery that adds a migration cannot be rolled back over a
 migrated database; v0.3.3 reads no version at all, and its queries name
-their columns, so a rollback from v0.4.0 to v0.3.3 works. The e2e suite
-upgrades a running Operator from the v0.3.3 sidecar to v0.4.0 with a
-claim Bound (test/e2e).
+their columns, so a rollback from v0.4.0 to v0.3.3 works. Until #198 the
+e2e suite upgraded a running Operator from the v0.3.3 sidecar to v0.4.0
+with a claim Bound. It now upgrades from the Operator's previous release,
+with battery v0.4.0, to the suite's Operator and battery, whose second
+migration adds the Hosts' TLS settings (BA-086).
 
-`flintlockclient.New` builds each Host's transport credentials once, at
-startup, from a `tls.Config` whose `Certificates` hold the key pair read
-then; nothing reads the files again. poolmgrd handles only SIGINT and
-SIGTERM, both of which stop it, and watches no file, so a renewed
-certificate reaches the Hosts only through a restart (06-deployment.md,
-DP-007). The same holds for the certificate authority in `ca_file`.
+battery v0.4.0 built each Host's transport credentials once, at startup,
+and nothing read the files again, so a renewed certificate reached the
+Hosts only through a restart (BA-061, withdrawn). Since battery's main
+branch at `a5884a5`, it reads them each time it connects to a Host, and
+`UpdateHost` makes it connect again (BA-081; 06-deployment.md, DP-035).
 
 ## Deleting a Pool {#delete-pool}
 
@@ -429,6 +431,78 @@ A Pool whose template sets a static address or MAC is kept to one live
 MicroVM, and battery refuses such a template unless the Pool can never
 hold two.
 
+## Hosts {#hosts}
+
+- **BA-080** When `AddHost` names a Host battery does not hold, battery
+  SHALL store the Host uncordoned, with the address and TLS settings the
+  request gives, and, unless the request sets `skip_validation`, SHALL
+  first connect to the Host and check its `flintlockd` version, answering
+  `FAILED_PRECONDITION` and storing nothing if either fails.
+- **BA-081** battery SHALL read a Host's client certificate, key and
+  certificate authority each time it connects to the Host, which it does
+  when it starts and in `AddHost` and `UpdateHost`, and SHALL present that
+  certificate to the Host until it next connects to it.
+- **BA-082** If `CreatePool` or `UpdatePool` names in `flintlock_hosts` a
+  Host battery does not hold, then battery SHALL refuse the call with
+  `INVALID_ARGUMENT`.
+- **BA-083** If `RemoveHost` names a Host that a Pool names in its
+  `flintlock_hosts`, or that has a MicroVM in any phase or a placement in
+  flight, then battery SHALL refuse the call with `FAILED_PRECONDITION`,
+  and SHALL keep the Host.
+- **BA-084** battery SHALL place no new MicroVM on a cordoned Host, and
+  SHALL leave the MicroVMs already on it as they are.
+- **BA-085** If `AddHost` names a Host battery already holds, then battery
+  SHALL answer `ALREADY_EXISTS`, and SHALL leave the Host as it is.
+- **BA-086** When battery starts on a database that battery v0.4.0 wrote,
+  battery SHALL keep the Hosts in it, with no TLS settings, and SHALL read no
+  Host from its configuration file.
+- **BA-087** If battery's configuration file has a `hosts` key, then battery
+  SHALL refuse to start.
+- **BA-088** If `UpdateHost`, `RemoveHost` or `GetHost` names a Host
+  battery does not hold, then battery SHALL answer `NOT_FOUND`.
+- **BA-089** battery SHALL keep a Host's cordon state across `UpdateHost`,
+  and SHALL answer `CordonHost` on a cordoned Host, and `UncordonHost` on an
+  uncordoned one, with the Host and no error.
+
+| ID | Source at [`a5884a5`](https://github.com/liquidmetal-dev/battery/tree/a5884a5a6d3ec48631b3ea4f27b1a9158ececaf2) |
+|----|------------------|
+| BA-080 | [`internal/api/hostadmin.go`, `AddHost`, L168-L223, `dialHost`, L354-L375](https://github.com/liquidmetal-dev/battery/blob/a5884a5a6d3ec48631b3ea4f27b1a9158ececaf2/internal/api/hostadmin.go#L168-L375) |
+| BA-081 | [`internal/flintlockclient/pool.go`, `Dial`, L58, `dialCredentials`, L287-L315](https://github.com/liquidmetal-dev/battery/blob/a5884a5a6d3ec48631b3ea4f27b1a9158ececaf2/internal/flintlockclient/pool.go#L58-L315); [`cmd/poolmgrd/main.go`, `buildFlintlockPool`, L202](https://github.com/liquidmetal-dev/battery/blob/a5884a5a6d3ec48631b3ea4f27b1a9158ececaf2/cmd/poolmgrd/main.go#L202) |
+| BA-082 | [`internal/api/pooladmin.go`, `checkFlintlockHosts`, L146, `CreatePool`, L211, `UpdatePool`, L300](https://github.com/liquidmetal-dev/battery/blob/a5884a5a6d3ec48631b3ea4f27b1a9158ececaf2/internal/api/pooladmin.go#L146-L300) |
+| BA-083 | [`internal/api/hostadmin.go`, `RemoveHost`, L296-L335](https://github.com/liquidmetal-dev/battery/blob/a5884a5a6d3ec48631b3ea4f27b1a9158ececaf2/internal/api/hostadmin.go#L296-L335); [`internal/store/sqlite.go`, `DeleteHost`, L870](https://github.com/liquidmetal-dev/battery/blob/a5884a5a6d3ec48631b3ea4f27b1a9158ececaf2/internal/store/sqlite.go#L870) |
+| BA-084 | [`internal/reconciler/hostpick.go`, `ineligibleHosts`, L68-L90](https://github.com/liquidmetal-dev/battery/blob/a5884a5a6d3ec48631b3ea4f27b1a9158ececaf2/internal/reconciler/hostpick.go#L68-L90); [`internal/store/sqlite.go`, `ReservePlacement`, L996](https://github.com/liquidmetal-dev/battery/blob/a5884a5a6d3ec48631b3ea4f27b1a9158ececaf2/internal/store/sqlite.go#L996) |
+| BA-085 | [`internal/api/hostadmin.go`, `AddHost`, L187-L198](https://github.com/liquidmetal-dev/battery/blob/a5884a5a6d3ec48631b3ea4f27b1a9158ececaf2/internal/api/hostadmin.go#L187-L198) |
+| BA-086 | [`internal/store/sqlite.go`, `migrations`, L63-L77](https://github.com/liquidmetal-dev/battery/blob/a5884a5a6d3ec48631b3ea4f27b1a9158ececaf2/internal/store/sqlite.go#L63-L77); [`cmd/poolmgrd/main.go`, L106-L112](https://github.com/liquidmetal-dev/battery/blob/a5884a5a6d3ec48631b3ea4f27b1a9158ececaf2/cmd/poolmgrd/main.go#L106-L112) |
+| BA-087 | [`internal/config/config.go`, `Load`, L47-L60](https://github.com/liquidmetal-dev/battery/blob/a5884a5a6d3ec48631b3ea4f27b1a9158ececaf2/internal/config/config.go#L47-L60) |
+| BA-088 | [`internal/api/hostadmin.go`, `GetHost`, L136, `UpdateHost`, L229, `RemoveHost`, L296](https://github.com/liquidmetal-dev/battery/blob/a5884a5a6d3ec48631b3ea4f27b1a9158ececaf2/internal/api/hostadmin.go#L136-L335) |
+| BA-089 | [`internal/api/hostadmin.go`, `CordonHost`, L79, `UncordonHost`, L97, `UpdateHost`, L229](https://github.com/liquidmetal-dev/battery/blob/a5884a5a6d3ec48631b3ea4f27b1a9158ececaf2/internal/api/hostadmin.go#L79-L280) |
+
+These hold on battery's `main` branch at the commit above, which the
+Operator builds against until battery v0.5.0 is released; the links then
+move to the tag. battery's
+[ADR `2026-09-24-host-api.md`](https://github.com/liquidmetal-dev/battery/blob/a5884a5a6d3ec48631b3ea4f27b1a9158ececaf2/docs/adr/2026-09-24-host-api.md)
+gives the design.
+
+battery keeps its Hosts in its database (BA-086), with each Host's address,
+TLS settings and cordon state. The TLS settings are file paths, read in
+battery's container, not certificates. Because battery reads the client
+certificate when it connects (BA-081), `UpdateHost` with the same settings
+is how a renewed certificate reaches a Host: battery connects again and
+closes the old connection, so a call in flight on it fails.
+
+battery checks Pools and Hosts against each other both ways: a Pool may
+name only Hosts battery holds (BA-082), and a Host stays while any Pool
+names it or anything is still on it (BA-083). A cordoned Host is how a Host
+leaves service with MicroVMs still on it: battery stops placing there
+(BA-084), and the Host can be removed once nothing is left on it.
+
+A database from battery v0.4.0 holds the Hosts that v0.4.0 copied from its
+configuration file when it started, without TLS settings, and migration 2
+adds empty columns for them. battery v0.5.0 cannot connect to such a Host,
+and skips it with a warning, until `UpdateHost` gives it settings (BA-086).
+The Hosts a v0.4.0 configuration file once named, and no longer does, are
+in the database too: v0.4.0 never removed a Host from it.
+
 ## Where the stand-ins differ {#stand-ins}
 
 The fake battery meets every assumption above except these, each cited
@@ -436,11 +510,13 @@ in its code as an exception:
 
 - it sweeps once when it starts (BA-022), which is how a fresh Pool fills,
   and its state does not survive a restart (BA-060), so it has no
-  database to migrate (BA-062);
+  database to migrate (BA-062, BA-086), and it has no configuration file
+  (BA-087);
 - a new `Events` subscriber is replayed only the last events of each Pool
   (BA-050);
 - it reaches its Hosts over connections the test gives it, and reads no
-  certificate (BA-061);
+  certificate (BA-081); a Host is reachable for `AddHost` and `UpdateHost`
+  when the test's `Dial` gives a connection for its address (BA-080);
 - where a test sets `SeedOnce` (TD-007), its tick tops up an
   event-driven Pool only on the first tick after its `CreatePool` or
   `UpdatePool`, as battery v0.3.3 seeded such a Pool, where battery
@@ -487,7 +563,8 @@ Between the two versions (battery's release notes for v0.4.0):
 - battery reserves a placement before it creates a MicroVM, so that two
   provisions never over-fill a Host, and its `ListHosts` counts every
   MicroVM on a Host; a Host can be cordoned through a new `HostAdmin`
-  service, which the Operator does not use yet (#198).
+  service. Since #198 the Operator uses that service as battery's `main`
+  branch extends it (see [Hosts](#hosts)).
 - Every other assumption holds as it did, at other lines.
 
 The differences between v0.1.0 and v0.3.3 are in this document's history

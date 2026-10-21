@@ -17,13 +17,19 @@ limitations under the License.
 package inventory
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"maps"
+	"os"
 	"slices"
-	"time"
 
-	"github.com/phoban01/battery-operator/internal/batterysidecar"
+	corev1 "k8s.io/api/core/v1"
+
+	"github.com/phoban01/battery-operator/internal/battery"
 	"github.com/phoban01/battery-operator/internal/reconcile"
 )
 
@@ -35,75 +41,9 @@ const (
 	AnnotationReady             = "battery.liquidmetal-x.dev/exec-agent-ready"
 	AnnotationFlintlockdAddress = "battery.liquidmetal-x.dev/flintlockd-address"
 
-	// annotationTrue is the value of a true annotation: the Node report's
-	// readiness, and RestartPendingAnnotation.
+	// annotationTrue is the value of a true annotation.
 	annotationTrue = "true"
 )
-
-// Restore puts back battery's Hosts when something other than the
-// Inventory Controller has changed them in its configuration: applying the
-// Manifests again, which ship the configuration with no Hosts, is the case
-// it is for. battery already runs with the Hosts written last, since it
-// read its file when it started, so Restore rewrites the file alone and
-// does not restart battery. A restart that was pending stays pending, and
-// Resume finishes it with the Hosts put back.
-//
-// Where no Hosts are recorded as written, Restore records the Hosts the
-// configuration names: battery started with those.
-type Restore struct{}
-
-func (Restore) Reconcile(ctx context.Context, s *Scope) (reconcile.Result, error) {
-	if s.Config.Written == nil {
-		s.Config.Written = s.Config.Hosts.clone()
-		if err := s.Store.Save(ctx, s.Config); err != nil {
-			return reconcile.Result{Stop: true}, err
-		}
-		s.Log.Info("Recorded the Hosts battery's configuration names", "hosts", slices.Sorted(maps.Keys(s.Config.Hosts)))
-		return reconcile.Result{}, nil
-	}
-	if s.Config.Hosts.Equal(s.Config.Written) {
-		return reconcile.Result{}, nil
-	}
-
-	//= docs/requirements/04-inventory.md#keeping
-	//# If battery's configuration names Hosts other than those the
-	//# Inventory Controller last wrote to it, then the Inventory Controller SHALL
-	//# write those Hosts back to battery's configuration without restarting
-	//# battery.
-	raw, err := batterysidecar.Render(s.Config.Written.List())
-	if err != nil {
-		return reconcile.Result{Stop: true}, err
-	}
-	found := s.Config.Hosts
-	restored := s.Config
-	restored.Hosts = s.Config.Written.clone()
-	restored.Raw = raw
-	if err := s.Store.Save(ctx, restored); err != nil {
-		return reconcile.Result{Stop: true}, err
-	}
-	s.Config = restored
-	s.Log.Info("Restored battery's Hosts in its configuration, which something else had changed",
-		"hosts", slices.Sorted(maps.Keys(restored.Hosts)), "found", slices.Sorted(maps.Keys(found)))
-	return reconcile.Result{}, nil
-}
-
-// Resume finishes a restart a previous reconcile started and did not
-// finish: its configuration is written and marked pending. It then
-// publishes the Hosts battery runs with, if they have not been yet.
-type Resume struct{}
-
-func (Resume) Reconcile(ctx context.Context, s *Scope) (reconcile.Result, error) {
-	if s.Config.Pending {
-		s.Log.Info("Resumed restart of battery with a configuration written earlier", "hosts", slices.Sorted(maps.Keys(s.Config.Hosts)))
-		if err := restart(ctx, s); err != nil {
-			return reconcile.Result{Stop: true}, err
-		}
-	}
-	if !s.HostSet.Synced() {
-		s.HostSet.publish(s.Config.Hosts)
-	}
-	return reconcile.Result{}, nil
-}
 
 // Admit works out the Hosts the Nodes make now.
 type Admit struct{}
@@ -133,19 +73,17 @@ func (Admit) Reconcile(_ context.Context, s *Scope) (reconcile.Result, error) {
 	return reconcile.Result{}, nil
 }
 
-// Settle works out the Hosts battery should have: battery's current Hosts,
-// with every change that has held for the settle time applied. A change
-// is a Node becoming a Host, ceasing to be one, or its flintlockd address
-// moving.
-type Settle struct {
-	// Time is the settle time.
-	Time time.Duration
-}
+// Settle works out the Hosts battery should place on: the Hosts it places
+// on now, with every change that has held for the settle time applied. A
+// change is a Node becoming a Host, ceasing to be one, or its flintlockd
+// address moving.
+type Settle struct{}
 
-func (st Settle) Reconcile(_ context.Context, s *Scope) (reconcile.Result, error) {
+func (Settle) Reconcile(_ context.Context, s *Scope) (reconcile.Result, error) {
 	now := s.Clock.Now()
+	placeable := s.placeable()
 	names := map[string]bool{}
-	for _, m := range []map[string]string{s.Observed, s.Config.Hosts} {
+	for _, m := range []Hosts{s.Observed, placeable} {
 		for name := range m {
 			names[name] = true
 		}
@@ -158,16 +96,16 @@ func (st Settle) Reconcile(_ context.Context, s *Scope) (reconcile.Result, error
 	var res reconcile.Result
 	for name := range names {
 		observed := s.Observed[name] // "" when not a Host
-		configured := s.Config.Hosts[name]
+		current := placeable[name]   // "" when battery does not place on it
 		last, ok := s.State.seen[name]
 		if !ok || last.address != observed {
 			last = seen{address: observed, since: now}
 		}
-		if observed == configured {
+		if observed == current {
 			// Nothing to apply: a change that flapped back is forgotten.
 			delete(s.State.seen, name)
-			if configured != "" {
-				s.Desired[name] = configured
+			if current != "" {
+				s.Desired[name] = current
 			}
 			continue
 		}
@@ -176,18 +114,13 @@ func (st Settle) Reconcile(_ context.Context, s *Scope) (reconcile.Result, error
 		//= docs/requirements/04-inventory.md#applying
 		//# The Inventory Controller SHALL act on a change in whether a Node
 		//# is a Host only after the change has held for the configured settle time.
-		if held := now.Sub(last.since); held < st.Time {
-			if configured != "" {
-				s.Desired[name] = configured
+		if held := now.Sub(last.since); held < s.Options.SettleTime {
+			if current != "" {
+				s.Desired[name] = current
 			}
-			res = res.Merge(reconcile.Result{RequeueAfter: st.Time - held})
+			res = res.Merge(reconcile.Result{RequeueAfter: s.Options.SettleTime - held})
 			continue
 		}
-
-		//= docs/requirements/04-inventory.md#admission
-		//# When a Node that is a Host is cordoned or deleted, or its Node
-		//# report says the Host is not ready, the Inventory Controller SHALL remove
-		//# the Host from battery's Hosts.
 		if observed != "" {
 			s.Desired[name] = observed
 		}
@@ -195,149 +128,326 @@ func (st Settle) Reconcile(_ context.Context, s *Scope) (reconcile.Result, error
 	return res, nil
 }
 
-// Renew notices a renewed client certificate: one its Secret holds that
-// battery has not restarted with. The restart it needs waits for a restart
-// window like a Host change, so that the two go into one restart.
-//
-// Where no certificate is recorded, which is only before the Inventory
-// Controller has restarted battery for the first time, battery read the
-// one its Secret holds when its pod started, and Renew records that one
-// without restarting battery.
-type Renew struct{}
+// Withdraw takes from the Pool Controller every Host the next steps cordon
+// or remove, and every Host whose address is about to change, before they
+// call battery: it publishes the Hosts battery places on now that it is to
+// go on placing on, at the same address.
+type Withdraw struct{}
 
-func (Renew) Reconcile(ctx context.Context, s *Scope) (reconcile.Result, error) {
+func (Withdraw) Reconcile(_ context.Context, s *Scope) (reconcile.Result, error) {
+	//= docs/requirements/04-inventory.md#applying
+	//# The Inventory Controller SHALL give the Pool Controller a Host
+	//# only once battery holds it uncordoned at the Node's address, and SHALL
+	//# take a Host from the Pool Controller before it cordons or removes the Host.
+	publishPlaceable(s)
+	return reconcile.Result{}, nil
+}
+
+// Cordon cordons in battery every Host battery places on that it should
+// no longer: its Node is cordoned, not ready, gives no address, or is
+// gone. Bound claims on the Host keep running, and battery places nothing
+// new there (BA-084).
+type Cordon struct{}
+
+func (Cordon) Reconcile(ctx context.Context, s *Scope) (reconcile.Result, error) {
+	for _, name := range slices.Sorted(maps.Keys(s.Held)) {
+		h := s.Held[name]
+		if h.Cordoned {
+			continue
+		}
+		if _, ok := s.Desired[name]; ok {
+			continue
+		}
+		reason := s.leaving(name)
+
+		//= docs/requirements/04-inventory.md#admission
+		//# When a Node that is a Host is cordoned, or its Node report
+		//# says the Host is not ready or gives no `flintlockd` address, the
+		//# Inventory Controller SHALL cordon the Host in battery with `CordonHost`,
+		//# and SHALL keep it in battery's Hosts.
+		got, err := s.Admin.CordonHost(ctx, name, reason)
+		if err != nil {
+			s.Errs = append(s.Errs, fmt.Errorf("cordoning Host %s in battery: %w", name, err))
+			continue
+		}
+		s.Held[name] = *got
+		s.Log.Info("Cordoned Host in battery", "host", name, "reason", reason)
+	}
+	return reconcile.Result{}, nil
+}
+
+// Register brings every Host battery should place on into battery,
+// uncordoned, at its Node's address and with TLS: it adds a new one,
+// updates one whose address or TLS settings differ, and uncordons one that
+// is cordoned. battery checks that it can reach the Host when it is added
+// or its address changes (BA-080); a Host that fails stays out of the
+// Hosts battery places on, and the reconcile fails for it.
+type Register struct{}
+
+func (Register) Reconcile(ctx context.Context, s *Scope) (reconcile.Result, error) {
+	for _, name := range slices.Sorted(maps.Keys(s.Desired)) {
+		if err := register(ctx, s, name, s.Desired[name]); err != nil {
+			s.Errs = append(s.Errs, err)
+		}
+	}
+	return reconcile.Result{}, nil
+}
+
+// register brings the Host called name into battery at address.
+func register(ctx context.Context, s *Scope, name, address string) error {
+	//= docs/requirements/04-inventory.md#applying
+	//# While a Node is a Host, the Inventory Controller SHALL keep a
+	//# Host of the Node's name in battery, uncordoned, at the Node's `flintlockd`
+	//# address and with the TLS settings of IN-004, adding it with `AddHost`,
+	//# and changing its address or TLS settings with `UpdateHost` and uncordoning
+	//# it with `UncordonHost` wherever battery's Host differs.
+	want := battery.Host{Name: name, Address: address, TLS: TLS}
+	h, held := s.Held[name]
+	if !held {
+		got, err := s.Admin.AddHost(ctx, want, false)
+		switch {
+		case err == nil:
+			s.Held[name] = *got
+			s.Log.Info("Added Host to battery", "host", name, "address", address)
+			h = *got
+		case errors.Is(err, battery.ErrAlreadyExists):
+			//= docs/requirements/04-inventory.md#applying
+			//# If `AddHost` answers that battery already holds a Host of that
+			//# name, then the Inventory Controller SHALL read the Host with `GetHost` and
+			//# bring it in step as IN-017 says, without failing the reconcile.
+			st, err := s.Admin.GetHost(ctx, name)
+			if err != nil {
+				return fmt.Errorf("reading Host %s, which battery already holds: %w", name, err)
+			}
+			h = st.Host
+			s.Held[name] = h
+			s.Log.Info("Found Host already in battery", "host", name, "address", h.Address)
+		default:
+			return fmt.Errorf("adding Host %s to battery: %w", name, err)
+		}
+	}
+	if h.Address != address || h.TLS != TLS {
+		got, err := s.Admin.UpdateHost(ctx, want, false)
+		if err != nil {
+			return fmt.Errorf("updating Host %s in battery: %w", name, err)
+		}
+		s.Held[name] = *got
+		s.Log.Info("Updated Host in battery", "host", name, "address", address, "previousAddress", h.Address)
+		h = *got
+	}
+	if h.Cordoned {
+		got, err := s.Admin.UncordonHost(ctx, name)
+		if err != nil {
+			return fmt.Errorf("uncordoning Host %s in battery: %w", name, err)
+		}
+		s.Held[name] = *got
+		s.Log.Info("Uncordoned Host in battery", "host", name)
+	}
+	return nil
+}
+
+// Secure gives every other Host battery holds the TLS settings of IN-004,
+// at the address battery has for it. A Host that battery v0.4 copied from
+// its configuration file has none, and battery cannot reach it, nor delete
+// the MicroVMs on it, until it has. battery does not check that it can
+// reach the Host for this: the Host is cordoned, or about to be removed.
+type Secure struct{}
+
+func (Secure) Reconcile(ctx context.Context, s *Scope) (reconcile.Result, error) {
+	for _, name := range slices.Sorted(maps.Keys(s.Held)) {
+		h := s.Held[name]
+		if _, ok := s.Desired[name]; ok || h.TLS == TLS {
+			continue
+		}
+
+		//= docs/requirements/04-inventory.md#upgrade
+		//# When battery holds a Host whose TLS settings are not those of
+		//# IN-004, the Inventory Controller SHALL update the Host with `UpdateHost` to
+		//# those settings, keeping its address.
+		got, err := s.Admin.UpdateHost(ctx, battery.Host{Name: name, Address: h.Address, TLS: TLS}, true)
+		if err != nil {
+			if !errors.Is(err, battery.ErrNotFound) {
+				s.Errs = append(s.Errs, fmt.Errorf("giving Host %s its TLS settings in battery: %w", name, err))
+			}
+			continue
+		}
+		s.Held[name] = *got
+		s.Log.Info("Gave Host its TLS settings in battery", "host", name, "address", h.Address)
+	}
+	return reconcile.Result{}, nil
+}
+
+// Remove removes from battery every Host whose Node is gone, once it is
+// cordoned. battery refuses while a Pool names the Host or a MicroVM is
+// still on it (BA-083), and Remove asks again after the remove retry.
+type Remove struct{}
+
+func (Remove) Reconcile(ctx context.Context, s *Scope) (reconcile.Result, error) {
+	live := map[string]bool{}
+	for i := range s.Nodes {
+		if s.Nodes[i].DeletionTimestamp.IsZero() {
+			live[s.Nodes[i].Name] = true
+		}
+	}
+	var res reconcile.Result
+	for _, name := range slices.Sorted(maps.Keys(s.Held)) {
+		if live[name] || !s.Held[name].Cordoned {
+			continue // a Node's Host, or not yet cordoned: Cordon has failed for it
+		}
+		if _, ok := s.Desired[name]; ok {
+			continue // still settling
+		}
+
+		//= docs/requirements/04-inventory.md#admission
+		//# When battery holds a Host whose Node does not exist or is being
+		//# deleted, the Inventory Controller SHALL cordon the Host and remove it with
+		//# `RemoveHost`, and SHALL try again while battery refuses because a Pool
+		//# names the Host or a MicroVM is still on it.
+		err := s.Admin.RemoveHost(ctx, name)
+		switch {
+		case err == nil, errors.Is(err, battery.ErrNotFound):
+			delete(s.Held, name)
+			s.Log.Info("Removed Host from battery", "host", name)
+		case errors.Is(err, battery.ErrFailedPrecondition):
+			s.Log.Info("Waited to remove Host from battery, which still uses it", "host", name, "reason", err.Error(),
+				"retryAfter", s.Options.removeRetry())
+			res = res.Merge(reconcile.Result{RequeueAfter: s.Options.removeRetry()})
+		default:
+			s.Errs = append(s.Errs, fmt.Errorf("removing Host %s from battery: %w", name, err))
+		}
+	}
+	return res, nil
+}
+
+// Reload makes battery read its client certificate again, when cert-manager
+// has renewed it and once after the Operator starts: it updates every Host
+// battery holds with the settings battery has for it, which makes battery
+// connect to the Host again and read the certificate's files (BA-081). It
+// waits until the Operator's own mount of the Secret, the volume battery
+// reads, holds the certificate the Secret holds.
+type Reload struct{}
+
+func (Reload) Reconcile(ctx context.Context, s *Scope) (reconcile.Result, error) {
 	if s.ClientCertificate == nil {
-		// No Secret: battery cannot have started without it, and nothing
-		// has been renewed.
+		// No Secret: battery has no certificate to read again.
 		return reconcile.Result{}, nil
 	}
 	digest := Digest(s.ClientCertificate)
-	switch s.Config.ClientCertificate {
-	case digest:
-		return reconcile.Result{}, nil
-	case "":
-		s.Config.ClientCertificate = digest
-		if err := s.Store.Save(ctx, s.Config); err != nil {
-			return reconcile.Result{Stop: true}, err
-		}
-		s.Log.Info("Recorded the client certificate battery started with", "sha256", digest)
+	if s.State.reloaded == digest {
 		return reconcile.Result{}, nil
 	}
 
 	//= docs/requirements/06-deployment.md#battery-sidecar
 	//# When the client certificate in the Secret of DP-005 changes,
-	//# the Operator SHALL restart battery through the mechanism of DP-006
-	s.Renewed = true
-	return reconcile.Result{}, nil
-}
-
-// Window batches the settled changes, and a renewed client certificate,
-// into restarts of battery: the first one waiting opens a restart window,
-// and the chain goes on to Apply only once the window has closed. A window
-// whose changes all flapped back closes without a restart.
-type Window struct {
-	// Length is the restart window.
-	Length time.Duration
-}
-
-func (w Window) Reconcile(_ context.Context, s *Scope) (reconcile.Result, error) {
-	opened, open := s.State.WindowOpened()
-	if s.Desired.Equal(s.Config.Hosts) && !s.Renewed {
-		if open {
-			s.State.windowOpened = time.Time{}
-			s.Log.Info("Closed restart window without restarting battery")
+	//# and once after the Operator starts, the Operator SHALL call `UpdateHost`
+	//# for every Host battery holds, with the Host's address and TLS settings
+	//# unchanged, once the Operator's own mount of that Secret holds the
+	//# certificate the Secret holds.
+	mounted, err := s.Mount.ClientCertificate()
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		s.Errs = append(s.Errs, fmt.Errorf("reading the mounted client certificate: %w", err))
+		return reconcile.Result{}, nil
+	}
+	if !bytes.Equal(mounted, s.ClientCertificate) {
+		s.Log.V(1).Info("Waited for the mounted client certificate to match its Secret", "sha256", digest)
+		return reconcile.Result{RequeueAfter: s.Options.mountPoll()}, nil
+	}
+	failed := false
+	for _, name := range slices.Sorted(maps.Keys(s.Held)) {
+		h := s.Held[name]
+		if h.TLS != TLS {
+			// No TLS settings yet, since Secure failed for it: battery has no
+			// certificate to read again for it, refuses UpdateHost without
+			// settings, and reads the files when Secure gives it them.
+			continue
 		}
-		// A Drain for changes that have since flapped back may have
-		// published fewer Hosts than battery runs with: give them back.
-		s.State.drainStarted = time.Time{}
-		s.HostSet.publish(s.Config.Hosts)
-		return reconcile.Result{Stop: true}, nil
+		got, err := s.Admin.UpdateHost(ctx, battery.Host{Name: name, Address: h.Address, TLS: h.TLS}, true)
+		switch {
+		case err == nil:
+			s.Held[name] = *got
+		case errors.Is(err, battery.ErrNotFound):
+			delete(s.Held, name)
+		default:
+			failed = true
+			s.Errs = append(s.Errs, fmt.Errorf("reloading the client certificate for Host %s: %w", name, err))
+		}
 	}
-
-	//= docs/requirements/04-inventory.md#applying
-	//# When a change has settled and no restart window is open, the
-	//# Inventory Controller SHALL open a restart window of the configured
-	//# length, and SHALL apply every change that has settled by the time the
-	//# window closes in a single restart of battery.
-
-	//= docs/requirements/06-deployment.md#battery-sidecar
-	//# The Operator SHALL restart battery for a changed client
-	//# certificate at the close of a restart window of IN-012, in the same
-	//# single restart as every change to battery's Hosts that has settled by
-	//# then.
-	now := s.Clock.Now()
-	if !open {
-		opened = now
-		s.State.windowOpened = now
-		s.Log.Info("Opened restart window", "closesAt", now.Add(w.Length),
-			"hostsChanged", !s.Desired.Equal(s.Config.Hosts), "clientCertificateRenewed", s.Renewed)
+	if failed {
+		return reconcile.Result{}, nil
 	}
-	if left := opened.Add(w.Length).Sub(now); left > 0 {
-		return reconcile.Result{Stop: true, RequeueAfter: left}, nil
-	}
+	s.State.reloaded = digest
+	s.Log.Info("Reloaded battery's client certificate on every Host", "sha256", digest,
+		"hosts", slices.Sorted(maps.Keys(s.Held)))
 	return reconcile.Result{}, nil
 }
 
-// Apply writes the Hosts battery should have to its configuration and
-// restarts battery with it, and with the client certificate its Secret
-// holds, once.
-type Apply struct{}
+// Publish gives the Pool Controller the Hosts battery places on, after
+// the steps have changed them, however the steps ended.
+type Publish struct{}
 
-func (Apply) Reconcile(ctx context.Context, s *Scope) (reconcile.Result, error) {
-	//= docs/requirements/04-inventory.md#admission
-	//# The Inventory Controller SHALL configure battery to reach every
-	//# Host's `flintlockd` over TLS, verifying the serving certificate against
-	//# the configured certificate authority and presenting the Operator's client
-	//# certificate for `flintlockd`.
-	raw, err := batterysidecar.Render(s.Desired.List())
-	if err != nil {
-		return reconcile.Result{Stop: true}, err
-	}
-
-	//= docs/requirements/04-inventory.md#applying
-	//# When the set of Hosts changes, the Inventory Controller SHALL
-	//# write the new list to battery's configuration and restart battery.
-	pending := Config{
-		Hosts: s.Desired, Raw: raw, Pending: true,
-		ClientCertificate: s.Config.ClientCertificate, Written: s.Desired,
-	}
-	if err := s.Store.Save(ctx, pending); err != nil {
-		return reconcile.Result{Stop: true}, err
-	}
-	// The window has closed: whatever happens to this restart, a change
-	// from here on waits for a window of its own, and a failed restart is
-	// Resume's to finish.
-	s.State.windowOpened = time.Time{}
-	s.State.drainStarted = time.Time{}
-	s.Config = pending
-	s.Log.Info("Wrote battery's configuration", "hosts", slices.Sorted(maps.Keys(s.Desired)),
-		"clientCertificateRenewed", s.Renewed)
-	if err := restart(ctx, s); err != nil {
-		return reconcile.Result{Stop: true}, err
-	}
+func (Publish) Reconcile(_ context.Context, s *Scope) (reconcile.Result, error) {
+	publishPlaceable(s)
 	return reconcile.Result{}, nil
 }
 
-// restart restarts battery with the pending configuration in s and the
-// client certificate its Secret holds, then marks the configuration
-// applied, records the certificate and publishes the Hosts.
-func restart(ctx context.Context, s *Scope) error {
-	want := batterysidecar.Mounts{Config: s.Config.Raw, ClientCertificate: s.ClientCertificate}
-	if err := s.Restarter.Restart(ctx, want); err != nil {
-		return fmt.Errorf("restarting battery: %w", err)
+// Report fails the reconcile with every Host's failure, so that it is
+// retried with back-off.
+type Report struct{}
+
+func (Report) Reconcile(_ context.Context, s *Scope) (reconcile.Result, error) {
+	return reconcile.Result{}, errors.Join(s.Errs...)
+}
+
+// publishPlaceable publishes the Hosts battery places on now and is to go
+// on placing on at the same address: held, uncordoned, and desired at the
+// address battery has. Before Settle has run, every Host battery places on
+// is desired.
+func publishPlaceable(s *Scope) {
+	out := Hosts{}
+	for name, address := range s.placeable() {
+		if s.Desired == nil || s.Desired[name] == address {
+			out[name] = address
+		}
 	}
-	applied := s.Config
-	applied.Pending = false
-	if s.ClientCertificate != nil {
-		applied.ClientCertificate = Digest(s.ClientCertificate)
+	s.HostSet.publish(out)
+}
+
+// placeable is the Hosts battery places on now: held and uncordoned, name
+// to address.
+func (s *Scope) placeable() Hosts {
+	out := Hosts{}
+	for name, h := range s.Held {
+		if !h.Cordoned {
+			out[name] = h.Address
+		}
 	}
-	if err := s.Store.Save(ctx, applied); err != nil {
-		return err
+	return out
+}
+
+// leaving says why the Host called name is no longer to be placed on, for
+// CordonHost's reason.
+func (s *Scope) leaving(name string) string {
+	var node *corev1.Node
+	for i := range s.Nodes {
+		if s.Nodes[i].Name == name {
+			node = &s.Nodes[i]
+		}
 	}
-	s.Config = applied
-	s.Renewed = false
-	s.HostSet.publish(s.Config.Hosts)
-	s.Log.Info("Restarted battery", "hosts", slices.Sorted(maps.Keys(s.Config.Hosts)),
-		"clientCertificate", s.Config.ClientCertificate)
-	return nil
+	switch {
+	case node == nil || !node.DeletionTimestamp.IsZero():
+		return "Node deleted"
+	case node.Spec.Unschedulable:
+		return "Node cordoned"
+	case node.Annotations[AnnotationReady] != annotationTrue:
+		return "Host not ready"
+	case node.Annotations[AnnotationFlintlockdAddress] == "":
+		return "Node report gives no flintlockd address"
+	}
+	return "not a Host"
+}
+
+// Digest is the SHA-256 digest of a client certificate, in hex.
+func Digest(cert []byte) string {
+	sum := sha256.Sum256(cert)
+	return hex.EncodeToString(sum[:])
 }

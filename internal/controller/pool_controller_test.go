@@ -35,12 +35,18 @@ import (
 	"github.com/phoban01/battery-operator/internal/fakebattery"
 )
 
-// ends and returns the Operator's client for it. The fake knows no Host:
-// it holds Pools and their flintlock_hosts, and provisions nothing.
-// as battery knows none of a Pool's until #20 resolves them.
+// startPoolFakeBattery serves a fake battery until the test ends and
+// returns the Operator's client for it. The fake holds the test Hosts A, B
+// and C, cordoned and with no connection, so that it accepts Pools that name
+// them (BA-082) and provisions nothing.
 func startPoolFakeBattery(t *testing.T) battery.Client {
 	t.Helper()
-	bc, _ := startPoolFakeBatteryWith(t, fakebattery.Config{})
+	hosts := fakebattery.NewHosts()
+	for _, name := range []string{testHostA, testHostB, testHostC} {
+		hosts.Add(name, "", nil)
+		hosts.SetCordoned(name, true, "no flintlockd in this test")
+	}
+	bc, _ := startPoolFakeBatteryWith(t, fakebattery.Config{Hosts: hosts})
 	return bc
 }
 

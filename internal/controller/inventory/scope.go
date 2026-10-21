@@ -17,7 +17,6 @@ limitations under the License.
 package inventory
 
 import (
-	"context"
 	"flag"
 	"fmt"
 	"time"
@@ -25,6 +24,7 @@ import (
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 
+	"github.com/phoban01/battery-operator/internal/battery"
 	"github.com/phoban01/battery-operator/internal/batterysidecar"
 	"github.com/phoban01/battery-operator/internal/clock"
 	"github.com/phoban01/battery-operator/internal/reconcile"
@@ -32,29 +32,20 @@ import (
 
 // The Inventory Controller runs the shared chain of internal/reconcile
 // (CLAUDE.md, "Controller structure") over a scope of its own. Its
-// "object" is battery's configuration, not a Kubernetes object, so its
-// scope embeds no reconcile.Scope: the controller builds the scope from the Nodes, the
-// configuration as stored and battery's client certificate, and the
-// subreconcilers decide what battery's Hosts should be and whether battery
-// needs a restart. Writing that configuration and restarting battery is
-// battery's side of the Operator, as a call to battery's API would be, and
-// goes through Store and Restarter.
-
-// Restarter restarts battery with a configuration just written and the
-// client certificate its Secret holds: the one restart hook,
-// batterysidecar.Restarter in production (DP-006).
-type Restarter interface {
-	// Restart returns once battery runs with want and answers again.
-	Restart(ctx context.Context, want batterysidecar.Mounts) error
-}
+// "object" is battery's Hosts, not a Kubernetes object, so its scope
+// embeds no reconcile.Scope: the controller builds the scope from the
+// Nodes, battery's Hosts as ListHosts gives them and battery's client
+// certificate, and the subreconcilers bring battery's Hosts in step with
+// the Nodes through battery's HostAdmin API.
 
 // Scope is one reconcile of the inventory.
 type Scope struct {
 	// Nodes are the cluster's Nodes, as listed for this reconcile.
 	Nodes []corev1.Node
-	// Config is battery's configuration as stored; Apply and Resume keep it
-	// up to date with what they write.
-	Config Config
+	// Held is battery's Hosts by name, as ListHosts gave them at the start
+	// of the reconcile; the subreconcilers keep it up to date with what
+	// they change.
+	Held map[string]battery.Host
 	// ClientCertificate is battery's flintlockd client certificate as its
 	// Secret holds it now, nil while there is no such Secret.
 	ClientCertificate []byte
@@ -62,38 +53,39 @@ type Scope struct {
 	// Observed is the Hosts the Nodes make now, name to flintlockd
 	// address, before any settling; Admit sets it.
 	Observed Hosts
-	// Desired is the Hosts battery should have: every settled change
-	// applied to Config's Hosts; Settle sets it.
+	// Desired is the Hosts battery should place on: every settled change
+	// applied to the Hosts battery places on now; Settle sets it.
 	Desired Hosts
-	// Renewed is true when ClientCertificate is not the one battery last
-	// restarted with; Renew sets it.
-	Renewed bool
+	// Errs are the failures of single Hosts. A step that fails for one
+	// Host goes on with the others, and Report returns them all.
+	Errs []error
 
 	// State is what the controller remembers between reconciles.
 	State *State
-	// HostSet is where the Hosts battery runs with are published.
+	// HostSet is where the Hosts battery places on are published for the
+	// Pool Controller.
 	HostSet *HostSet
-	// Pools lists the Pools battery holds, for Drain.
-	Pools PoolLister
-
-	Store     Store
-	Restarter Restarter
-	Log       logr.Logger
-	Clock     clock.Clock
+	// Admin is battery's HostAdmin service.
+	Admin battery.HostAdmin
+	// Mount reads the Operator's own mount of battery's client
+	// certificate.
+	Mount CertificateMount
+	// Options are the controller's timings.
+	Options Options
+	Log     logr.Logger
+	Clock   clock.Clock
 }
 
 // State is what the Inventory Controller remembers between reconciles.
 // Reconciles of the inventory run one at a time, so it needs no lock.
 type State struct {
-	// seen is, for each Node that differs from battery's configuration or
-	// did when last looked at, what it made last time and since when.
+	// seen is, for each Node that differs from battery's Hosts or did when
+	// last looked at, what it made last time and since when.
 	seen map[string]seen
-	// windowOpened is when the open restart window opened; zero while none
-	// is open.
-	windowOpened time.Time
-	// drainStarted is when Drain began to wait for the Pools to drop the
-	// Hosts the next restart removes; zero while it is not waiting.
-	drainStarted time.Time
+	// reloaded is the Digest of the client certificate every Host battery
+	// holds was last updated with (DP-035); "" until the first time after
+	// the Operator starts.
+	reloaded string
 }
 
 // seen is a Node as the Inventory Controller last saw it.
@@ -107,30 +99,25 @@ type seen struct {
 // NewState returns the state of a controller that has seen nothing yet.
 func NewState() *State { return &State{seen: map[string]seen{}} }
 
-// WindowOpened is when the open restart window opened, and whether one is
-// open.
-func (st *State) WindowOpened() (time.Time, bool) {
-	return st.windowOpened, !st.windowOpened.IsZero()
-}
-
 // Options are the Inventory Controller's timings.
 type Options struct {
 	// SettleTime is how long a change must hold before it is acted on
 	// (IN-011).
 	SettleTime time.Duration
-	// RestartWindow is how long a restart window stays open (IN-012).
-	RestartWindow time.Duration
-	// DrainTimeout is the longest the controller waits, before a restart
-	// that removes Hosts, for the Pools in battery to stop naming them
-	// (IN-013).
-	DrainTimeout time.Duration
+	// RemoveRetry is how long the controller waits before it asks battery
+	// again to remove a Host that battery refused to remove (IN-016).
+	RemoveRetry time.Duration
+	// MountPoll is how long the controller waits before it looks again at
+	// its mount of battery's client certificate, while the mount does not
+	// yet hold the certificate the Secret holds (DP-035).
+	MountPoll time.Duration
 }
 
 // Defaults for Options.
 const (
-	DefaultSettleTime    = 30 * time.Second
-	DefaultRestartWindow = time.Minute
-	DefaultDrainTimeout  = 30 * time.Second
+	DefaultSettleTime  = 30 * time.Second
+	DefaultRemoveRetry = 30 * time.Second
+	DefaultMountPoll   = 5 * time.Second
 )
 
 // BindFlags binds o to the Operator's command line flags, with the
@@ -138,38 +125,73 @@ const (
 func (o *Options) BindFlags(fs *flag.FlagSet) {
 	fs.DurationVar(&o.SettleTime, "inventory-settle-time", DefaultSettleTime,
 		"How long a change in whether a Node is a Host must hold before the Inventory Controller acts on it.")
-	fs.DurationVar(&o.RestartWindow, "inventory-restart-window", DefaultRestartWindow,
-		"How long the Inventory Controller gathers settled changes to battery's Hosts before it restarts battery "+
-			"once with all of them.")
-	fs.DurationVar(&o.DrainTimeout, "inventory-drain-timeout", DefaultDrainTimeout,
-		"How long the Inventory Controller waits, before a restart of battery that removes Hosts, for battery's Pools "+
-			"to stop naming them.")
+	fs.DurationVar(&o.RemoveRetry, "inventory-remove-retry", DefaultRemoveRetry,
+		"How long the Inventory Controller waits before it asks battery again to remove a Host whose Node is gone, "+
+			"while battery refuses because a Pool names the Host or a MicroVM is still on it.")
 }
 
-// Validate reports an Options the controller cannot run with.
+// Validate reports an Options the controller cannot run with. A zero
+// RemoveRetry or MountPoll takes its default.
 func (o Options) Validate() error {
 	if o.SettleTime < 0 {
 		return fmt.Errorf("inventory settle time %s is negative", o.SettleTime)
 	}
-	if o.RestartWindow < 0 {
-		return fmt.Errorf("inventory restart window %s is negative", o.RestartWindow)
+	if o.RemoveRetry < 0 {
+		return fmt.Errorf("inventory remove retry %s is negative", o.RemoveRetry)
 	}
-	if o.DrainTimeout < 0 {
-		return fmt.Errorf("inventory drain timeout %s is negative", o.DrainTimeout)
+	if o.MountPoll < 0 {
+		return fmt.Errorf("inventory mount poll %s is negative", o.MountPoll)
 	}
 	return nil
 }
 
+// removeRetry is RemoveRetry, or its default when zero.
+func (o Options) removeRetry() time.Duration {
+	if o.RemoveRetry <= 0 {
+		return DefaultRemoveRetry
+	}
+	return o.RemoveRetry
+}
+
+// mountPoll is MountPoll, or its default when zero.
+func (o Options) mountPoll() time.Duration {
+	if o.MountPoll <= 0 {
+		return DefaultMountPoll
+	}
+	return o.MountPoll
+}
+
+//= docs/requirements/04-inventory.md#admission
+//# The Inventory Controller SHALL configure battery to reach every
+//# Host's `flintlockd` over TLS, verifying the serving certificate against
+//# the configured certificate authority and presenting the Operator's client
+//# certificate for `flintlockd`.
+
+// TLS is how battery reaches every Host's flintlockd: mutual TLS, with the
+// client certificate and key and the serving CA at the paths the Manifests
+// mount them on in battery's container (DP-005).
+var TLS = battery.HostTLS{
+	CAFile:   batterysidecar.ServingCAFile,
+	CertFile: batterysidecar.ClientCertFile,
+	KeyFile:  batterysidecar.ClientKeyFile,
+}
+
 // NewChain is the Inventory Controller's chain, in order.
-func NewChain(o Options) reconcile.Chain[*Scope] {
-	return reconcile.Steps[*Scope](
-		Restore{},
-		Resume{},
-		Admit{},
-		Settle{Time: o.SettleTime},
-		Renew{},
-		Window{Length: o.RestartWindow},
-		Drain{Timeout: o.DrainTimeout},
-		Apply{},
-	)
+func NewChain() reconcile.Chain[*Scope] {
+	return reconcile.Chain[*Scope]{
+		Steps: []reconcile.SubReconciler[*Scope]{
+			Admit{},
+			Settle{},
+			Withdraw{},
+			Cordon{},
+			Register{},
+			Secure{},
+			Remove{},
+			Reload{},
+		},
+		Finally: []reconcile.SubReconciler[*Scope]{
+			Publish{},
+			Report{},
+		},
+	}
 }

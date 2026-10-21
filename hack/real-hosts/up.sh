@@ -181,9 +181,8 @@ step_deploy() {
 			-e "s#ghcr.io/phoban01/battery-operator/exec-agent:latest#ghcr.io/phoban01/battery-operator/exec-agent:${IMAGE_TAG}#" \
 			>"${rendered}"
 	# The CRDs and the namespace first, so that the objects of their kinds
-	# apply in the same run. On a second run the Operator owns battery's
-	# config.json, which it rewrote with the Hosts (IN-014); the apply takes
-	# it back, and the Operator writes the Hosts back again.
+	# apply in the same run. battery keeps its Hosts in its database, so a
+	# second run changes nothing battery runs with (ADR 0008).
 	kubectl_ apply --server-side --force-conflicts -f "${rendered}" >/dev/null ||
 		kubectl_ apply --server-side --force-conflicts -f "${rendered}" >/dev/null
 	kubectl_ -n battery-operator-system rollout status deployment/battery-operator-controller-manager --timeout=300s

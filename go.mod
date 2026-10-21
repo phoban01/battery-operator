@@ -7,7 +7,7 @@ require (
 	github.com/google/go-cmp v0.7.0
 	github.com/liquidmetal-dev/battery v0.4.0
 	github.com/liquidmetal-dev/flintlock/api v0.0.0-20260922072746-f69bffbac45c
-	google.golang.org/grpc v1.83.2
+	google.golang.org/grpc v1.84.0
 	google.golang.org/protobuf v1.36.12
 	k8s.io/api v0.36.0
 	k8s.io/apiextensions-apiserver v0.36.0
@@ -105,3 +105,10 @@ require (
 	sigs.k8s.io/randfill v1.0.0 // indirect
 	sigs.k8s.io/structured-merge-diff/v6 v6.3.2 // indirect
 )
+
+// battery's HostAdmin API (#198) is on battery's main branch and not yet in
+// a release. The require above keeps the last release, v0.4.0, because the
+// Makefile and internal/manifests take the sidecar's poolmgrd image tag
+// from it, and no poolmgrd image exists for an untagged commit. When battery
+// v0.5.0 is released, require v0.5.0 and delete this replace.
+replace github.com/liquidmetal-dev/battery => github.com/liquidmetal-dev/battery v0.4.1-0.20261021094845-a5884a5a6d3e

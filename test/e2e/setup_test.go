@@ -163,7 +163,7 @@ func installCertManager(ctx context.Context, cfg *envconf.Config) (context.Conte
 // deploy applies the overlay in config/, through a kustomization it writes
 // to .run/ that sets the images.
 //
-// battery starts with the Hosts the Manifests give it, none. The Inventory
+// battery starts with no Hosts in a new database. The Inventory
 // Controller gives battery the kind workers once their Exec Agents report
 // them ready, which TestPoolPlacementAndClaim checks.
 func deploy(s settings) env.Func {
@@ -174,9 +174,9 @@ func deploy(s settings) env.Func {
 		//# `flintlockd`, in a kind cluster, from the Manifests.
 
 		// A reused cluster already runs the Operator: applying the Manifests
-		// again puts battery's ConfigMap back as they ship it, and the
-		// Inventory Controller writes battery's Hosts back (IN-014).
-		if _, err := applyManifests(ctx, cfg, s); err != nil {
+		// again leaves battery's Hosts alone, since battery keeps them in
+		// its database (DP-036).
+		if err := applyManifests(ctx, cfg, s); err != nil {
 			return ctx, err
 		}
 		return ctx, nil
@@ -185,15 +185,15 @@ func deploy(s settings) env.Func {
 
 // applyManifests builds the Manifests through the overlay in config/ and
 // applies them as an upgrade would, server-side and taking every field
-// back by force, and returns what it applied.
-func applyManifests(ctx context.Context, cfg *envconf.Config, s settings) ([]byte, error) {
+// back by force.
+func applyManifests(ctx context.Context, cfg *envconf.Config, s settings) error {
 	dir, err := writeRunKustomization(s)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	manifests, err := run(ctx, nil, s.kustomize, "build", dir)
 	if err != nil {
-		return nil, fmt.Errorf("building the Manifests: %w", err)
+		return fmt.Errorf("building the Manifests: %w", err)
 	}
 	// cert-manager's webhook may refuse the Certificates for a while
 	// after it reports available, until its CA is injected.
@@ -204,9 +204,9 @@ func applyManifests(ctx context.Context, cfg *envconf.Config, s settings) ([]byt
 		return applyErr == nil, nil
 	})
 	if err != nil {
-		return nil, fmt.Errorf("applying the Manifests: %w: %w", err, applyErr)
+		return fmt.Errorf("applying the Manifests: %w: %w", err, applyErr)
 	}
-	return manifests, nil
+	return nil
 }
 
 // writeRunKustomization writes .run/kustomization.yaml, which is config/

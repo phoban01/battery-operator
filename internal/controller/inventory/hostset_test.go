@@ -26,8 +26,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
-
-	"github.com/phoban01/battery-operator/internal/batterysidecar"
 )
 
 func TestHostSetBeforePublishing(t *testing.T) {
@@ -56,7 +54,7 @@ func TestHostSetPublish(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []batterysidecar.Host{{Name: nodeA, Address: addrA}, {Name: nodeB, Address: addrB}}
+	want := []Host{{Name: nodeA, Address: addrA}, {Name: nodeB, Address: addrB}}
 	if !slices.Equal(got, want) {
 		t.Errorf("Hosts = %v, want %v", got, want)
 	}
@@ -80,7 +78,7 @@ func TestHostSetPublish(t *testing.T) {
 }
 
 // TestHostSetMatching checks that a Pool's selector matches the Nodes with
-// its labels that battery runs with, and only those.
+// its labels that battery places on, and only those.
 func TestHostSetMatching(t *testing.T) {
 	const pool, fast = "pool", "fast"
 	labelled := func(name string, labels map[string]string) client.Object {
@@ -108,58 +106,5 @@ func TestHostSetMatching(t *testing.T) {
 	}
 	if got, err = h.Matching(ctx, c, map[string]string{pool: "none"}); err != nil || len(got) != 0 {
 		t.Errorf("Matching(pool=none) = %v, %v, want none", got, err)
-	}
-}
-
-// TestConfigMapStore checks that the store reads battery's configuration
-// without its placeholder Host, and writes it with the pending mark.
-func TestConfigMapStore(t *testing.T) {
-	h := newHarness(t)
-	ctx := context.Background()
-	c := h.stored()
-	if len(c.Hosts) != 0 || c.Pending {
-		t.Errorf("shipped configuration: %+v, want no Hosts and nothing pending", c)
-	}
-
-	raw, err := batterysidecar.Render(Hosts{nodeA: addrA}.List())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := h.store.Save(ctx, Config{Raw: raw, Pending: true, ClientCertificate: Digest([]byte("certificate"))}); err != nil {
-		t.Fatal(err)
-	}
-	c = h.stored()
-	if !c.Hosts.Equal(Hosts{nodeA: addrA}) || !c.Pending || string(c.Raw) != string(raw) ||
-		c.ClientCertificate != Digest([]byte("certificate")) {
-		t.Errorf("after a pending Save: %+v", c)
-	}
-	if err := h.store.Save(ctx, Config{Raw: raw}); err != nil {
-		t.Fatal(err)
-	}
-	cm := &corev1.ConfigMap{}
-	if err := h.c.Get(ctx, configMapKey, cm); err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := cm.Annotations[RestartPendingAnnotation]; ok {
-		t.Error("the pending mark was left after the restart")
-	}
-	if _, ok := cm.Annotations[ClientCertificateAnnotation]; ok {
-		t.Error("a client certificate is recorded after a Save without one")
-	}
-}
-
-func TestConfigMapStoreRejectsAnUnknownField(t *testing.T) {
-	h := newHarness(t)
-	ctx := context.Background()
-	cm := &corev1.ConfigMap{}
-	if err := h.c.Get(ctx, configMapKey, cm); err != nil {
-		t.Fatal(err)
-	}
-	cm.Data[batterysidecar.ConfigKey] = `{"hosts": [], "extra": true}`
-	if err := h.c.Update(ctx, cm); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := h.store.Load(ctx); err == nil {
-		t.Error("Load accepted a configuration battery would not")
 	}
 }

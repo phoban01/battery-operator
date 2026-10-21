@@ -28,6 +28,10 @@ flintlock-runner, where `10-test-doubles.md` specifies them.
   or `REPLACE_ON_DELETE` on its tick only on the first tick after each
   `CreatePool` or `UpdatePool` of the Pool, whether or not those provisions
   succeed, as battery v0.3.3 seeded such a Pool.
+- **TD-028** The fake battery SHALL serve battery's `HostAdmin` service,
+  and SHALL hold its Hosts as battery does, so that a Pool names only Hosts
+  the fake holds, a Host is removed only once no Pool names it and nothing
+  is on it, and no MicroVM is placed on a cordoned Host.
 
 The fake battery cites each assumption of `10-battery.md` it meets, with
 a test, and lists where it differs from battery under
@@ -37,6 +41,15 @@ while the Pool has a leased or claiming MicroVM, unless the request sets
 `force`. Otherwise it deletes the Pool with every MicroVM the Pool owns,
 and records `VM_DELETED_ON_POOL_DELETE` for each. A MicroVM whose Host
 refuses the deletion stays `DELETING`, and the next tick deletes it.
+
+battery's `HostAdmin` API is on its `main` branch, which the Operator
+builds against until battery v0.5.0 (#198), and the fake serves it from
+there (TD-028; [10-battery.md](10-battery.md#hosts)). The Hosts a test
+gives the fake when it starts are held from the start, as if added
+already. `AddHost` and `UpdateHost` reach a Host through the test's `Dial`,
+which stands in for battery connecting to `flintlockd` and checking its
+version: a Host for whose address `Dial` gives no connection fails the
+check, unless the request sets `skip_validation`.
 
 ## The fake flintlockd {#fake-flintlockd}
 

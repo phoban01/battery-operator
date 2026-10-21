@@ -379,9 +379,8 @@ reconciles it.
 A Holder with a command running in a MicroVM wants to give up on it soon
 after the Host goes bad (#186). The Exec Agent says so in the Node report
 (EA-030 to EA-034), but a Holder may not read Nodes. The Inventory
-Controller removes such a Host from battery's Hosts only after the settle
-time, the restart window and the drain timeout (IN-011 to IN-013), and even
-then claims Bound on it keep their Leases. `HostReady` puts the Node report
+Controller cordons such a Host in battery only after the settle time
+(IN-011, IN-015), and even then claims Bound on it keep their Leases. `HostReady` puts the Node report
 on the claim, which the Holder already reads.
 
 The condition does not change the phase, nor the condition `Bound`. battery

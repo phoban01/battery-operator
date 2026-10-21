@@ -49,20 +49,31 @@ needs. Nothing test-only goes in `config/` at the top of the repository.
 - `exec-agent-host-prerequisites.yaml`: Host prerequisites a kind node can
   satisfy. `/dev/null` stands in for `/dev/kvm`, and the stand-in thin pool
   for containerd's.
-- `manager-inventory-timing.yaml`: a settle time and a restart window of
+- `manager-inventory-timing.yaml`: a settle time and a remove retry of
   five seconds for the Inventory Controller, instead of the Manifests'
-  30 seconds and a minute, so that the Hosts are admitted sooner.
+  30 seconds, so that the Hosts are admitted sooner.
 
-battery starts with no Hosts, as the Manifests ship it. The Inventory
-Controller gives it the kind workers once their Exec Agents report them
-ready, and restarts it; `TestPoolPlacementAndClaim` waits for that before
-it makes a Pool.
+battery starts with no Hosts in a new database. The Inventory Controller
+adds the kind workers through battery's `HostAdmin` API once their Exec
+Agents report them ready; `TestPoolPlacementAndClaim` waits for that
+before it makes a Pool. The suite reads battery's Hosts with `ListHosts`,
+over a `kubectl port-forward` to the Operator's pod, since battery listens
+on loopback there. `TestInventoryThroughHostAdmin` cordons a worker and
+checks that battery cordons its Host and keeps it.
 
 `TestBatteryUpgrade` (`upgrade_test.go`) sets the sidecar back to
-`poolmgrd:0.3.3`, binds a claim, and sets it to the suite's image again,
-so that battery migrates its database (BA-062) with a Lease in it. The
-Deployment's `Recreate` strategy replaces the pod each time, and the
-feature puts the suite's image back whatever happens.
+`poolmgrd:0.4.0`, with the configuration file an Operator before v0.5
+wrote for it: the workers and a placeholder Host. It binds a claim, then
+puts back the configuration the Manifests ship and the suite's image. The
+suite's battery migrates its database and keeps the Hosts in it without
+TLS settings (BA-086); the Inventory Controller gives them their settings
+(IN-020) and removes the placeholder (IN-016), and the claim keeps its
+Lease. The Deployment's `Recreate` strategy replaces the pod each time,
+and the feature puts the suite's image back whatever happens.
+
+The suite needs battery v0.5.0 or later as the sidecar: battery v0.4.0
+has no `AddHost`, and refuses to start with a configuration that names no
+Hosts.
 
 ## CI
 

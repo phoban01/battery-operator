@@ -35,44 +35,37 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
+	"github.com/phoban01/battery-operator/internal/battery"
 	"github.com/phoban01/battery-operator/internal/batterysidecar"
 	"github.com/phoban01/battery-operator/internal/clock"
 	"github.com/phoban01/battery-operator/internal/controller/inventory"
 )
 
 // inventoryRequest is the Inventory Controller's one reconcile: every Node
-// event leads to it, because battery's Hosts are one list.
+// event leads to it, because battery's Hosts are one set.
 var inventoryRequest = reconcile.Request{NamespacedName: types.NamespacedName{Name: "inventory"}}
 
 // InventoryReconciler is the Inventory Controller
 // (docs/requirements/04-inventory.md): it decides which Nodes are Hosts and
-// gives battery the list, and restarts battery when its client certificate
-// is renewed (DP-007). It is a thin layer: it lists the Nodes, loads
-// battery's configuration and reads its client certificate's Secret,
-// builds an inventory.Scope and runs the chain of package inventory. The
-// logic, and its requirement citations, are there.
+// keeps battery's Hosts in step with them through battery's HostAdmin API,
+// and makes battery read its client certificate again when it is renewed
+// (DP-035). It is a thin layer: it lists the Nodes and battery's Hosts,
+// reads the client certificate's Secret, builds an inventory.Scope and
+// runs the chain of package inventory. The logic, and its requirement
+// citations, are there.
 type InventoryReconciler struct {
 	client.Client
-	// Store holds battery's configuration: its ConfigMap in production.
-	Store inventory.Store
-	// Restarter is the one hook that restarts battery (DP-006).
-	Restarter inventory.Restarter
-	// Hosts is where the Hosts battery runs with are published for the
+	// Admin is battery's HostAdmin service: the battery connection.
+	Admin battery.HostAdmin
+	// Hosts is where the Hosts battery places on are published for the
 	// Pool Controller.
 	Hosts *inventory.HostSet
-	// Pools lists the Pools battery holds, so that a restart that removes
-	// a Host waits for them to drop it (IN-013): the battery client.
-	Pools inventory.PoolLister
-	// Options are the settle time, the restart window and the drain
-	// timeout.
+	// Mount reads the Operator's own mount of battery's client certificate.
+	Mount inventory.CertificateMount
+	// Options are the settle time and the remove retry.
 	Options inventory.Options
 	// Clock defaults to clock.Real.
 	Clock clock.Clock
-
-	// ConfigMap names battery's ConfigMap, which Store keeps battery's
-	// configuration in: SetupWithManager watches it, through a cache of
-	// that one ConfigMap (IN-014).
-	ConfigMap client.ObjectKey
 
 	// ClientSecret names the Secret holding battery's client certificate.
 	ClientSecret client.ObjectKey
@@ -86,12 +79,9 @@ type InventoryReconciler struct {
 
 // +kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch
 
-//= docs/requirements/06-deployment.md#battery-sidecar
-//# When the client certificate in the Secret of DP-005 changes,
-//# the Operator SHALL restart battery through the mechanism of DP-006
-
 // The Operator reads and watches battery's client certificate's Secret, by
-// name, in its own namespace (DP-021); the Manifests name it
+// name, in its own namespace (DP-021), to make battery read it again when
+// cert-manager renews it (DP-035); the Manifests name it
 // battery-flintlockd-client.
 // +kubebuilder:rbac:groups="",namespace=system,resources=secrets,verbs=get;list;watch,resourceNames=battery-flintlockd-client
 
@@ -101,9 +91,9 @@ func (r *InventoryReconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ct
 	if err := r.List(ctx, nodes); err != nil {
 		return ctrl.Result{}, err
 	}
-	config, err := r.Store.Load(ctx)
+	held, err := r.Admin.ListHosts(ctx)
 	if err != nil {
-		return ctrl.Result{}, err
+		return ctrl.Result{}, fmt.Errorf("listing battery's Hosts: %w", err)
 	}
 	cert, err := r.clientCertificate(ctx)
 	if err != nil {
@@ -118,17 +108,20 @@ func (r *InventoryReconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ct
 	}
 	s := &inventory.Scope{
 		Nodes:             nodes.Items,
-		Config:            config,
+		Held:              map[string]battery.Host{},
 		ClientCertificate: cert,
 		State:             r.state,
 		HostSet:           r.Hosts,
-		Pools:             r.Pools,
-		Store:             r.Store,
-		Restarter:         r.Restarter,
+		Admin:             r.Admin,
+		Mount:             r.Mount,
+		Options:           r.Options,
 		Log:               logf.FromContext(ctx),
 		Clock:             clk,
 	}
-	res, err := inventory.NewChain(r.Options).Run(ctx, s)
+	for _, h := range held {
+		s.Held[h.Host.Name] = h.Host
+	}
+	res, err := inventory.NewChain().Run(ctx, s)
 	return res.Ctrl(), err
 }
 
@@ -150,19 +143,15 @@ func (r *InventoryReconciler) clientCertificate(ctx context.Context) ([]byte, er
 }
 
 // SetupWithManager watches Nodes, for the changes that can change whether
-// a Node is a Host or where its flintlockd is, battery's ConfigMap, for a
-// change something else made to its Hosts (IN-014), and battery's client
-// certificate's Secret; the last two each through a cache of that one
-// object.
+// a Node is a Host or where its flintlockd is, and battery's client
+// certificate's Secret, through a cache of that one Secret. Both list
+// their objects when the manager starts, which brings the first reconcile.
 func (r *InventoryReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	if err := r.Options.Validate(); err != nil {
 		return err
 	}
-	if r.Store == nil || r.Restarter == nil || r.Hosts == nil || r.Pools == nil {
-		return errors.New("the Inventory Controller needs a Store, a Restarter, a HostSet and battery's Pools")
-	}
-	if r.ConfigMap.Name == "" || r.ConfigMap.Namespace == "" {
-		return errors.New("the Inventory Controller needs the name and namespace of battery's ConfigMap")
+	if r.Admin == nil || r.Hosts == nil || r.Mount == nil {
+		return errors.New("the Inventory Controller needs battery's HostAdmin, a HostSet and a certificate mount")
 	}
 	if r.ClientSecret.Name == "" || r.ClientSecret.Namespace == "" {
 		return errors.New("the Inventory Controller needs the name and namespace of battery's client certificate's Secret")
@@ -172,14 +161,6 @@ func (r *InventoryReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return err
 	}
 	r.Secrets = secrets
-	// battery's ConfigMap is watched so that Restore puts back the Hosts
-	// an apply of the Manifests resets (IN-014). The cache only brings the
-	// reconcile: Store reads the ConfigMap from the API server, since a
-	// stale copy would have Resume restart battery again after a restart.
-	configMaps, err := singleObjectCache(mgr, r.ConfigMap.Namespace, r.ConfigMap.Name)
-	if err != nil {
-		return err
-	}
 	enqueue := func(context.Context, client.Object) []reconcile.Request {
 		return []reconcile.Request{inventoryRequest}
 	}
@@ -192,12 +173,7 @@ func (r *InventoryReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			handler.TypedEnqueueRequestsFromMapFunc(func(ctx context.Context, s *corev1.Secret) []reconcile.Request {
 				return enqueue(ctx, s)
 			}))).
-		WatchesRawSource(source.Kind(configMaps, &corev1.ConfigMap{},
-			handler.TypedEnqueueRequestsFromMapFunc(func(ctx context.Context, cm *corev1.ConfigMap) []reconcile.Request {
-				return enqueue(ctx, cm)
-			}))).
-		// One reconcile at a time: it restarts battery, and State is not
-		// shared.
+		// One reconcile at a time: State is not shared.
 		WithOptions(controller.Options{MaxConcurrentReconciles: 1}).
 		Complete(r)
 }

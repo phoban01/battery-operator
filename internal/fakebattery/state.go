@@ -227,20 +227,24 @@ func (b *Battery) oldestAvailableLocked(key poolKey) *vmState {
 	return best
 }
 
-// pickHostLocked chooses the Host for a new MicroVM in ps. Only names the
-// Hosts know are candidates. PlacementLeastVMs picks the candidate with the
+// pickHostLocked chooses the Host for a new MicroVM in ps. Only the Hosts
+// the fake holds and has not cordoned are candidates, as battery's
+// ineligibleHosts decides. PlacementLeastVMs picks the candidate with the
 // fewest MicroVMs of this Pool that are not DELETING or FAILED, ties broken
 // by the order of flintlock_hosts, which is battery's PickHost;
 // PlacementRoundRobin cycles through the candidates.
 func (b *Battery) pickHostLocked(ps *poolState) (string, error) {
+	//= docs/requirements/10-battery.md#hosts
+	//# battery SHALL place no new MicroVM on a cordoned Host, and
+	//# SHALL leave the MicroVMs already on it as they are.
 	var candidates []string
 	for _, name := range ps.spec.FlintlockHosts {
-		if b.cfg.Hosts.known(name) {
+		if b.cfg.Hosts.eligible(name) {
 			candidates = append(candidates, name)
 		}
 	}
 	if len(candidates) == 0 {
-		return "", fmt.Errorf("pool %s has no known host among flintlock_hosts %v: %w", ps.key, ps.spec.FlintlockHosts, errUnknownHost)
+		return "", fmt.Errorf("pool %s has no eligible host among flintlock_hosts %v: %w", ps.key, ps.spec.FlintlockHosts, errUnknownHost)
 	}
 	if b.cfg.Placement == PlacementRoundRobin {
 		host := candidates[ps.rr%len(candidates)]

@@ -125,19 +125,9 @@ func main() {
 		os.Exit(1)
 	}
 	defer func() { _ = batteryConn.Close() }()
-
-	// battery restarts through restarter alone (DP-006): the Inventory
-	// Controller calls its Restart after writing battery's ConfigMap, for a
-	// change to its Hosts or a renewed client certificate (DP-007), and
-	// the controllers call battery through batteryClient, which holds their
-	// calls while battery restarts.
-	restarter := &batterysidecar.Restarter{
-		ConfigFile:     sidecarConfig.ConfigFile,
-		ClientCertFile: sidecarConfig.ClientCertFile,
-		Processes:      batterysidecar.ProcFS{},
-		Ping:           batteryConn.Ping,
-	}
-	batteryClient := batterysidecar.Gated{Client: batteryConn, Gate: restarter}
+	// Nothing restarts battery: the Inventory Controller keeps its Hosts
+	// through its HostAdmin API (ADR 0008).
+	batteryClient := batteryConn
 
 	// if the enable-http2 flag is false (the default), http/2 should be disabled
 	// due to its vulnerabilities. More specifically, disabling http/2 will
@@ -239,9 +229,9 @@ func main() {
 		setupLog.Error(err, "Failed to create controller", "controller", "certificatesigningrequest")
 		os.Exit(1)
 	}
-	// hosts is the Hosts the Inventory Controller has given battery and is
-	// not about to remove: it publishes them around each restart of battery,
-	// and the Pool Controller places Pools on them.
+	// hosts is the Hosts battery holds uncordoned and the Inventory
+	// Controller is not about to cordon or remove (IN-018): it publishes
+	// them, and the Pool Controller places Pools on them.
 	hosts := inventory.NewHostSet()
 	// events is the Operator's one subscription to battery's Events stream,
 	// which the Pool and Claim Controllers share: each registers its side
@@ -274,19 +264,12 @@ func main() {
 		setupLog.Error(err, "Failed to add the subscription to battery's events")
 		os.Exit(1)
 	}
-	batteryConfigMap := client.ObjectKey{Namespace: signerConfig.Namespace, Name: sidecarConfig.ConfigMap}
 	if err := (&controller.InventoryReconciler{
-		Client: mgr.GetClient(),
-		Store: inventory.ConfigMapStore{
-			Reader: mgr.GetAPIReader(),
-			Writer: mgr.GetClient(),
-			Key:    batteryConfigMap,
-		},
-		ConfigMap:    batteryConfigMap,
-		Restarter:    restarter,
+		Client:       mgr.GetClient(),
+		Admin:        batteryConn,
+		Mount:        inventory.FileMount{Path: sidecarConfig.ClientCertFile},
 		ClientSecret: client.ObjectKey{Namespace: signerConfig.Namespace, Name: sidecarConfig.ClientSecret},
 		Hosts:        hosts,
-		Pools:        batteryClient,
 		Options:      inventoryOptions,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "inventory")

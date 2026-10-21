@@ -19,26 +19,20 @@ package inventory
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/phoban01/battery-operator/internal/batterysidecar"
+	"github.com/phoban01/battery-operator/internal/battery"
 	"github.com/phoban01/battery-operator/internal/execagent"
-	"github.com/phoban01/battery-operator/internal/reconcile"
 )
 
-// TestAnnotationsAreTheExecAgents checks that the Node report the
-// Inventory Controller reads is the one the Exec Agent writes.
-func TestAnnotationsAreTheExecAgents(t *testing.T) {
-	if AnnotationReady != execagent.AnnotationReady {
-		t.Errorf("AnnotationReady = %q, the Exec Agent writes %q", AnnotationReady, execagent.AnnotationReady)
-	}
-	if AnnotationFlintlockdAddress != execagent.AnnotationFlintlockdAddress {
-		t.Errorf("AnnotationFlintlockdAddress = %q, the Exec Agent writes %q",
-			AnnotationFlintlockdAddress, execagent.AnnotationFlintlockdAddress)
+func TestReportAnnotationsMatchTheExecAgent(t *testing.T) {
+	if AnnotationReady != execagent.AnnotationReady || AnnotationFlintlockdAddress != execagent.AnnotationFlintlockdAddress {
+		t.Error("the Inventory Controller reads other annotations than the Exec Agent writes")
 	}
 }
 
@@ -52,188 +46,38 @@ func TestAnnotationsAreTheExecAgents(t *testing.T) {
 //# The Inventory Controller SHALL give battery each Host under the
 //# Node's name, at the `flintlockd` address the Host's Node report gives.
 
-// TestAdmit covers IN-001 and IN-003: only a ready, schedulable Node with a
-// flintlockd address is a Host, under its Node's name at that address.
+// TestAdmit checks which Nodes are Hosts, and at which address.
 func TestAdmit(t *testing.T) {
-	deleting := host("deleting", "10.0.0.9:9090")
+	deleting := host("node-d", "10.0.0.4:9090")
 	deleting.DeletionTimestamp = &metav1.Time{Time: time.Now()}
 	deleting.Finalizers = []string{"example.com/hold"}
-	noAddress := host("no-address", "")
-	unreported := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "unreported"}}
 	nodes := []*corev1.Node{
 		host(nodeA, addrA),
-		with(host("cordoned", "10.0.0.3:9090"), cordon),
-		with(host("not-ready", "10.0.0.4:9090"), notReady),
-		with(host("ready-yes", "10.0.0.5:9090"), func(n *corev1.Node) { n.Annotations[AnnotationReady] = "yes" }),
-		noAddress,
-		unreported,
-		deleting,
 		host(nodeB, addrB),
+		host("node-c", addrC),
+		deleting,
+		host("node-e", ""),
+		{ObjectMeta: metav1.ObjectMeta{Name: "node-f"}},
 	}
-	s := &Scope{}
-	for _, n := range nodes {
-		s.Nodes = append(s.Nodes, *n)
-	}
+	cordon(nodes[1])
+	notReady(nodes[2])
+	h := newHarness(t, nodes...)
+	s := h.scope()
 	if _, err := (Admit{}).Reconcile(context.Background(), s); err != nil {
 		t.Fatal(err)
 	}
-	if want := (Hosts{nodeA: addrA, nodeB: addrB}); !s.Observed.Equal(want) {
+	if want := (Hosts{nodeA: addrA}); !s.Observed.Equal(want) {
 		t.Errorf("Observed = %v, want %v", s.Observed, want)
 	}
 }
 
-func with(n *corev1.Node, change func(*corev1.Node)) *corev1.Node {
-	change(n)
-	return n
-}
-
 //= docs/requirements/04-inventory.md#applying
 //= type=test
-//# The Inventory Controller SHALL act on a change in whether a Node
-//# is a Host only after the change has held for the configured settle time.
-
-// TestSettleWaitsForTheSettleTime covers IN-011: a Node that becomes a
-// Host is left out of the Hosts battery should have until the change has
-// held for the settle time, and a change that flaps starts to settle again.
-func TestSettleWaitsForTheSettleTime(t *testing.T) {
-	h := newHarness(t)
-	sub := Settle{Time: settle}
-	run := func(observed Hosts) (*Scope, reconcile.Result) {
-		t.Helper()
-		s := h.scope()
-		s.Observed = observed
-		r, err := sub.Reconcile(context.Background(), s)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return s, r
-	}
-
-	s, r := run(Hosts{nodeA: addrA})
-	if len(s.Desired) != 0 {
-		t.Errorf("a change not yet settled is desired: %v", s.Desired)
-	}
-	if r.RequeueAfter != settle {
-		t.Errorf("RequeueAfter = %s, want the settle time %s", r.RequeueAfter, settle)
-	}
-
-	h.clock.Advance(settle - time.Second)
-	if s, r = run(Hosts{nodeA: addrA}); len(s.Desired) != 0 || r.RequeueAfter != time.Second {
-		t.Errorf("a second before settling: Desired %v, RequeueAfter %s", s.Desired, r.RequeueAfter)
-	}
-
-	// It flaps back and forth: the change starts to settle again.
-	run(Hosts{})
-	h.clock.Advance(time.Second)
-	if s, r = run(Hosts{nodeA: addrA}); len(s.Desired) != 0 || r.RequeueAfter != settle {
-		t.Errorf("after a flap: Desired %v, RequeueAfter %s, want nothing and %s", s.Desired, r.RequeueAfter, settle)
-	}
-
-	h.clock.Advance(settle)
-	if s, _ = run(Hosts{nodeA: addrA}); !s.Desired.Equal(Hosts{nodeA: addrA}) {
-		t.Errorf("once settled: Desired %v, want node-a", s.Desired)
-	}
-}
-
-// TestSettleMovesAnAddressOnceSettled checks that a Host whose flintlockd
-// address moves keeps its old address until the move has settled.
-func TestSettleMovesAnAddressOnceSettled(t *testing.T) {
-	h := newHarness(t)
-	s := h.scope()
-	s.Config.Hosts = Hosts{nodeA: addrA}
-	s.Observed = Hosts{nodeA: addrB}
-	sub := Settle{Time: settle}
-	if _, err := sub.Reconcile(context.Background(), s); err != nil {
-		t.Fatal(err)
-	}
-	if !s.Desired.Equal(Hosts{nodeA: addrA}) {
-		t.Errorf("before settling: Desired %v, want the old address", s.Desired)
-	}
-	h.clock.Advance(settle)
-	if _, err := sub.Reconcile(context.Background(), s); err != nil {
-		t.Fatal(err)
-	}
-	if !s.Desired.Equal(Hosts{nodeA: addrB}) {
-		t.Errorf("once settled: Desired %v, want the new address", s.Desired)
-	}
-}
-
-//= docs/requirements/04-inventory.md#admission
-//= type=test
-//# When a Node that is a Host is cordoned or deleted, or its Node
-//# report says the Host is not ready, the Inventory Controller SHALL remove
-//# the Host from battery's Hosts.
-
-// TestHostLeaves covers IN-002: a Host that is cordoned, deleted or
-// reported not ready leaves battery's Hosts once the change has settled
-// and its window has closed.
-func TestHostLeaves(t *testing.T) {
-	for name, leave := range map[string]func(*harness){
-		"cordoned":  func(h *harness) { h.update(nodeA, cordon) },
-		"not ready": func(h *harness) { h.update(nodeA, notReady) },
-		"deleted": func(h *harness) {
-			if err := h.c.Delete(context.Background(), host(nodeA, addrA)); err != nil {
-				t.Fatal(err)
-			}
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			h := newHarness(t, host(nodeA, addrA), host(nodeB, addrB))
-			joinAll(h)
-			before := h.restarter.count()
-
-			leave(h)
-			h.mustReconcile()
-			h.advance(settle)
-			if h.restarter.count() != before {
-				t.Fatal("battery restarted before the window closed")
-			}
-			h.advance(window)
-			if h.restarter.count() != before+1 {
-				t.Fatalf("restarts = %d, want one more than %d", h.restarter.count(), before)
-			}
-			if got := hostsOf(h.lastRestart()); !got.Equal(Hosts{nodeB: addrB}) {
-				t.Errorf("battery restarted with %v, want node-b alone", got)
-			}
-			if got := h.published(); !got.Equal(Hosts{nodeB: addrB}) {
-				t.Errorf("published %v, want node-b alone", got)
-			}
-		})
-	}
-}
-
-// TestLastHostLeavesForThePlaceholder checks that battery keeps its
-// placeholder Host when no Host is left, since poolmgrd refuses to start
-// with none, and that the placeholder is never published as a Host.
-func TestLastHostLeavesForThePlaceholder(t *testing.T) {
-	h := newHarness(t, host(nodeA, addrA))
-	joinAll(h)
-	h.update(nodeA, cordon)
-	h.mustReconcile()
-	h.advance(settle)
-	h.advance(window)
-	f := h.lastRestart()
-	if len(f.Hosts) != 1 || f.Hosts[0].Name != batterysidecar.PlaceholderHostName {
-		t.Errorf("battery restarted with %+v, want the placeholder alone", f.Hosts)
-	}
-	if got := h.published(); got == nil || len(got) != 0 {
-		t.Errorf("published %v, want no Hosts", got)
-	}
-}
-
-// joinAll runs the harness until every Node that is a Host has joined
-// battery: one settle time and one window.
-func joinAll(h *harness) {
-	h.t.Helper()
-	h.mustReconcile()
-	h.advance(settle)
-	h.advance(window)
-}
-
-//= docs/requirements/04-inventory.md#applying
-//= type=test
-//# When the set of Hosts changes, the Inventory Controller SHALL
-//# write the new list to battery's configuration and restart battery.
+//# While a Node is a Host, the Inventory Controller SHALL keep a
+//# Host of the Node's name in battery, uncordoned, at the Node's `flintlockd`
+//# address and with the TLS settings of IN-004, adding it with `AddHost`,
+//# and changing its address or TLS settings with `UpdateHost` and uncordoning
+//# it with `UncordonHost` wherever battery's Host differs.
 
 //= docs/requirements/04-inventory.md#admission
 //= type=test
@@ -242,214 +86,482 @@ func joinAll(h *harness) {
 //# the configured certificate authority and presenting the Operator's client
 //# certificate for `flintlockd`.
 
-// TestReadyHostJoins covers IN-010 and IN-004: a ready Node joins battery's
-// configuration, battery restarts once with exactly what was written, and
-// every Host is reached over TLS with the client certificate and the
-// serving CA. The Hosts are published only once battery has restarted.
-func TestReadyHostJoins(t *testing.T) {
+//= docs/requirements/04-inventory.md#applying
+//= type=test
+//# The Inventory Controller SHALL act on a change in whether a Node
+//# is a Host only after the change has held for the configured settle time.
+
+// TestAddsAHostOnceSettled checks that a Node becoming a Host reaches
+// battery through AddHost once the settle time has passed, with mutual TLS
+// to its flintlockd and battery's check that it can reach it.
+func TestAddsAHostOnceSettled(t *testing.T) {
 	h := newHarness(t, host(nodeA, addrA))
-	h.restarter.during = func() {
-		if got := h.published(); got == nil || len(got) != 0 {
-			t.Errorf("during the restart, published %v, want the Hosts battery ran with before", got)
-		}
-		if !h.stored().Pending {
-			t.Error("during the restart, the configuration is not marked pending")
+	res := h.mustReconcile()
+	if res.RequeueAfter != settle {
+		t.Errorf("RequeueAfter = %s, want the settle time", res.RequeueAfter)
+	}
+	if _, ok := h.admin.held(nodeA); ok {
+		t.Fatal("battery holds the Host before the settle time")
+	}
+	h.advance(settle - time.Second)
+	if _, ok := h.admin.held(nodeA); ok {
+		t.Fatal("battery holds the Host a second before the settle time")
+	}
+	h.advance(time.Second)
+	got, ok := h.admin.held(nodeA)
+	if !ok || got.Address != addrA || got.Cordoned {
+		t.Fatalf("battery holds %+v (%v), want node-a uncordoned at %s", got, ok, addrA)
+	}
+	if got.TLS.Insecure || got.TLS.CAFile == "" || got.TLS.CertFile == "" || got.TLS.KeyFile == "" || got.TLS != TLS {
+		t.Errorf("battery reaches node-a with %+v, want mutual TLS %+v", got.TLS, TLS)
+	}
+	for _, c := range h.admin.calls {
+		if c.op == opAddHost && c.skipValidation {
+			t.Error("AddHost skipped battery's check that it can reach the Host")
 		}
 	}
+}
+
+// TestKeepsAHostInStep checks the Host of a Node that is a Host: an address
+// that moved and settled is updated, a Host battery holds cordoned is
+// uncordoned, and a Host already in step is left alone.
+func TestKeepsAHostInStep(t *testing.T) {
+	t.Run("in step", func(t *testing.T) {
+		h := newHarness(t, host(nodeA, addrA))
+		h.admin.put(heldHost(nodeA, addrA))
+		h.mustReconcile()
+		h.advance(settle)
+		if ops := h.admin.ops(); len(ops) != 0 {
+			t.Errorf("calls %v, want none", ops)
+		}
+	})
+	t.Run("address moved", func(t *testing.T) {
+		h := newHarness(t, host(nodeA, addrA))
+		h.admin.put(heldHost(nodeA, addrA))
+		h.mustReconcile()
+		h.changeA(moveTo(addrC))
+		h.settled()
+		if got, _ := h.admin.held(nodeA); got.Address != addrC {
+			t.Errorf("battery reaches node-a at %s, want %s", got.Address, addrC)
+		}
+		if ops := h.admin.ops(); !slices.Equal(ops, []string{opUpdateHost + " " + nodeA}) {
+			t.Errorf("calls %v, want one UpdateHost", ops)
+		}
+	})
+	t.Run("cordoned in battery", func(t *testing.T) {
+		h := newHarness(t, host(nodeA, addrA))
+		held := heldHost(nodeA, addrA)
+		held.Cordoned = true
+		h.admin.put(held)
+		h.settled()
+		if got, _ := h.admin.held(nodeA); got.Cordoned {
+			t.Error("battery's Host stays cordoned")
+		}
+		if ops := h.admin.ops(); !slices.Equal(ops, []string{opUncordonHost + " " + nodeA}) {
+			t.Errorf("calls %v, want one UncordonHost", ops)
+		}
+	})
+}
+
+//= docs/requirements/04-inventory.md#applying
+//= type=test
+//# If `AddHost` answers that battery already holds a Host of that
+//# name, then the Inventory Controller SHALL read the Host with `GetHost` and
+//# bring it in step as IN-017 says, without failing the reconcile.
+
+// TestAddHostThatBatteryHolds checks the Host that ListHosts did not show
+// and AddHost finds: as after an upgrade, battery holds it with no TLS
+// settings, and the Inventory Controller updates it.
+func TestAddHostThatBatteryHolds(t *testing.T) {
+	h := newHarness(t, host(nodeA, addrA))
+	h.admin.put(battery.Host{Name: nodeA, Address: addrA})
+	h.admin.hidden[nodeA] = true
 	h.mustReconcile()
-	if !h.hosts.Synced() {
-		t.Error("the Hosts battery starts with were not published")
+	if _, err := h.reconcile(); err != nil {
+		t.Fatal(err)
 	}
-	joinAll(h)
+	h.clock.Advance(settle)
+	if _, err := h.reconcile(); err != nil {
+		t.Fatalf("the reconcile failed for a Host battery already holds: %v", err)
+	}
+	want := []string{opAddHost + " " + nodeA, opGetHost + " " + nodeA, opUpdateHost + " " + nodeA}
+	if ops := h.admin.ops(); !slices.Equal(ops, want) {
+		t.Errorf("calls %v, want %v", ops, want)
+	}
+	if got, _ := h.admin.held(nodeA); got.TLS != TLS {
+		t.Errorf("battery reaches node-a with %+v, want %+v", got.TLS, TLS)
+	}
+}
 
-	if n := h.restarter.count(); n != 1 {
-		t.Fatalf("restarts = %d, want 1", n)
+//= docs/requirements/04-inventory.md#admission
+//= type=test
+//# When a Node that is a Host is cordoned, or its Node report
+//# says the Host is not ready or gives no `flintlockd` address, the
+//# Inventory Controller SHALL cordon the Host in battery with `CordonHost`,
+//# and SHALL keep it in battery's Hosts.
+
+// TestCordonsAHostThatStopsBeingOne checks each way a Node can stop being a
+// Host while it exists: battery cordons its Host once the change has
+// settled, keeps it, and is never asked to remove it; and the Host is
+// uncordoned when the Node is a Host again.
+func TestCordonsAHostThatStopsBeingOne(t *testing.T) {
+	for name, tc := range map[string]struct {
+		change, undo func(*corev1.Node)
+		reason       string
+	}{
+		"cordoned":   {cordon, uncordon, "Node cordoned"},
+		"not ready":  {notReady, func(n *corev1.Node) { n.Annotations[AnnotationReady] = annotationTrue }, "Host not ready"},
+		"no address": {noAddress, moveTo(addrA), "Node report gives no flintlockd address"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t, host(nodeA, addrA))
+			h.admin.put(heldHost(nodeA, addrA))
+			h.mustReconcile()
+			h.changeA(tc.change)
+			h.mustReconcile()
+			if got, _ := h.admin.held(nodeA); got.Cordoned {
+				t.Fatal("battery cordoned the Host before the settle time")
+			}
+			h.advance(settle)
+			got, ok := h.admin.held(nodeA)
+			if !ok || !got.Cordoned || got.CordonedReason != tc.reason {
+				t.Fatalf("battery holds %+v (%v), want node-a cordoned for %q", got, ok, tc.reason)
+			}
+			h.advance(removeRetry)
+			if slices.Contains(h.admin.ops(), opRemoveHost+" "+nodeA) {
+				t.Error("battery was asked to remove the Host of a Node that exists")
+			}
+			if _, ok := h.admin.held(nodeA); !ok {
+				t.Fatal("battery no longer holds the Host")
+			}
+
+			h.changeA(tc.undo)
+			h.settled()
+			if got, _ := h.admin.held(nodeA); got.Cordoned || got.Address != addrA {
+				t.Errorf("battery holds %+v, want node-a uncordoned at %s", got, addrA)
+			}
+			if !h.published().Equal(Hosts{nodeA: addrA}) {
+				t.Errorf("published %v, want node-a back", h.published())
+			}
+		})
 	}
-	stored := h.stored()
-	if string(stored.Raw) != string(h.restarter.configs[0]) {
-		t.Error("battery restarted with something other than its ConfigMap holds")
+}
+
+// TestAFlappingHostReachesBatteryNotAtAll checks that a change that flaps
+// back within the settle time calls battery for nothing.
+func TestAFlappingHostReachesBatteryNotAtAll(t *testing.T) {
+	h := newHarness(t, host(nodeA, addrA))
+	h.admin.put(heldHost(nodeA, addrA))
+	h.mustReconcile()
+	h.changeA(notReady)
+	h.advance(settle / 2)
+	h.changeA(func(n *corev1.Node) { n.Annotations[AnnotationReady] = annotationTrue })
+	h.advance(settle / 2)
+	h.advance(settle)
+	if ops := h.admin.ops(); len(ops) != 0 {
+		t.Errorf("calls %v, want none", ops)
 	}
-	if stored.Pending {
-		t.Error("the configuration is still pending after the restart")
+}
+
+//= docs/requirements/04-inventory.md#admission
+//= type=test
+//# When battery holds a Host whose Node does not exist or is being
+//# deleted, the Inventory Controller SHALL cordon the Host and remove it with
+//# `RemoveHost`, and SHALL try again while battery refuses because a Pool
+//# names the Host or a MicroVM is still on it.
+
+// TestRemovesTheHostOfADeletedNode checks that the Host of a deleted Node
+// is cordoned, then removed, and that battery's refusals, while a Pool
+// names it and while a MicroVM is on it, are retried after the remove
+// retry without failing the reconcile.
+func TestRemovesTheHostOfADeletedNode(t *testing.T) {
+	h := newHarness(t, host(nodeA, addrA), host(nodeB, addrB))
+	h.admin.put(heldHost(nodeA, addrA))
+	h.admin.put(heldHost(nodeB, addrB))
+	h.admin.naming[nodeA] = []string{"ci/pool"}
+	h.admin.vms[nodeA] = 1
+	h.mustReconcile()
+	h.remove(nodeA)
+	h.settled()
+
+	got, ok := h.admin.held(nodeA)
+	if !ok || !got.Cordoned || got.CordonedReason != "Node deleted" {
+		t.Fatalf("battery holds %+v (%v), want node-a cordoned as deleted", got, ok)
 	}
-	f := h.lastRestart()
-	if got := hostsOf(f); !got.Equal(Hosts{nodeA: addrA}) {
-		t.Fatalf("battery restarted with %v, want node-a", got)
+	if !h.published().Equal(Hosts{nodeB: addrB}) {
+		t.Errorf("published %v, want node-b alone", h.published())
 	}
-	want := batterysidecar.HostTLS{
-		CertFile: batterysidecar.ClientCertFile,
-		KeyFile:  batterysidecar.ClientKeyFile,
-		CAFile:   batterysidecar.ServingCAFile,
-	}
-	if f.Hosts[0].TLS != want {
-		t.Errorf("TLS %+v, want %+v", f.Hosts[0].TLS, want)
-	}
-	if got := h.published(); !got.Equal(Hosts{nodeA: addrA}) {
-		t.Errorf("published %v, want node-a", got)
+	ops := h.admin.ops()
+	if i, j := slices.Index(ops, opCordonHost+" "+nodeA), slices.Index(ops, opRemoveHost+" "+nodeA); i < 0 || j < i {
+		t.Errorf("calls %v, want CordonHost before RemoveHost", ops)
 	}
 
-	// Nothing changes: battery is left alone.
-	h.advance(10 * window)
-	if n := h.restarter.count(); n != 1 {
-		t.Errorf("restarts = %d with nothing changed, want 1", n)
+	// A Pool still names it.
+	if res := h.advance(time.Second); res.RequeueAfter != removeRetry {
+		t.Errorf("RequeueAfter = %s, want the remove retry", res.RequeueAfter)
+	}
+	// The Pool Controller dropped it; a MicroVM is still on it.
+	h.admin.naming[nodeA] = nil
+	if res := h.advance(removeRetry); res.RequeueAfter != removeRetry {
+		t.Errorf("RequeueAfter = %s, want the remove retry", res.RequeueAfter)
+	}
+	if _, ok := h.admin.held(nodeA); !ok {
+		t.Fatal("battery removed a Host with a MicroVM on it")
+	}
+	// Its last Lease ended.
+	h.admin.vms[nodeA] = 0
+	h.advance(removeRetry)
+	if _, ok := h.admin.held(nodeA); ok {
+		t.Fatal("battery still holds the Host of a deleted Node")
+	}
+	if _, ok := h.admin.held(nodeB); !ok {
+		t.Error("battery lost node-b")
+	}
+}
+
+// TestRemovesAHostNoNodeNames checks a Host battery holds that no Node
+// names, such as the placeholder an Operator before v0.5 gave battery: it
+// is cordoned and removed at once, since there is no change to settle.
+func TestRemovesAHostNoNodeNames(t *testing.T) {
+	h := newHarness(t)
+	h.admin.put(battery.Host{Name: "_no-hosts", Address: "no-hosts.invalid:9090"})
+	h.mustReconcile()
+	h.advance(settle)
+	if _, ok := h.admin.held("_no-hosts"); ok {
+		t.Errorf("battery still holds the placeholder; calls %v", h.admin.ops())
+	}
+}
+
+// TestRemovesTheHostOfANodeBeingDeleted checks that a Node with a deletion
+// timestamp counts as gone.
+func TestRemovesTheHostOfANodeBeingDeleted(t *testing.T) {
+	n := host(nodeA, addrA)
+	n.Finalizers = []string{"example.com/hold"}
+	h := newHarness(t, n)
+	h.admin.put(heldHost(nodeA, addrA))
+	h.mustReconcile()
+	if err := h.c.Delete(context.Background(), n); err != nil {
+		t.Fatal(err)
+	}
+	h.settled()
+	if _, ok := h.admin.held(nodeA); ok {
+		t.Errorf("battery still holds the Host of a Node being deleted; calls %v", h.admin.ops())
 	}
 }
 
 //= docs/requirements/04-inventory.md#applying
 //= type=test
-//# When a change has settled and no restart window is open, the
-//# Inventory Controller SHALL open a restart window of the configured
-//# length, and SHALL apply every change that has settled by the time the
-//# window closes in a single restart of battery.
+//# The Inventory Controller SHALL give the Pool Controller a Host
+//# only once battery holds it uncordoned at the Node's address, and SHALL
+//# take a Host from the Pool Controller before it cordons or removes the Host.
 
-// TestWindowBatchesSettledChanges covers IN-012: two Nodes that settle at
-// different times within one window join battery in one restart, at the
-// window's close; a change still settling when it closes waits for a
-// window of its own.
-func TestWindowBatchesSettledChanges(t *testing.T) {
-	h := newHarness(t, host(nodeA, addrA))
-	h.mustReconcile()
-	r := h.advance(settle) // node-a settles: the window opens
-	if _, open := h.state.WindowOpened(); !open {
-		t.Fatal("no window opened when node-a settled")
-	}
-	if r.RequeueAfter != window {
-		t.Errorf("RequeueAfter = %s, want the window %s", r.RequeueAfter, window)
-	}
-
-	h.clock.Advance(window - settle - 10*time.Second)
-	h.create(host(nodeB, addrB)) // settles 10s before the window closes
-	h.mustReconcile()
-	h.advance(settle)
-	if n := h.restarter.count(); n != 0 {
-		t.Fatalf("restarts = %d before the window closed", n)
-	}
-	h.create(host("node-c", "10.0.0.3:9090")) // still settling at the close
-	h.advance(10 * time.Second)               // the window closes
-	if n := h.restarter.count(); n != 1 {
-		t.Fatalf("restarts = %d at the window's close, want 1", n)
-	}
-	if got := hostsOf(h.lastRestart()); !got.Equal(Hosts{nodeA: addrA, nodeB: addrB}) {
-		t.Errorf("battery restarted with %v, want node-a and node-b", got)
-	}
-
-	// node-c settles in a window of its own.
-	h.advance(settle)
-	h.advance(window)
-	if n := h.restarter.count(); n != 2 {
-		t.Fatalf("restarts = %d, want 2", n)
-	}
-	if gap := h.restarter.at[1].Sub(h.restarter.at[0]); gap < window {
-		t.Errorf("restarts %s apart, want at least the window %s", gap, window)
-	}
-}
-
-// TestWindowWhoseChangesFlappedBackCloses checks that a window whose
-// changes all flapped back closes without restarting battery.
-func TestWindowWhoseChangesFlappedBackCloses(t *testing.T) {
-	h := newHarness(t, host(nodeA, addrA))
-	h.mustReconcile()
-	h.advance(settle)
-	h.update(nodeA, notReady)
-	h.mustReconcile()
-	if _, open := h.state.WindowOpened(); open {
-		t.Error("the window is still open with nothing to apply")
-	}
-	h.advance(window)
-	if n := h.restarter.count(); n != 0 {
-		t.Errorf("restarts = %d, want none", n)
-	}
-}
-
-// TestFlappingHostRestartsAtMostOncePerWindow is the issue's debounce test:
-// a Host whose report flaps, sometimes faster than the settle time and
-// sometimes slower, restarts battery at most once per restart window.
-func TestFlappingHostRestartsAtMostOncePerWindow(t *testing.T) {
+// TestPublishesOnlyHostsBatteryPlacesOn checks the HostSet's side of every
+// change: a joining Host is published only after AddHost, and only if it
+// succeeds; a leaving Host is gone from it before CordonHost and
+// RemoveHost; a moving Host is gone from it before UpdateHost.
+func TestPublishesOnlyHostsBatteryPlacesOn(t *testing.T) {
 	h := newHarness(t, host(nodeA, addrA), host(nodeB, addrB))
-	joinAll(h)
-	h.restarter.at, h.restarter.configs = nil, nil
-
-	const tick = time.Second
-	const duration = 30 * time.Minute
-	start := h.clock.Now()
-	// Flap node-b every 5s for five minutes, then every 100s, slower than
-	// the settle time and the window, for the rest.
-	for elapsed := time.Duration(0); elapsed < duration; elapsed += tick {
-		period := 5 * time.Second
-		if elapsed >= 5*time.Minute {
-			period = 100 * time.Second
+	h.admin.unreachable[addrB] = true
+	h.mustReconcile()
+	if !h.published().Equal(Hosts{}) {
+		t.Errorf("published %v before battery holds any Host", h.published())
+	}
+	h.clock.Advance(settle)
+	if _, err := h.reconcile(); err == nil {
+		t.Error("the reconcile did not fail for a Host battery cannot reach")
+	}
+	for _, c := range h.admin.calls {
+		if c.op == opAddHost && len(c.published) != 0 {
+			t.Errorf("%s came with %v published", c, c.published)
 		}
-		if elapsed%period == 0 {
-			if (elapsed/period)%2 == 0 {
-				h.update(nodeB, notReady)
-			} else {
-				h.update(nodeB, ready)
+	}
+	if !h.published().Equal(Hosts{nodeA: addrA}) {
+		t.Errorf("published %v, want node-a alone: battery refused node-b", h.published())
+	}
+	delete(h.admin.unreachable, addrB)
+	h.mustReconcile()
+
+	h.admin.reset()
+	h.changeA(moveTo(addrC))
+	h.settled()
+	h.remove(nodeA)
+	h.settled()
+	for _, c := range h.admin.calls {
+		if c.name == nodeA && (c.op == opUpdateHost || c.op == opCordonHost || c.op == opRemoveHost) {
+			if _, ok := c.published[nodeA]; ok {
+				t.Errorf("%s came while node-a was still published: %v", c, c.published)
 			}
 		}
-		h.advance(tick)
-	}
-	at := h.restarter.at
-	if len(at) == 0 {
-		t.Fatal("battery never restarted, though node-b's slow flaps settle")
-	}
-	if most := int(duration/window) + 1; len(at) > most {
-		t.Errorf("restarts = %d in %s, want at most %d", len(at), duration, most)
-	}
-	for i := 1; i < len(at); i++ {
-		if gap := at[i].Sub(at[i-1]); gap < window {
-			t.Errorf("restarts %d and %d are %s apart, want at least %s", i-1, i, gap, window)
-		}
-	}
-	for _, t0 := range at {
-		if t0.Before(start.Add(5 * time.Minute)) {
-			t.Errorf("battery restarted at %s, while node-b flapped faster than the settle time", t0)
-		}
 	}
 }
 
-// TestResumeFinishesAnInterruptedRestart checks that a configuration
-// written and not restarted into, because the restart failed or the
-// Operator stopped, is restarted into on the next reconcile, before
-// anything else, and that its Hosts are published only then.
-func TestResumeFinishesAnInterruptedRestart(t *testing.T) {
+// TestOneHostFailingDoesNotHoldBackTheOthers checks that a call that fails
+// for one Host leaves the others to go ahead, and fails the reconcile.
+func TestOneHostFailingDoesNotHoldBackTheOthers(t *testing.T) {
+	h := newHarness(t, host(nodeA, addrA), host(nodeB, addrB))
+	h.admin.fail[opAddHost+" "+nodeA] = battery.ErrUnavailable
+	h.mustReconcile()
+	h.clock.Advance(settle)
+	if _, err := h.reconcile(); !errors.Is(err, battery.ErrUnavailable) {
+		t.Errorf("reconcile: %v, want the failure of node-a", err)
+	}
+	if _, ok := h.admin.held(nodeB); !ok {
+		t.Error("node-b was held back by node-a")
+	}
+	delete(h.admin.fail, opAddHost+" "+nodeA)
+	h.mustReconcile()
+	if !h.published().Equal(Hosts{nodeA: addrA, nodeB: addrB}) {
+		t.Errorf("published %v, want both", h.published())
+	}
+}
+
+//= docs/requirements/04-inventory.md#upgrade
+//= type=test
+//# When battery holds a Host whose TLS settings are not those of
+//# IN-004, the Inventory Controller SHALL update the Host with `UpdateHost` to
+//# those settings, keeping its address.
+
+// TestGivesEveryHostItsTLSSettings checks the Hosts battery v0.4 copied
+// from its configuration file, which have no TLS settings: a Node's Host is
+// updated and validated, and a cordoned one is updated at its address
+// without the check, since its flintlockd may be down.
+func TestGivesEveryHostItsTLSSettings(t *testing.T) {
+	n := host(nodeB, addrB)
+	cordon(n)
+	h := newHarness(t, host(nodeA, addrA), n)
+	h.admin.put(battery.Host{Name: nodeA, Address: addrA})
+	h.admin.put(battery.Host{Name: nodeB, Address: addrB, Cordoned: true})
+	h.mustReconcile()
+	for _, name := range []string{nodeA, nodeB} {
+		if got, _ := h.admin.held(name); got.TLS != TLS || got.Address != map[string]string{nodeA: addrA, nodeB: addrB}[name] {
+			t.Errorf("battery holds %+v, want its address and %+v", got, TLS)
+		}
+	}
+	for _, c := range h.admin.calls {
+		if c.op == opUpdateHost && c.skipValidation != (c.name == nodeB) {
+			t.Errorf("%s: skipValidation %v", c, c.skipValidation)
+		}
+	}
+	if b, _ := h.admin.held(nodeB); !b.Cordoned {
+		t.Error("node-b was uncordoned")
+	}
+	if !h.published().Equal(Hosts{nodeA: addrA}) {
+		t.Errorf("published %v, want node-a alone", h.published())
+	}
+}
+
+//= docs/requirements/06-deployment.md#battery-sidecar
+//= type=test
+//# When the client certificate in the Secret of DP-005 changes,
+//# and once after the Operator starts, the Operator SHALL call `UpdateHost`
+//# for every Host battery holds, with the Host's address and TLS settings
+//# unchanged, once the Operator's own mount of that Secret holds the
+//# certificate the Secret holds.
+
+// TestReloadsTheClientCertificate checks that battery reconnects to every
+// Host once after the Operator starts and once after each renewal, only
+// once the mount holds the Secret's certificate, with each Host's settings
+// unchanged and without the reachability check.
+func TestReloadsTheClientCertificate(t *testing.T) {
+	n := host(nodeB, addrB)
+	cordon(n)
+	h := newHarness(t, host(nodeA, addrA), n)
+	h.admin.put(heldHost(nodeA, addrA))
+	b := heldHost(nodeB, addrB)
+	b.Cordoned = true
+	h.admin.put(b)
+	h.state = NewState() // the Operator has just started
+	updates := func() []string {
+		var out []string
+		for _, c := range h.admin.calls {
+			if c.op == opUpdateHost {
+				if !c.skipValidation {
+					t.Errorf("%s checked the Host", c)
+				}
+				out = append(out, c.name)
+			}
+		}
+		h.admin.reset()
+		return out
+	}
+
+	// The Operator has just started; the mount is still swapping.
+	h.mount.set(nil)
+	if res := h.mustReconcile(); res.RequeueAfter != mountPoll {
+		t.Errorf("RequeueAfter = %s, want the mount poll", res.RequeueAfter)
+	}
+	if got := updates(); len(got) != 0 {
+		t.Fatalf("updated %v before the mount held the certificate", got)
+	}
+	h.mount.set(certificate1)
+	h.advance(mountPoll)
+	if got := updates(); !slices.Equal(got, []string{nodeA, nodeB}) {
+		t.Fatalf("updated %v after the start, want every Host", got)
+	}
+	h.advance(time.Minute)
+	if got := updates(); len(got) != 0 {
+		t.Fatalf("updated %v again with nothing renewed", got)
+	}
+
+	// cert-manager renews; the kubelet updates the volume later.
+	h.cert = certificate2
+	h.mustReconcile()
+	if got := updates(); len(got) != 0 {
+		t.Fatalf("updated %v before the mount held the renewal", got)
+	}
+	h.mount.set(certificate2)
+	h.advance(mountPoll)
+	if got := updates(); !slices.Equal(got, []string{nodeA, nodeB}) {
+		t.Fatalf("updated %v after the renewal, want every Host", got)
+	}
+	for name, addr := range map[string]string{nodeA: addrA, nodeB: addrB} {
+		if got, _ := h.admin.held(name); got.Address != addr || got.TLS != TLS {
+			t.Errorf("the reload changed %s to %+v", name, got)
+		}
+	}
+	if b, _ := h.admin.held(nodeB); !b.Cordoned {
+		t.Error("the reload uncordoned node-b")
+	}
+}
+
+// TestReloadRetriesAFailure checks that a reload that fails for one Host
+// is tried again at the next reconcile, for every Host.
+func TestReloadRetriesAFailure(t *testing.T) {
 	h := newHarness(t, host(nodeA, addrA))
-	h.restarter.err = errors.New("battery did not answer")
-	h.mustReconcile()
-	h.advance(settle)
-	h.clock.Advance(window)
+	h.admin.put(heldHost(nodeA, addrA))
+	h.state = NewState() // the Operator has just started
+	h.admin.fail[opUpdateHost+" "+nodeA] = battery.ErrUnavailable
 	if _, err := h.reconcile(); err == nil {
-		t.Fatal("a failed restart did not fail the reconcile")
+		t.Fatal("the reconcile did not fail")
 	}
-	if !h.stored().Pending {
-		t.Fatal("the configuration written is not marked pending")
-	}
-	if got := h.published(); got == nil || len(got) != 0 {
-		t.Errorf("after a failed restart, published %v, want the Hosts battery ran with", got)
-	}
-
-	// The Operator restarts: its memory is gone, the ConfigMap is not.
-	h.state, h.hosts = NewState(), NewHostSet()
-	h.restarter.err = nil
+	delete(h.admin.fail, opUpdateHost+" "+nodeA)
+	h.admin.reset()
 	h.mustReconcile()
-	if n := h.restarter.count(); n != 1 {
-		t.Fatalf("restarts = %d, want the interrupted one finished", n)
-	}
-	if h.stored().Pending {
-		t.Error("the configuration is still pending")
-	}
-	if got := h.published(); !got.Equal(Hosts{nodeA: addrA}) {
-		t.Errorf("published %v, want node-a", got)
+	if ops := h.admin.ops(); !slices.Equal(ops, []string{opUpdateHost + " " + nodeA}) {
+		t.Errorf("calls %v, want the reload again", ops)
 	}
 }
 
-func TestOptions(t *testing.T) {
-	if err := (Options{SettleTime: -time.Second}).Validate(); err == nil {
-		t.Error("a negative settle time is valid")
+// TestNoSecretNoReload checks that without the client certificate's
+// Secret, nothing is reloaded.
+func TestNoSecretNoReload(t *testing.T) {
+	h := newHarness(t, host(nodeA, addrA))
+	h.admin.put(heldHost(nodeA, addrA))
+	h.cert = nil
+	h.mustReconcile()
+	if ops := h.admin.ops(); len(ops) != 0 {
+		t.Errorf("calls %v, want none", ops)
 	}
-	if err := (Options{RestartWindow: -time.Second}).Validate(); err == nil {
-		t.Error("a negative restart window is valid")
+}
+
+// TestOptionsValidate checks the timings the controller refuses.
+func TestOptionsValidate(t *testing.T) {
+	for _, o := range []Options{{SettleTime: -1}, {RemoveRetry: -1}, {MountPoll: -1}} {
+		if o.Validate() == nil {
+			t.Errorf("%+v is valid", o)
+		}
 	}
-	if err := (Options{}).Validate(); err != nil {
-		t.Errorf("zero timings: %v", err)
+	if (Options{}).Validate() != nil {
+		t.Error("the zero Options are not valid")
 	}
 }

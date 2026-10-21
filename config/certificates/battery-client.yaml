@@ -3,8 +3,8 @@
 # subject alternative name is battery's SPIFFE ID; it has no common name.
 # The trust domain has to be the Operator's --trust-domain.
 #
-# poolmgrd v0.4.0 loads its client certificate once, at startup, so a
-# renewed certificate takes effect only when battery restarts (#83).
+# battery reads its client certificate when it connects to a Host, so the
+# Inventory Controller makes it connect again after a renewal (DP-035).
 #= docs/requirements/09-certificates.md#spiffe-identity
 #/ The Manifests SHALL issue battery's client certificate from the
 #/ `flintlockd` client CA with cert-manager, naming

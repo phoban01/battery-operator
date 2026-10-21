@@ -78,6 +78,13 @@ type Config struct {
 	// the fake creates, places and deletes MicroVMs through. Nil knows no
 	// Host, so Pools declared against it never fill.
 	Hosts *Hosts
+	// Dial stands in for battery connecting to a Host's flintlockd and
+	// checking its version, in HostAdmin's AddHost and UpdateHost: it
+	// returns the connection for a Host's address, or an error when the
+	// Host cannot be reached. Nil reaches no Host, so AddHost and
+	// UpdateHost succeed only with skip_validation, and the Host then has
+	// no connection.
+	Dial func(address string) (grpc.ClientConnInterface, error)
 	// Clock drives Lease expiry, the control loop and injected latency;
 	// nil is the wall clock.
 	Clock clock.Clock
