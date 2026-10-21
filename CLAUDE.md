@@ -135,7 +135,7 @@ Now:
 | Path | What |
 |------|------|
 | `cmd/main.go` | The Operator's manager entry point |
-| `internal/battery/` | The Operator's battery gRPC client (#8), HostAdmin included; built against battery's `main` through a `replace` in `go.mod` until battery v0.5.0 (#198) |
+| `internal/battery/` | The Operator's battery gRPC client (#8), HostAdmin included; pins battery v0.5.0 |
 | `internal/batterysidecar/` | battery as the Operator's sidecar: where its files are, and the configuration file the Manifests ship (DP-036) |
 | `config/` | Kustomize Manifests, from kubebuilder; `config/default` is the entry point, with battery as a sidecar and cert-manager's certificates (`config/certificates`) |
 | `internal/manifests/` | Tests of the Manifests as `kustomize build` renders them |

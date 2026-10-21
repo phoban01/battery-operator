@@ -21,7 +21,7 @@ only when it started, so a renewed certificate needed a restart too
 
 ADR 0001 named a Host registration call as the upstream ask that would end
 the restarts. battery's own ADR, `2026-09-24-host-api.md`, answers it, and
-battery#138 builds it on battery's `main` branch, for release in v0.5.0:
+battery#138 builds it, released in battery v0.5.0:
 
 - `HostAdmin` gains `AddHost`, `UpdateHost`, `RemoveHost` and `GetHost`,
   beside the `CordonHost`, `UncordonHost` and `ListHosts` of v0.4.0.
@@ -91,8 +91,7 @@ Operator uses the new API, and what of the old mechanism goes.
 - Every Host gets a new connection each time the Operator starts (DP-035),
   because the Operator does not record which certificate battery last read.
 - The Operator needs battery v0.5.0 and does not work with v0.4.0, which has
-  no `AddHost`. Until v0.5.0 is released, the Operator builds against
-  battery's `main` branch, and its e2e suite cannot pass.
+  no `AddHost`.
 
 ADR 0001 stands: the Operator is still a client of an unchanged battery.
 This record replaces its consequence 1, and the restart in its decision 7.

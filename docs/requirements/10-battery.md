@@ -25,8 +25,8 @@ Links point at the tag, so line numbers stay valid. Where battery v0.4.0
 changed an assumption that held for v0.3.3, the section says so; see also
 [Changes since v0.3.3](#since-v033). The one exception is
 [Hosts](#hosts): battery's `HostAdmin` API for adding and removing Hosts
-is on battery's `main` branch and not yet released, so its links point at
-the commit the Operator builds against, until battery v0.5.0.
+came in v0.5.0, which the Operator now pins, and its links point at that
+tag.
 
 ## Claiming {#claiming}
 
@@ -300,8 +300,8 @@ migration adds the Hosts' TLS settings (BA-086).
 
 battery v0.4.0 built each Host's transport credentials once, at startup,
 and nothing read the files again, so a renewed certificate reached the
-Hosts only through a restart (BA-061, withdrawn). Since battery's main
-branch at `a5884a5`, it reads them each time it connects to a Host, and
+Hosts only through a restart (BA-061, withdrawn). Since battery v0.5.0,
+it reads them each time it connects to a Host, and
 `UpdateHost` makes it connect again (BA-081; 06-deployment.md, DP-035).
 
 ## Deleting a Pool {#delete-pool}
@@ -464,23 +464,21 @@ hold two.
   and SHALL answer `CordonHost` on a cordoned Host, and `UncordonHost` on an
   uncordoned one, with the Host and no error.
 
-| ID | Source at [`a5884a5`](https://github.com/liquidmetal-dev/battery/tree/a5884a5a6d3ec48631b3ea4f27b1a9158ececaf2) |
+| ID | Source at v0.5.0 |
 |----|------------------|
-| BA-080 | [`internal/api/hostadmin.go`, `AddHost`, L168-L223, `dialHost`, L354-L375](https://github.com/liquidmetal-dev/battery/blob/a5884a5a6d3ec48631b3ea4f27b1a9158ececaf2/internal/api/hostadmin.go#L168-L375) |
-| BA-081 | [`internal/flintlockclient/pool.go`, `Dial`, L58, `dialCredentials`, L287-L315](https://github.com/liquidmetal-dev/battery/blob/a5884a5a6d3ec48631b3ea4f27b1a9158ececaf2/internal/flintlockclient/pool.go#L58-L315); [`cmd/poolmgrd/main.go`, `buildFlintlockPool`, L202](https://github.com/liquidmetal-dev/battery/blob/a5884a5a6d3ec48631b3ea4f27b1a9158ececaf2/cmd/poolmgrd/main.go#L202) |
-| BA-082 | [`internal/api/pooladmin.go`, `checkFlintlockHosts`, L146, `CreatePool`, L211, `UpdatePool`, L300](https://github.com/liquidmetal-dev/battery/blob/a5884a5a6d3ec48631b3ea4f27b1a9158ececaf2/internal/api/pooladmin.go#L146-L300) |
-| BA-083 | [`internal/api/hostadmin.go`, `RemoveHost`, L296-L335](https://github.com/liquidmetal-dev/battery/blob/a5884a5a6d3ec48631b3ea4f27b1a9158ececaf2/internal/api/hostadmin.go#L296-L335); [`internal/store/sqlite.go`, `DeleteHost`, L870](https://github.com/liquidmetal-dev/battery/blob/a5884a5a6d3ec48631b3ea4f27b1a9158ececaf2/internal/store/sqlite.go#L870) |
-| BA-084 | [`internal/reconciler/hostpick.go`, `ineligibleHosts`, L68-L90](https://github.com/liquidmetal-dev/battery/blob/a5884a5a6d3ec48631b3ea4f27b1a9158ececaf2/internal/reconciler/hostpick.go#L68-L90); [`internal/store/sqlite.go`, `ReservePlacement`, L996](https://github.com/liquidmetal-dev/battery/blob/a5884a5a6d3ec48631b3ea4f27b1a9158ececaf2/internal/store/sqlite.go#L996) |
-| BA-085 | [`internal/api/hostadmin.go`, `AddHost`, L187-L198](https://github.com/liquidmetal-dev/battery/blob/a5884a5a6d3ec48631b3ea4f27b1a9158ececaf2/internal/api/hostadmin.go#L187-L198) |
-| BA-086 | [`internal/store/sqlite.go`, `migrations`, L63-L77](https://github.com/liquidmetal-dev/battery/blob/a5884a5a6d3ec48631b3ea4f27b1a9158ececaf2/internal/store/sqlite.go#L63-L77); [`cmd/poolmgrd/main.go`, L106-L112](https://github.com/liquidmetal-dev/battery/blob/a5884a5a6d3ec48631b3ea4f27b1a9158ececaf2/cmd/poolmgrd/main.go#L106-L112) |
-| BA-087 | [`internal/config/config.go`, `Load`, L47-L60](https://github.com/liquidmetal-dev/battery/blob/a5884a5a6d3ec48631b3ea4f27b1a9158ececaf2/internal/config/config.go#L47-L60) |
-| BA-088 | [`internal/api/hostadmin.go`, `GetHost`, L136, `UpdateHost`, L229, `RemoveHost`, L296](https://github.com/liquidmetal-dev/battery/blob/a5884a5a6d3ec48631b3ea4f27b1a9158ececaf2/internal/api/hostadmin.go#L136-L335) |
-| BA-089 | [`internal/api/hostadmin.go`, `CordonHost`, L79, `UncordonHost`, L97, `UpdateHost`, L229](https://github.com/liquidmetal-dev/battery/blob/a5884a5a6d3ec48631b3ea4f27b1a9158ececaf2/internal/api/hostadmin.go#L79-L280) |
+| BA-080 | [`internal/api/hostadmin.go`, `AddHost`, L168-L223, `dialHost`, L354-L375](https://github.com/liquidmetal-dev/battery/blob/v0.5.0/internal/api/hostadmin.go#L168-L375) |
+| BA-081 | [`internal/flintlockclient/pool.go`, `Dial`, L58, `dialCredentials`, L287-L315](https://github.com/liquidmetal-dev/battery/blob/v0.5.0/internal/flintlockclient/pool.go#L58-L315); [`cmd/poolmgrd/main.go`, `buildFlintlockPool`, L202](https://github.com/liquidmetal-dev/battery/blob/v0.5.0/cmd/poolmgrd/main.go#L202) |
+| BA-082 | [`internal/api/pooladmin.go`, `checkFlintlockHosts`, L146, `CreatePool`, L211, `UpdatePool`, L300](https://github.com/liquidmetal-dev/battery/blob/v0.5.0/internal/api/pooladmin.go#L146-L300) |
+| BA-083 | [`internal/api/hostadmin.go`, `RemoveHost`, L296-L335](https://github.com/liquidmetal-dev/battery/blob/v0.5.0/internal/api/hostadmin.go#L296-L335); [`internal/store/sqlite.go`, `DeleteHost`, L870](https://github.com/liquidmetal-dev/battery/blob/v0.5.0/internal/store/sqlite.go#L870) |
+| BA-084 | [`internal/reconciler/hostpick.go`, `ineligibleHosts`, L68-L90](https://github.com/liquidmetal-dev/battery/blob/v0.5.0/internal/reconciler/hostpick.go#L68-L90); [`internal/store/sqlite.go`, `ReservePlacement`, L996](https://github.com/liquidmetal-dev/battery/blob/v0.5.0/internal/store/sqlite.go#L996) |
+| BA-085 | [`internal/api/hostadmin.go`, `AddHost`, L187-L198](https://github.com/liquidmetal-dev/battery/blob/v0.5.0/internal/api/hostadmin.go#L187-L198) |
+| BA-086 | [`internal/store/sqlite.go`, `migrations`, L63-L77](https://github.com/liquidmetal-dev/battery/blob/v0.5.0/internal/store/sqlite.go#L63-L77); [`cmd/poolmgrd/main.go`, L106-L112](https://github.com/liquidmetal-dev/battery/blob/v0.5.0/cmd/poolmgrd/main.go#L106-L112) |
+| BA-087 | [`internal/config/config.go`, `Load`, L47-L60](https://github.com/liquidmetal-dev/battery/blob/v0.5.0/internal/config/config.go#L47-L60) |
+| BA-088 | [`internal/api/hostadmin.go`, `GetHost`, L136, `UpdateHost`, L229, `RemoveHost`, L296](https://github.com/liquidmetal-dev/battery/blob/v0.5.0/internal/api/hostadmin.go#L136-L335) |
+| BA-089 | [`internal/api/hostadmin.go`, `CordonHost`, L79, `UncordonHost`, L97, `UpdateHost`, L229](https://github.com/liquidmetal-dev/battery/blob/v0.5.0/internal/api/hostadmin.go#L79-L280) |
 
-These hold on battery's `main` branch at the commit above, which the
-Operator builds against until battery v0.5.0 is released; the links then
-move to the tag. battery's
-[ADR `2026-09-24-host-api.md`](https://github.com/liquidmetal-dev/battery/blob/a5884a5a6d3ec48631b3ea4f27b1a9158ececaf2/docs/adr/2026-09-24-host-api.md)
+battery's
+[ADR `2026-09-24-host-api.md`](https://github.com/liquidmetal-dev/battery/blob/v0.5.0/docs/adr/2026-09-24-host-api.md)
 gives the design.
 
 battery keeps its Hosts in its database (BA-086), with each Host's address,
@@ -563,8 +561,8 @@ Between the two versions (battery's release notes for v0.4.0):
 - battery reserves a placement before it creates a MicroVM, so that two
   provisions never over-fill a Host, and its `ListHosts` counts every
   MicroVM on a Host; a Host can be cordoned through a new `HostAdmin`
-  service. Since #198 the Operator uses that service as battery's `main`
-  branch extends it (see [Hosts](#hosts)).
+  service. Since #198 the Operator uses that service as battery v0.5.0
+  extends it (see [Hosts](#hosts)).
 - Every other assumption holds as it did, at other lines.
 
 The differences between v0.1.0 and v0.3.3 are in this document's history

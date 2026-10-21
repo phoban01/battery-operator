@@ -140,7 +140,7 @@ spec:
       # readiness check reports battery instead (DP-012).
       - name: battery
         # The battery version go.mod pins; `make deploy` sets POOLMGRD_IMG here.
-        image: ghcr.io/liquidmetal-dev/poolmgrd:0.4.0
+        image: ghcr.io/liquidmetal-dev/poolmgrd:0.5.0
         args:
           - -config=/etc/battery/config/config.json
           - -db=/data/poolmgr.db

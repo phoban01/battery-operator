@@ -578,7 +578,7 @@ its pin.
 ## The pools and inventory model
 
 `pools.qnt` has three Nodes, two Pools and battery with the `HostAdmin`
-API of its `main` branch, which battery v0.5.0 will release (ADR 0008;
+API of battery v0.5.0 (ADR 0008;
 10-battery.md, Hosts). battery holds its Hosts in its database, each with
 a cordon flag, whether it has the TLS settings of IN-004, and the client
 certificate battery read when it last connected to it. Nothing restarts

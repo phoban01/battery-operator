@@ -42,9 +42,9 @@ while the Pool has a leased or claiming MicroVM, unless the request sets
 and records `VM_DELETED_ON_POOL_DELETE` for each. A MicroVM whose Host
 refuses the deletion stays `DELETING`, and the next tick deletes it.
 
-battery's `HostAdmin` API is on its `main` branch, which the Operator
-builds against until battery v0.5.0 (#198), and the fake serves it from
-there (TD-028; [10-battery.md](10-battery.md#hosts)). The Hosts a test
+battery v0.5.0 extends its `HostAdmin` API with `AddHost`, `UpdateHost`,
+`RemoveHost` and `GetHost` (#198), and the fake serves it as battery does
+(TD-028; [10-battery.md](10-battery.md#hosts)). The Hosts a test
 gives the fake when it starts are held from the start, as if added
 already. `AddHost` and `UpdateHost` reach a Host through the test's `Dial`,
 which stands in for battery connecting to `flintlockd` and checking its

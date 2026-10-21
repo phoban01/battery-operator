@@ -52,8 +52,8 @@ import (
 //# SHALL refuse to start.
 
 // hostAdminServer implements poolmgrv1.HostAdminServer over the fake's
-// Hosts, with battery's semantics (internal/api/hostadmin.go on battery's
-// main branch).
+// Hosts, with battery's semantics (internal/api/hostadmin.go in battery
+// v0.5.0).
 type hostAdminServer struct {
 	poolmgrv1.UnimplementedHostAdminServer
 	b *Battery

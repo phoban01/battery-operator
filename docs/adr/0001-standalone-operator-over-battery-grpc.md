@@ -142,9 +142,9 @@ are the price of option B, and the first two are worth raising upstream.
    This is the largest cost of option B. A Host registration RPC, or a
    configuration reload, upstream would remove the restarts.
 
-   > **Update, 2026-10-21 (#198):** battery's `HostAdmin` API, on its
-   > `main` branch for release in v0.5.0, adds and removes Hosts while
-   > battery runs, and battery no longer reads Hosts from its
+   > **Update, 2026-10-21 (#198):** battery v0.5.0's `HostAdmin` API
+   > adds and removes Hosts while battery runs, and battery no longer
+   > reads Hosts from its
    > configuration file. The Inventory Controller now keeps battery's
    > Hosts through it, and nothing restarts battery.
    > [ADR 0008](0008-hosts-through-battery-hostadmin-api.md) records how,
