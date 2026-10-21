@@ -198,6 +198,18 @@ structures looks in use, and must not be refused for it.
   Exec Agent and metrics ports.
 - **HI-083** The Host Image SHALL give the guest bridge a name that matches
   the default interface exclude list of Calico's IP address autodetection.
+- **HI-084** Where the Host configuration file lists guest allowed CIDRs, the
+  Host Image SHALL treat an address in a guest allowed CIDR as outside
+  every protected CIDR.
+- **HI-085** The Host Image SHALL drop traffic from the guest subnet to the
+  instance metadata service addresses, to every address of the Host other
+  than the bridge gateway address, to the Host's own `flintlockd`, kubelet,
+  Exec Agent and metrics ports, and to every interface of the Host other
+  than its primary interface, whatever the guest allowed CIDRs hold.
+- **HI-086** If an entry of the guest allowed CIDRs in the Host configuration
+  file is not an IPv4 CIDR, then the Host Image SHALL NOT start
+  `flintlockd` and SHALL report the Host as not ready with the reason that
+  the Host configuration file is invalid.
 
 Guest networking follows flintlock's documented bridge option: `flintlockd`
 puts each MicroVM's TAP device on the bridge `virbr-battery`, and the Host gives
@@ -277,6 +289,31 @@ HI-078 to HI-080 come from flintlock-runner's HI-036 and HI-064, which
 opened the gateway to its Host Services and kept their user ids from the
 metadata service and the control ports. flintlock-runner set its own ports
 and ids by default; here the settings are generic and empty by default.
+
+A service that guests need can have its addresses inside a protected
+range. In AWS, a VPC interface endpoint (PrivateLink) takes its addresses
+from the subnets it sits in, so an endpoint for a Git server can sit in the
+node range. Splitting the node range around those addresses takes many
+entries in `PROTECTED_CIDRS` and is easy to get wrong. The guest allowed
+CIDRs (`GUEST_ALLOWED_CIDRS`) name those addresses instead (HI-084). They
+are IPv4 CIDRs, like the protected CIDRs, and empty by default. An entry
+need not lie inside a protected CIDR: outside them it changes nothing.
+
+HI-084 applies to both protected drops, HI-035 and HI-076, and to each on
+its own. A guest reaches an allowed address directly, and through a
+Service whose address is allowed and whose pod is allowed or unprotected.
+A protected Service never sends a guest on to an allowed address, and an
+allowed Service never sends it on to a protected one.
+
+The guest allowed CIDRs open only the protected drops (HI-085). The
+metadata service (HI-033), the Host's own addresses and ports (HI-034,
+HI-036, HI-077) and the Host's other interfaces (HI-075) have rules of
+their own, and an allowed CIDR that holds one of them changes nothing for
+it. So the firewall accepts nothing for an allowed address: the protected
+drops skip it, and the rest of the forward chain decides. The guest allowed
+CIDRs cannot keep a guest from another Host, though: an entry that holds
+another Node's address opens that Node's kubelet to guests. List only the
+addresses of the service, as /32 entries.
 
 ## flintlockd {#image-flintlockd}
 
