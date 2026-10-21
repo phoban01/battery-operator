@@ -59,7 +59,8 @@ has the detail.
 2. Make a management cluster with Cluster API and CAPA.
 3. Make a workload cluster, with a CNI and the AWS cloud controller
    manager.
-4. Make a security group that lets battery reach `flintlockd`.
+4. Make a security group that lets battery reach `flintlockd`, and lets
+   consumers reach the Exec Agent.
 5. Fill in a Host pool, and apply it to the management cluster.
 6. Check that the Hosts joined.
 7. Install battery-operator in the workload cluster, and check that the
@@ -254,27 +255,39 @@ and the Host pool. With CAPA's defaults they are:
 
 ## Make the security group
 
-battery runs in the Operator's pod and calls each Host's `flintlockd` on
-TCP port 9090. CAPA's node security group does not open that port. Make a
-security group in the cluster's VPC that does.
+A Host serves on two ports that CAPA's node security group does not open:
 
-The source is the Operator's pod network. If the CNI masquerades pod
-traffic to other Nodes, the traffic comes from the Node's address instead,
-so admit the node range too. Calico's default IP pool masquerades traffic
+- battery runs in the Operator's pod and calls each Host's `flintlockd` on
+  TCP port 9090.
+- The Exec Agent serves on TCP port 10270. A consumer of the Client
+  Library dials it at the address in the claim's status.
+
+Make a security group in the cluster's VPC that opens both.
+
+The source of port 9090 is the Operator's pod network. The source of port
+10270 is the networks of the Client Library's consumers, usually the pod
+network too. If the CNI masquerades pod traffic to other Nodes, the
+traffic comes from the Node's address instead, so admit the node range
+too. Calico's default IP pool masquerades traffic
 to addresses outside the pool, and a Host's address is outside it.
 
 ```sh
 vpc=$(kubectl get awscluster battery -o jsonpath='{.spec.network.vpc.id}')
 sg=$(aws ec2 create-security-group --region eu-west-1 --vpc-id "$vpc" \
   --group-name battery-flintlockd \
-  --description "flintlockd from the battery-operator pods" \
+  --description "flintlockd and the Exec Agent from the cluster's pods" \
   --query GroupId --output text)
-aws ec2 authorize-security-group-ingress --region eu-west-1 --group-id "$sg" \
-  --protocol tcp --port 9090 --cidr 192.168.0.0/16
-aws ec2 authorize-security-group-ingress --region eu-west-1 --group-id "$sg" \
-  --protocol tcp --port 9090 --cidr 10.0.0.0/16
+for port in 9090 10270; do
+  for cidr in 192.168.0.0/16 10.0.0.0/16; do
+    aws ec2 authorize-security-group-ingress --region eu-west-1 \
+      --group-id "$sg" --protocol tcp --port "$port" --cidr "$cidr"
+  done
+done
 echo "$sg"
 ```
+
+Without the rule for port 10270, claims bind but nothing runs in them. A
+consumer off the Host fails with `dial tcp <host>:10270: i/o timeout`.
 
 The Host's own firewall admits only `FLINTLOCKD_CLIENT_CIDRS` from the
 Host pool, below, so set the same ranges there.
