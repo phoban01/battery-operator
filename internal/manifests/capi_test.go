@@ -392,12 +392,13 @@ func TestHostPoolSettingsLand(t *testing.T) {
 		replicas, drain, unhealthy                  int
 		conf                                        map[string]string
 	}
+	const cluster = "workload-a"
 	wants := map[string]want{
-		testPoolA: {"workload-a", "v1.35.8", "m6id.metal", "ami-0123456789abcdef0", "subnet-0aaaaaaaaaaaaaaaa", 3, 4500, 301,
+		testPoolA: {cluster, "v1.35.8", "m6id.metal", "ami-0123456789abcdef0", "subnet-0aaaaaaaaaaaaaaaa", 3, 4500, 301,
 			map[string]string{"GUEST_SUBNET": "10.220.0.0/16", "FLINTLOCKD_CLIENT_CIDRS": "192.168.0.0/16"}},
-		testPoolB: {"workload-a", "v1.35.7", "c6id.metal", "ami-0fedcba9876543210", "subnet-0bbbbbbbbbbbbbbbb", 5, 7200, 600,
+		testPoolB: {cluster, "v1.35.7", "c6id.metal", "ami-0fedcba9876543210", "subnet-0bbbbbbbbbbbbbbbb", 5, 7200, 600,
 			map[string]string{"GUEST_SUBNET": "10.230.0.0/24", "THIN_POOL_DEVICE": "/dev/nvme2n1"}},
-		testPoolC: {"workload-a", "v1.35.8", "m8i.xlarge", "ami-0c0c0c0c0c0c0c0c0", "subnet-0cccccccccccccccc", 2, 4500, 300,
+		testPoolC: {cluster, "v1.35.8", "m8i.xlarge", "ami-0c0c0c0c0c0c0c0c0", "subnet-0cccccccccccccccc", 2, 4500, 300,
 			map[string]string{"THIN_POOL_DEVICE": "/dev/nvme1n1"}},
 	}
 	objs := buildCAPI(t, capiTestdata)
