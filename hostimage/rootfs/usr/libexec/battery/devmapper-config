@@ -1,0 +1,64 @@
+#!/usr/bin/bash
+# containerd.service's ExecStartPre: write containerd's configuration for
+# this boot, /run/battery/containerd.toml, from the image's
+# /etc/containerd/config.toml with the devmapper snapshotter's
+# base_image_size set from the Host configuration. containerd starts with
+# the result. /etc/containerd/config.toml stays as the image ships it, so
+# a bootc upgrade still updates it.
+BATTERY_UNIT=battery-devmapper-config
+# shellcheck source=hostimage/rootfs/usr/libexec/battery/lib.sh
+. "${BATTERY_LIB:-/usr/libexec/battery/lib.sh}"
+
+src=${BATTERY_CONTAINERD_CONFIG:-/etc/containerd/config.toml}
+dst=${BATTERY_CONTAINERD_RUN_CONFIG:-$BATTERY_RUN/containerd.toml}
+[ -r "$src" ] || die "$src is missing"
+
+# base_image_size_lines prints the base_image_size lines of the devmapper
+# snapshotter's own table in FILE, with their line numbers.
+base_image_size_lines() {
+  awk '/^[[:space:]]*\[/ { t = $0; gsub(/[[:space:]]/, "", t) }
+    t == "[plugins.\"io.containerd.snapshotter.v1.devmapper\"]" && /^[[:space:]]*base_image_size[[:space:]]*=/ { print NR ": " $0 }' "$1"
+}
+lines=$(base_image_size_lines "$src")
+[ "$(printf '%s\n' "$lines" | grep -c .)" = 1 ] ||
+  die "$src does not set base_image_size exactly once in the devmapper snapshotter's table"
+n=${lines%%:*}
+
+#= docs/requirements/11-host-image.md#image-storage
+#/ If the Host environment file is absent when containerd starts,
+#/ then the Host Image SHALL start containerd with the base image size of the
+#/ image's own containerd configuration.
+# battery-host-config.service has failed, or has not run. containerd still
+# starts, so the Host's Node stays up and can say why it is not ready; the
+# thin pool, and with it the devmapper snapshotter, is missing anyway,
+# because battery-thin-pool.service requires the Host configuration.
+size=
+if [ -r "$BATTERY_HOST_ENV" ]; then
+  size=$(sed -n 's/^BATTERY_MICROVM_BASE_IMAGE_SIZE=//p' "$BATTERY_HOST_ENV")
+fi
+if [ -z "$size" ]; then
+  log "$BATTERY_HOST_ENV has no MicroVM base image size; keeping the one in $src"
+fi
+
+#= docs/requirements/11-host-image.md#image-storage
+#/ The Host Image SHALL configure containerd's devicemapper
+#/ snapshotter with the MicroVM base image size that it reads from the Host
+#/ configuration file, and with 10 GB when none is set.
+# host-config has already checked the size, so it is safe to write into the
+# TOML string; checking it again here costs nothing.
+if [ -n "$size" ] && ! [[ $size =~ ^[0-9]+(MB|GB|TB)$ ]]; then
+  die "$BATTERY_HOST_ENV has MicroVM base image size '$size', which host-config would not write"
+fi
+mkdir -p "$(dirname "$dst")"
+tmp=$(mktemp "$dst.XXXXXX")
+{
+  printf '# Written by containerd.service from %s at every start. Do not edit.\n' "$src"
+  if [ -n "$size" ]; then
+    awk -v n="$n" -v size="$size" 'NR == n { sub(/=.*/, "= \"" size "\"") } { print }' "$src"
+  else
+    cat "$src"
+  fi
+} >"$tmp"
+chmod 0644 "$tmp"
+mv -f "$tmp" "$dst"
+log "wrote $dst with base_image_size $(base_image_size_lines "$dst" | sed 's/.*= *//')"

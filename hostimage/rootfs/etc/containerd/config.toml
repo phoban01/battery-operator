@@ -22,6 +22,18 @@ state = "/run/containerd"
   # logical volume "thinpool". flintlockd puts MicroVM volumes on it, in its
   # own containerd namespace, "flintlock" (flintlockd's --containerd-ns
   # default). A namespace needs no configuration here.
+  #
+  # containerd.service does not start containerd with this file:
+  # devmapper-config, its ExecStartPre, copies it to
+  # /run/battery/containerd.toml with base_image_size set from the Host
+  # configuration's MICROVM_BASE_IMAGE_SIZE. The value here is used only
+  # when the Host configuration was not read. Keep base_image_size on a line
+  # of its own, once.
+  #
+  #= docs/requirements/11-host-image.md#image-storage
+  #/ If the Host environment file is absent when containerd starts,
+  #/ then the Host Image SHALL start containerd with the base image size of the
+  #/ image's own containerd configuration.
   [plugins."io.containerd.snapshotter.v1.devmapper"]
     pool_name = "flintlock-thinpool"
     root_path = "/var/lib/containerd/snapshotter/devmapper"
