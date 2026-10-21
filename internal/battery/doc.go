@@ -21,7 +21,7 @@ limitations under the License.
 // only (DP-001), so Dial refuses any other address. The connection is one
 // long-lived gRPC ClientConn with keepalive and exponential reconnect
 // backoff, and every unary call carries a deadline (DP-010). Each method
-// maps one RPC of the poolmgr.v1alpha1 PoolAdmin, Lease and Events services
+// maps one RPC of the poolmgr.v1alpha1 PoolAdmin, Lease, Events and HostAdmin services
 // and translates the status codes into the sentinel errors below (DP-011),
 // so no caller imports gRPC codes. Connection.Check is the Operator's
 // readiness check: it fails while battery does not answer (DP-012).

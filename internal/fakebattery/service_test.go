@@ -326,18 +326,6 @@ func TestMicroVMsGoThroughTheFakeFlintlockd(t *testing.T) {
 		}
 	})
 
-	t.Run("a host the fake does not know is never created on", func(t *testing.T) {
-		h := newHarness(t, Config{}, hostA)
-		if _, err := h.client.CreatePool(h.ctx, h.spec("pool", 2, hostA, "gone")); err != nil {
-			t.Fatalf("CreatePool: %v", err)
-		}
-		h.waitEvent(poolmgrv1.EventType_VM_AVAILABLE)
-		h.waitEvent(poolmgrv1.EventType_VM_AVAILABLE)
-		if got := h.vmHosts(); got["gone"] != 0 || got[hostA] != 2 {
-			t.Fatalf("placement = %v, want both microvms on host-a and none on the unknown host", got)
-		}
-	})
-
 	t.Run("a fake flintlockd over mutual TLS behaves the same", func(t *testing.T) {
 		certs, err := fakeflintlock.WriteTestCerts(t.TempDir())
 		if err != nil {

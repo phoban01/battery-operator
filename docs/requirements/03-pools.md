@@ -42,10 +42,11 @@ covers the rest.
   `NoEligibleHost`.
 
 battery v0.4.0 has each Pool list its Hosts by name. The Pool Controller
-resolves the selector against the Hosts the Inventory Controller has given
-battery and is not about to remove (IN-013), so adding a Host to the
-cluster reaches every Pool that selects it with no change to any Pool
-(ADR 0001, consequence 1). It watches those Hosts and the Nodes' labels,
+resolves the selector against the Hosts that battery holds uncordoned and
+the Inventory Controller is not about to cordon or remove (IN-018), so
+adding a Host to the cluster reaches every Pool that selects it with no
+change to any Pool. battery refuses a Pool that names a Host it does not
+hold (BA-082), and IN-018 keeps the Pool Controller from naming one. It watches those Hosts and the Nodes' labels,
 so a Host joining or leaving, or a Node relabelled into or out of a
 selector, updates the Pools at once.
 
@@ -57,7 +58,9 @@ change in the Hosts the selector matches while battery refuses the spec it
 comes with. battery's Pool keeps naming the Hosts of the last spec battery
 accepted, or is not there at all if battery never accepted one, and the
 Pool's counts stay battery's for that Pool. A Host that leaves the cluster
-meanwhile is removed from battery once the drain timeout of IN-013 passes.
+meanwhile is cordoned in battery, and battery refuses to remove it while
+that Pool names it (BA-083); the Inventory Controller tries again until
+the Pool's spec is fixed or the Pool is deleted (IN-016).
 
 ## Status {#pool-status}
 

@@ -50,13 +50,15 @@ var (
 	// ErrUnavailable is UNAVAILABLE, a lost connection, or a call that
 	// battery did not answer within the call deadline.
 	ErrUnavailable = errors.New("battery: unavailable")
-	// ErrAlreadyExists is ALREADY_EXISTS from CreatePool.
+	// ErrAlreadyExists is ALREADY_EXISTS from CreatePool or AddHost.
 	ErrAlreadyExists = errors.New("battery: already exists")
 	// ErrInvalid is INVALID_ARGUMENT: a request battery rejects, such as a
 	// PoolSpec that does not validate.
 	ErrInvalid = errors.New("battery: invalid request")
 	// ErrFailedPrecondition is FAILED_PRECONDITION, which battery answers
-	// DeletePool with while the Pool still has leased MicroVMs.
+	// DeletePool with while the Pool still has leased MicroVMs, RemoveHost
+	// with while a Pool names the Host or anything is on it, and AddHost and
+	// UpdateHost with for a Host it cannot reach.
 	ErrFailedPrecondition = errors.New("battery: failed precondition")
 	// ErrAborted is ABORTED from ClaimVM: the Lease the request id names
 	// is on its way out, or the MicroVM battery had picked was deleted

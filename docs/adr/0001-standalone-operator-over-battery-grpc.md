@@ -95,6 +95,11 @@ cannot finish its cluster fleet until the real resources exist.
    are coupled: the operator runs one replica too, and restarting battery
    restarts a container in the operator's pod. A separate Deployment stays
    possible later, behind mutual TLS.
+
+   > **Update, 2026-10-21 (#198):** with battery's `HostAdmin` API, no
+   > Host change restarts battery
+   > ([ADR 0008](0008-hosts-through-battery-hostadmin-api.md)). battery
+   > stays a sidecar for the first two reasons.
 8. **Clients create the per-claim token's Secret**, as the proposal has
    it. The operator never writes Secrets into client namespaces, so it
    needs no Secret permissions outside its own namespace.
@@ -136,6 +141,14 @@ are the price of option B, and the first two are worth raising upstream.
 
    This is the largest cost of option B. A Host registration RPC, or a
    configuration reload, upstream would remove the restarts.
+
+   > **Update, 2026-10-21 (#198):** battery v0.5.0's `HostAdmin` API
+   > adds and removes Hosts while battery runs, and battery no longer
+   > reads Hosts from its
+   > configuration file. The Inventory Controller now keeps battery's
+   > Hosts through it, and nothing restarts battery.
+   > [ADR 0008](0008-hosts-through-battery-hostadmin-api.md) records how,
+   > and replaces this consequence and the restart in decision 7.
 2. **`ClaimVM` is not idempotent.** battery chooses the lease id, and the
    request carries only the pool. Suppose the controller crashes after
    `ClaimVM` succeeds but before the lease id is written to the claim's

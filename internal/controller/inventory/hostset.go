@@ -26,44 +26,42 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-
-	"github.com/phoban01/battery-operator/internal/batterysidecar"
 )
 
 // Hosts is a set of Hosts: each Host's name, the Node's, to its flintlockd
 // address.
 type Hosts map[string]string
 
+// Host is one Host as the Pool Controller sees it: a Node's name and its
+// flintlockd address, host:port.
+type Host struct {
+	Name    string
+	Address string
+}
+
 // Equal reports whether h and o are the same Hosts at the same addresses.
 func (h Hosts) Equal(o Hosts) bool { return maps.Equal(h, o) }
 
-// clone is a copy of h, never nil.
-func (h Hosts) clone() Hosts {
-	out := make(Hosts, len(h))
-	maps.Copy(out, h)
-	return out
-}
-
-// List is h as batterysidecar renders it, sorted by name.
-func (h Hosts) List() []batterysidecar.Host {
-	out := make([]batterysidecar.Host, 0, len(h))
+// List is h sorted by name.
+func (h Hosts) List() []Host {
+	out := make([]Host, 0, len(h))
 	for _, name := range slices.Sorted(maps.Keys(h)) {
-		out = append(out, batterysidecar.Host{Name: name, Address: h[name]})
+		out = append(out, Host{Name: name, Address: h[name]})
 	}
 	return out
 }
 
 // ErrNotSynced is HostSet's answer before the Inventory Controller has
-// published the Hosts battery runs with.
+// published the Hosts battery places on.
 var ErrNotSynced = errors.New("the Inventory Controller has not yet published battery's Hosts")
 
-// HostSet is the Hosts the Inventory Controller has given battery and is
-// not about to take away, which is what the Pool Controller resolves a
-// Pool's selector against (03-pools.md, Placement). It gains a Host only
-// once battery has restarted with it and answers again, never on the
-// decision alone, so that no Pool names a Host before battery knows it;
-// and it loses a Host before the restart that removes it (Drain), so that
-// the Pools drop it while battery still knows it (IN-013).
+// HostSet is the Hosts battery holds uncordoned and the Inventory
+// Controller is not about to cordon or remove, which is what the Pool
+// Controller resolves a Pool's selector against (03-pools.md, Placement).
+// It gains a Host only once battery holds it uncordoned, never on the
+// decision alone, so that no Pool names a Host battery would refuse
+// (BA-082); and it loses a Host before the Inventory Controller cordons or
+// removes it, so that the Pools drop it first (IN-018).
 //
 // It is safe for concurrent use.
 type HostSet struct {
@@ -96,16 +94,16 @@ func (h *HostSet) publish(hosts Hosts) {
 }
 
 // Synced reports whether the set has been published: until then the
-// Operator does not know which Hosts battery runs with.
+// Operator does not know which Hosts battery places on.
 func (h *HostSet) Synced() bool {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	return h.synced
 }
 
-// Hosts returns the Hosts battery runs with, sorted by name, or
+// Hosts returns the Hosts battery places on, sorted by name, or
 // ErrNotSynced.
-func (h *HostSet) Hosts() ([]batterysidecar.Host, error) {
+func (h *HostSet) Hosts() ([]Host, error) {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	if !h.synced {
@@ -114,7 +112,7 @@ func (h *HostSet) Hosts() ([]batterysidecar.Host, error) {
 	return h.hosts.List(), nil
 }
 
-// Has reports whether battery runs with the Host of that name.
+// Has reports whether battery places on the Host of that name.
 func (h *HostSet) Has(name string) bool {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
@@ -132,7 +130,7 @@ func (h *HostSet) Changed() <-chan struct{} {
 
 // Matching returns the names, sorted, of the Hosts whose Nodes match a
 // Pool's spec.placement.nodeSelector: the Nodes r lists with those labels
-// that battery runs with. An empty selector matches every Host. "The
+// that battery places on. An empty selector matches every Host. "The
 // selector matches a Host" (PO-012, PO-022) is a non-empty answer. Before
 // the set is published it returns ErrNotSynced.
 func (h *HostSet) Matching(ctx context.Context, r client.Reader, selector map[string]string) ([]string, error) {

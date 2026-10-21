@@ -1,7 +1,7 @@
 # Binds the namespaced manager-role, which controller-gen generates from the
 # RBAC markers that name the Operator's namespace: read access to the CA
-# Secrets, write access to the CA bundle ConfigMap, the address pins
-# ConfigMap and battery's ConfigMap.
+# Secrets, and write access to the CA bundle ConfigMap and the address
+# pins ConfigMap.
 #
 # This is the Operator's only access to Secrets: a Role in its own
 # namespace, naming the two CA Secrets. Its ClusterRole grants none.

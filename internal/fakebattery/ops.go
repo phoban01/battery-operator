@@ -92,6 +92,9 @@ func (b *Battery) createPool(spec poolSpec) (*pool, error) {
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if err := b.checkFlintlockHostsLocked(spec); err != nil {
+		return nil, err
+	}
 	key := keyOf(spec.Ref)
 	if _, exists := b.pools[key]; exists {
 		return nil, status.Errorf(codes.AlreadyExists, "pool %s already exists", key)
@@ -110,6 +113,9 @@ func (b *Battery) updatePool(spec poolSpec) (*pool, error) {
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if err := b.checkFlintlockHostsLocked(spec); err != nil {
+		return nil, err
+	}
 	ps, err := b.poolLocked(spec.Ref)
 	if err != nil {
 		return nil, err

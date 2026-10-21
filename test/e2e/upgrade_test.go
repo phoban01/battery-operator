@@ -20,6 +20,9 @@ package e2e
 
 import (
 	"context"
+	"encoding/json"
+	"maps"
+	"strings"
 	"testing"
 	"time"
 
@@ -35,28 +38,44 @@ import (
 	"sigs.k8s.io/e2e-framework/pkg/features"
 
 	batteryv1alpha1 "github.com/phoban01/battery-operator/api/v1alpha1"
+	"github.com/phoban01/battery-operator/internal/batterysidecar"
+	"github.com/phoban01/battery-operator/internal/controller/inventory"
 )
 
 // The battery upgrade the feature takes the Operator through.
 const (
-	// previousPoolmgrdImage is the last battery whose database schema
-	// differs from the suite's: v0.4.0 is the first release with a
-	// migration (BA-062).
-	previousPoolmgrdImage = poolmgrdRepository + ":0.3.3"
+	// previousPoolmgrdImage is the last battery that read its Hosts from
+	// its configuration file, and kept them in its database without TLS
+	// settings (BA-086).
+	previousPoolmgrdImage = poolmgrdRepository + ":0.4.0"
+	// placeholderHost is the Host an Operator before v0.5 gave battery
+	// v0.4.0 when no Node was a Host, since battery v0.4.0 refused to start
+	// with none.
+	placeholderHost = "_no-hosts"
 	// rolloutTimeout bounds a restart of the Operator's pod: the old pod's
 	// termination, the pull of poolmgrd and the new pod's readiness.
 	rolloutTimeout = 5 * time.Minute
 )
 
-// upgradeKey is the context key of the poolmgrd image the suite deployed,
+// upgradeDB is the database battery v0.4.0 starts on, and the suite's
+// battery upgrades: a file of its own on battery's volume.
+const upgradeDB = "/data/upgrade.db"
+
+// upgradeKey is the context key of what the suite deployed, an upgraded,
 // which the feature puts back.
 type upgradeKey struct{}
 
-// TestBatteryUpgrade: the Operator runs with battery v0.3.3 as its
-// sidecar, fills a Pool and binds a claim; the sidecar is upgraded to the
-// suite's poolmgrd, which migrates battery's database when it starts; the
-// claim keeps its Lease and renews it, and a new claim binds through the
-// migrated database.
+// upgraded is battery's image and database as the suite deployed them.
+type upgraded struct{ image, db string }
+
+// TestBatteryUpgrade: battery v0.4.0 runs as the Operator's sidecar with
+// its Hosts in its configuration file, as an Operator before v0.5 left it,
+// fills a Pool and binds a claim; the configuration goes back to the one
+// the Manifests ship, and the sidecar is upgraded to the suite's poolmgrd,
+// which migrates battery's database and keeps the Hosts in it without TLS
+// settings; the Inventory Controller gives them their TLS settings and
+// removes the placeholder Host; the claim keeps its Lease and renews it,
+// and a new claim binds through the migrated database.
 func TestBatteryUpgrade(t *testing.T) {
 	ns := envconf.RandomName("e2e-upgrade", 20)
 	testenv.Test(t, upgradeFeature(ns))
@@ -73,17 +92,27 @@ func upgradeFeature(ns string) features.Feature {
 			}
 			return ctx
 		}).
-		Assess("the Operator is set back to battery v0.3.3", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+		Assess("the Operator is set back to battery v0.4.0, with its Hosts in its file", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
 			c := mustClient(t, cfg)
 			current := batteryImage(ctx, t, c)
 			if current == previousPoolmgrdImage {
 				t.Fatalf("the suite deployed %s, which is the version the upgrade starts from", current)
 			}
-			setBatteryImage(ctx, t, c, previousPoolmgrdImage)
-			waitForHostsInBattery(ctx, t, c)
-			return context.WithValue(ctx, upgradeKey{}, current)
+			hosts := readyHosts(ctx, t, c)
+			// battery v0.4.0 refuses the suite's database, which a newer
+			// battery has migrated, so it starts on a database of its own,
+			// on the same volume, as a fresh v0.4.0 install would.
+			db := batteryDB(ctx, t, c)
+			ctx = context.WithValue(ctx, upgradeKey{}, upgraded{image: current, db: db})
+			setBatteryConfig(ctx, t, c, v04Config(t, hosts))
+			setBattery(ctx, t, c, previousPoolmgrdImage, upgradeDB)
+			// battery v0.4.0 has no AddHost or UpdateHost, so the Inventory
+			// Controller fails to bring its Hosts in step, but publishes the
+			// ones battery places on, and cordons the placeholder.
+			waitForBatteryHosts(ctx, t, cfg, hosts)
+			return ctx
 		}).
-		Assess("a Pool fills and a claim binds on battery v0.3.3", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+		Assess("a Pool fills and a claim binds on battery v0.4.0", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
 			c := mustClient(t, cfg)
 			pool := placedPool(ns, placedPoolName, map[string]string{hostLabel: isTrue})
 			if err := c.Create(ctx, pool); err != nil {
@@ -99,24 +128,58 @@ func upgradeFeature(ns string) features.Feature {
 			waitForClaimBound(ctx, t, c, claim)
 			return ctx
 		}).
-		Assess("the Operator is upgraded to the suite's battery, which migrates the database", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
-			//= docs/requirements/10-battery.md#restarts
+		Assess("the Operator is upgraded to the suite's battery, which keeps its Hosts", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+			//= docs/requirements/10-battery.md#hosts
 			//= type=test
-			//# When battery starts on a database that battery v0.3.3 wrote,
-			//# battery SHALL migrate the database's schema before it serves, and SHALL
-			//# keep the Pools, MicroVMs and Leases in it.
+			//# When battery starts on a database that battery v0.4.0 wrote,
+			//# battery SHALL keep the Hosts in it, with no TLS settings, and SHALL read no
+			//# Host from its configuration file.
+
+			//= docs/requirements/04-inventory.md#upgrade
+			//= type=test
+			//# When battery holds a Host whose TLS settings are not those of
+			//# IN-004, the Inventory Controller SHALL update the Host with `UpdateHost` to
+			//# those settings, keeping its address.
 
 			//= docs/requirements/06-deployment.md#battery-sidecar
 			//= type=test
 			//# The Manifests SHALL keep battery's database on a persistent
 			//# volume.
 			c := mustClient(t, cfg)
-			image, _ := ctx.Value(upgradeKey{}).(string)
-			if image == "" {
+			was, _ := ctx.Value(upgradeKey{}).(upgraded)
+			if was.image == "" {
 				t.Fatal("the image the suite deployed was not recorded")
 			}
-			setBatteryImage(ctx, t, c, image)
-			waitForHostsInBattery(ctx, t, c)
+			shipped, err := batterysidecar.Render()
+			if err != nil {
+				t.Fatal(err)
+			}
+			setBatteryConfig(ctx, t, c, string(shipped))
+			setBattery(ctx, t, c, was.image, upgradeDB)
+
+			// The configuration names no Host, so every Host battery holds
+			// came through the migrated database; each gets its TLS
+			// settings, and the placeholder goes.
+			want := readyHosts(ctx, t, c)
+			var held map[string]bool
+			err = wait.PollUntilContextTimeout(ctx, 2*time.Second, placementTimeout, true, func(ctx context.Context) (bool, error) {
+				statuses, err := batteryHostStatuses(ctx, cfg)
+				if err != nil {
+					return false, nil
+				}
+				held = map[string]bool{}
+				got := map[string]string{}
+				for _, h := range statuses {
+					held[h.Host.Name] = true
+					if !h.Host.Cordoned && h.Host.TLS == inventory.TLS {
+						got[h.Host.Name] = h.Host.Address
+					}
+				}
+				return maps.Equal(got, want) && !held[placeholderHost], nil
+			})
+			if err != nil {
+				t.Fatalf("after the upgrade battery holds %v, want %v with TLS and no placeholder", held, want)
+			}
 			return ctx
 		}).
 		Assess("the claim keeps its Lease across the upgrade, and renews it", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
@@ -179,15 +242,19 @@ func upgradeFeature(ns string) features.Feature {
 		}).
 		Teardown(deleteNamespace(ns)).
 		Teardown(func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
-			// Whatever happened above, leave the suite's battery running.
-			image, _ := ctx.Value(upgradeKey{}).(string)
-			if image == "" {
+			// Whatever happened above, leave the suite's battery running on
+			// the suite's database, with the configuration the Manifests ship.
+			was, _ := ctx.Value(upgradeKey{}).(upgraded)
+			if was.image == "" {
 				return ctx
 			}
 			c := mustClient(t, cfg)
-			if batteryImage(ctx, t, c) != image {
-				setBatteryImage(ctx, t, c, image)
+			shipped, err := batterysidecar.Render()
+			if err != nil {
+				t.Fatal(err)
 			}
+			setBatteryConfig(ctx, t, c, string(shipped))
+			setBattery(ctx, t, c, was.image, was.db)
 			return ctx
 		}).
 		Feature()
@@ -221,11 +288,33 @@ func batteryImage(ctx context.Context, t *testing.T, c client.Client) string {
 	return ""
 }
 
-// setBatteryImage sets battery's container to image and waits for the
-// Operator's pod to be replaced and ready with it. The Deployment's
-// strategy is Recreate (DP-002), so battery's database has one writer
-// throughout.
-func setBatteryImage(ctx context.Context, t *testing.T, c client.Client, image string) {
+// batteryDB is the -db argument of battery's container: the path of its
+// database.
+func batteryDB(ctx context.Context, t *testing.T, c client.Client) string {
+	t.Helper()
+	var d appsv1.Deployment
+	if err := c.Get(ctx, types.NamespacedName{Namespace: namespace, Name: operatorDeployment}, &d); err != nil {
+		t.Fatalf("reading the Deployment %s: %v", operatorDeployment, err)
+	}
+	for _, ct := range d.Spec.Template.Spec.Containers {
+		if ct.Name != batteryContainer {
+			continue
+		}
+		for _, a := range ct.Args {
+			if db, ok := strings.CutPrefix(a, "-db="); ok {
+				return db
+			}
+		}
+	}
+	t.Fatal("battery's container has no -db argument")
+	return ""
+}
+
+// setBattery sets battery's container to image and its database to db,
+// and waits for the Operator's pod to be replaced and ready with them. The
+// Deployment's strategy is Recreate (DP-002), so battery's database has
+// one writer throughout.
+func setBattery(ctx context.Context, t *testing.T, c client.Client, image, db string) {
 	t.Helper()
 	var d appsv1.Deployment
 	key := types.NamespacedName{Namespace: namespace, Name: operatorDeployment}
@@ -234,8 +323,15 @@ func setBatteryImage(ctx context.Context, t *testing.T, c client.Client, image s
 	}
 	patch := client.MergeFrom(d.DeepCopy())
 	for i := range d.Spec.Template.Spec.Containers {
-		if d.Spec.Template.Spec.Containers[i].Name == batteryContainer {
-			d.Spec.Template.Spec.Containers[i].Image = image
+		ct := &d.Spec.Template.Spec.Containers[i]
+		if ct.Name != batteryContainer {
+			continue
+		}
+		ct.Image = image
+		for j, a := range ct.Args {
+			if strings.HasPrefix(a, "-db=") {
+				ct.Args[j] = "-db=" + db
+			}
 		}
 	}
 	if err := c.Patch(ctx, &d, patch); err != nil {
@@ -285,12 +381,52 @@ func batteryPod(ctx context.Context, c client.Client, image string) *corev1.Pod 
 	return nil
 }
 
-// waitForHostsInBattery waits for battery's configuration to list every
-// ready Host with no restart pending, which it does once the Operator is
-// up after a restart and has written them back (IN-014).
-func waitForHostsInBattery(ctx context.Context, t *testing.T, c client.Client) {
+// setBatteryConfig sets battery's configuration file in its ConfigMap. The
+// battery container reads it when it next starts, which setBattery
+// brings.
+func setBatteryConfig(ctx context.Context, t *testing.T, c client.Client, config string) {
 	t.Helper()
-	waitForBatteryHosts(ctx, t, c, readyHosts(ctx, t, c), "")
+	var cm corev1.ConfigMap
+	if err := c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: batteryConfigMap}, &cm); err != nil {
+		t.Fatalf("reading battery's ConfigMap: %v", err)
+	}
+	patch := client.MergeFrom(cm.DeepCopy())
+	cm.Data[batterysidecar.ConfigKey] = config
+	if err := c.Patch(ctx, &cm, patch); err != nil {
+		t.Fatalf("writing battery's configuration: %v", err)
+	}
+}
+
+// v04Config is battery's configuration as an Operator before v0.5 wrote it
+// for battery v0.4.0: hosts, each with the TLS settings of IN-004, and the
+// placeholder Host.
+func v04Config(t *testing.T, hosts map[string]string) string {
+	t.Helper()
+	type tlsConfig struct {
+		CertFile string `json:"cert_file"`
+		KeyFile  string `json:"key_file"`
+		CAFile   string `json:"ca_file"`
+	}
+	type hostConfig struct {
+		Name    string    `json:"name"`
+		Address string    `json:"address"`
+		TLS     tlsConfig `json:"tls"`
+	}
+	tls := tlsConfig{CertFile: inventory.TLS.CertFile, KeyFile: inventory.TLS.KeyFile, CAFile: inventory.TLS.CAFile}
+	list := make([]hostConfig, 0, 1+len(hosts))
+	list = append(list, hostConfig{Name: placeholderHost, Address: "no-hosts.invalid:9090", TLS: tls})
+	for name, address := range hosts {
+		list = append(list, hostConfig{Name: name, Address: address, TLS: tls})
+	}
+	out, err := json.MarshalIndent(map[string]any{
+		"hosts":        list,
+		"api_server":   map[string]any{"addr": batterysidecar.APIAddress, "tls": map[string]bool{"insecure": true}},
+		"metrics_addr": batterysidecar.MetricsAddress,
+	}, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(out) + "\n"
 }
 
 // waitForClaimStatus waits until want holds of claim's status.

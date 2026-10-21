@@ -21,7 +21,6 @@ package e2e
 import (
 	"context"
 	"fmt"
-	"maps"
 	"testing"
 	"time"
 
@@ -35,7 +34,6 @@ import (
 	"sigs.k8s.io/e2e-framework/pkg/features"
 
 	batteryv1alpha1 "github.com/phoban01/battery-operator/api/v1alpha1"
-	"github.com/phoban01/battery-operator/internal/batterysidecar"
 	"github.com/phoban01/battery-operator/internal/execagent"
 )
 
@@ -49,10 +47,9 @@ const (
 	// poolSize is the size of the Pools the features make.
 	poolSize = 2
 	// placementTimeout bounds each wait on the Operator and battery: the
-	// Inventory Controller's settle time and window (config/
-	// manager-inventory-timing.yaml), a restart of battery, which waits for
-	// the kubelet to update battery's ConfigMap volume, and poolmgrd filling
-	// the Pool.
+	// Inventory Controller's settle time (config/
+	// manager-inventory-timing.yaml), battery's check of a Host it adds, and
+	// poolmgrd filling the Pool.
 	placementTimeout = 5 * time.Minute
 )
 
@@ -98,18 +95,7 @@ func placementFeature(ns string) features.Feature {
 			//= type=test
 			//# The Inventory Controller SHALL give battery each Host under the
 			//# Node's name, at the `flintlockd` address the Host's Node report gives.
-			want := readyHosts(ctx, t, c)
-			var got map[string]string
-			err := wait.PollUntilContextTimeout(ctx, 2*time.Second, placementTimeout, true, func(ctx context.Context) (bool, error) {
-				var err error
-				if got, err = batteryHosts(ctx, c); err != nil {
-					return false, nil
-				}
-				return maps.Equal(got, want), nil
-			})
-			if err != nil {
-				t.Fatalf("battery's Hosts are %v, want %v, the Hosts' Node reports", got, want)
-			}
+			waitForBatteryHosts(ctx, t, cfg, readyHosts(ctx, t, c))
 			return ctx
 		}).
 		Assess("a Pool whose selector matches no Host says so", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
@@ -359,24 +345,6 @@ func readyHosts(ctx context.Context, t *testing.T, c client.Client) map[string]s
 		t.Fatalf("the Exec Agent does not report %s ready: %v", notReady.Name, notReady.Annotations)
 	}
 	return hosts
-}
-
-// batteryHosts are the Hosts in battery's configuration, by name, with
-// their addresses.
-func batteryHosts(ctx context.Context, c client.Client) (map[string]string, error) {
-	var cm corev1.ConfigMap
-	if err := c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: batteryConfigMap}, &cm); err != nil {
-		return nil, err
-	}
-	f, err := batterysidecar.Parse([]byte(cm.Data[batterysidecar.ConfigKey]))
-	if err != nil {
-		return nil, err
-	}
-	hosts := map[string]string{}
-	for _, h := range f.Hosts {
-		hosts[h.Name] = h.Address
-	}
-	return hosts, nil
 }
 
 // waitForPoolReady waits for pool's Ready condition to have status and

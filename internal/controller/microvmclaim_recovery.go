@@ -38,8 +38,7 @@ import (
 // claimEvents, the Claim Controller's side of BatteryEvents, runs it after
 // each subscription to battery's Events stream succeeds, before the stream
 // is read. The first subscription is the Claim Controller's start. Every later one follows a
-// stream that ended because battery went away, or restarted (DP-006: the
-// gated client holds the Subscribe until the restart is over), so it is
+// stream that ended because battery went away or restarted, so it is
 // the connection being restored. No other signal is needed, and a
 // subscription whose recovery fails is dropped and made again, so every
 // connection is recovered once.

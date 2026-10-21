@@ -15,7 +15,7 @@ code. They do not replace Go tests. How they cite requirements is in
 | `claims_picks.qnt` | `claims.qnt`'s steps that take arguments, each recording them as the replay's picks, for the scenario tests the replay replays as fixed traces (#149) |
 | `certificates.qnt` | Certificate approval and signing, and the address pins (CT-001 to CT-020; EA-061, EA-062, EA-068; ADR 0003 and ADR 0004) |
 | `certificates_test.qnt` | Scenario tests for `certificates.qnt` |
-| `pools.qnt` | Pools, placement and inventory: the Pool Controller and the Inventory Controller against battery (PO-001 to PO-004, PO-010 to PO-012, PO-042, PO-044, IN-001 to IN-013, DP-007, DP-008, BA-061, BA-070, BA-072, CL-063; ADR 0001, consequence 1) |
+| `pools.qnt` | Pools, placement and inventory: the Pool Controller and the Inventory Controller against battery (PO-001 to PO-004, PO-010 to PO-012, PO-042, PO-044, IN-001, IN-011, IN-015 to IN-020, DP-035, BA-070, BA-072, BA-080 to BA-084, BA-086, BA-089, CL-063; ADR 0008) |
 | `pools_test.qnt` | Scenario tests for `pools.qnt` |
 
 ## Running them
@@ -42,11 +42,13 @@ quint run specs/quint/certificates.qnt --invariant safety --max-steps 60 --max-s
   witnessKubeletLieRefused witnessRepinned
 quint test specs/quint/pools_test.qnt
 quint run specs/quint/pools.qnt --invariant safety --max-steps 60 --max-samples 20000 \
-  --witnesses witnessFlapAbsorbed witnessRestart witnessBatchedRestart witnessTwoRestarts \
-  witnessRenewalRestart witnessRenewalWithHostChange \
+  --witnesses witnessFlapAbsorbed witnessCordoned witnessUncordoned \
+  witnessRemoved witnessRemovalRefused witnessUpgradedHost witnessPlaceholderRemoved \
+  witnessRenewalRefreshed \
   witnessVMOnFormerHost witnessPlacementUpdated witnessNoEligibleHost \
-  witnessPoolDeleted witnessDrainedForPool witnessRejectedWithoutHost \
-  witnessPoolDrained witnessDeletionWaitsForClaim
+  witnessPoolDeleted witnessRejectedWithoutHost witnessPoolDrained
+quint run specs/quint/pools.qnt --init initPools --step stepPoolDeletion --invariant safety \
+  --max-steps 60 --max-samples 20000 --witnesses witnessPoolDrained witnessDeletionWaitsForClaim
 ```
 
 A violation prints the trace that breaks the invariant and the seed that
@@ -575,24 +577,31 @@ its pin.
 
 ## The pools and inventory model
 
-`pools.qnt` has three Hosts, two Pools and battery v0.4.0 as a sidecar
-that reads its Hosts from its configuration, and its client certificate,
-only when it starts (ADR 0001, consequence 1; BA-061). The steps are:
+`pools.qnt` has three Nodes, two Pools and battery with the `HostAdmin`
+API of battery v0.5.0 (ADR 0008;
+10-battery.md, Hosts). battery holds its Hosts in its database, each with
+a cordon flag, whether it has the TLS settings of IN-004, and the client
+certificate battery read when it last connected to it. Nothing restarts
+battery. The steps are:
 
 - **the Inventory Controller:** a Node is a Host while it exists, is
   schedulable and its Node report says ready (IN-001). A change in that
-  settles for the settle time (IN-011). When a settled change is waiting,
-  the controller opens a restart window; when the window closes, it writes
-  every change settled by then to battery's configuration and restarts
-  battery once (IN-010, IN-012). A renewed client certificate opens a
-  window too, or joins the one open, and goes into the same restart
-  (DP-007, DP-008). A window whose changes flapped back, with nothing
-  renewed, closes without a restart. Before a restart that removes Hosts,
-  it publishes the Hosts that remain and restarts only once no Pool in
-  battery names a leaving Host, or, standing for the drain timeout, once
-  the Pool Controller has nothing left to do (IN-013); a restart for a
-  renewal alone removes no Host and does not wait. It publishes a joining
-  Host only once battery has restarted with it.
+  settles for the settle time (IN-011); until then the controller keeps
+  what battery has. Once it has settled, a Node that is a Host is added
+  with `AddHost`, or uncordoned, and only then given to the Pool
+  Controller (IN-017, IN-018); a Host battery already holds is brought in
+  step the same way, whether `ListHosts` or `AddHost`'s `ALREADY_EXISTS`
+  found it (IN-019, which the model does not tell apart). A Node that
+  stops being a Host is taken from the Pool Controller and then cordoned,
+  and battery keeps it (IN-015, IN-018). A Host whose Node is gone is
+  cordoned too, and removed with `RemoveHost`, which battery refuses
+  while a Pool names the Host or a MicroVM is on it; the controller tries
+  again (IN-016). A Host with no TLS settings, as battery v0.4.0's
+  database leaves it, gets them with `UpdateHost` (IN-020). Once the
+  Secret's volume holds the Secret's certificate, the controller calls
+  `UpdateHost` for every Host when the certificate is renewed, and once
+  after the Operator starts (DP-035), and battery reads the certificate
+  when it connects (BA-081).
 - **the Pool Controller:** add the finalizer, `CreatePool` once the
   finalizer is stored, `UpdatePool` on a new generation or a new set of
   matching Hosts, the `Rejected` condition for a spec battery refuses, the
@@ -603,29 +612,39 @@ only when it starts (ADR 0001, consequence 1; BA-061). The steps are:
   It resolves a selector against the Hosts the Inventory Controller has
   published whose Nodes exist.
 - **battery:** replenishes each Pool up to its size on the least loaded
-  Host in its `flintlock_hosts`, as its `PickHost` does, so a Pool of size
-  0 gets none (BA-072). It does not check `flintlock_hosts` against its
-  Hosts, and provisioning on a Host it does not know fails. It refuses
-  `DeletePool` while the Pool owns a leased MicroVM, and otherwise deletes
-  the Pool with its available MicroVMs (BA-070). It refuses a spec
-  whose heartbeat expiry threshold is not positive, which stands for every
-  spec it refuses (PO-004). The model has no replenishment strategies,
-  hooks, provisioning phase or quarantine (10-battery.md, stand-ins).
-  Its replenishment whenever a Pool is below its size stands for battery
-  together with the Pool Controller's reseed of a stalled Pool (PO-035 to
-  PO-038), which works around battery v0.3.3 seeding an event-driven Pool
-  only once (BA-075, BA-076).
+  Host in its `flintlock_hosts` that it holds uncordoned, as its
+  `PickHost` does, so a Pool of size 0 gets none (BA-072) and a cordoned
+  Host gets none (BA-084); provisioning on a Host without TLS settings
+  fails. It refuses a Pool that names a Host it does not hold (BA-082),
+  refuses to remove a Host that a Pool names or a MicroVM is on (BA-083),
+  and refuses `DeletePool` while the Pool owns a leased MicroVM, and
+  otherwise deletes the Pool with its available MicroVMs (BA-070). It
+  refuses a spec whose heartbeat expiry threshold is not positive, which
+  stands for every other spec it refuses (PO-004). It starts either with
+  the Hosts the Operator gave it, or on a battery v0.4.0 database: every
+  Host without TLS settings, and the placeholder Host `_no-hosts`, which
+  no Node names (BA-086). The model has no replenishment strategies,
+  hooks, provisioning phase, quarantine or addresses (10-battery.md,
+  stand-ins).
 - **the environment:** Nodes are labelled, cordoned, uncordoned, deleted
   and created again; Node reports flip; Pools are created, changed (to a
   spec battery refuses, too) and deleted; claims lease available MicroVMs
   of a Pool that is not being deleted (CL-063), and release them;
-  cert-manager renews battery's client certificate;
-  time passes. The controllers act promptly: time does not pass while a
-  restart window is waiting to open or close, or while battery is
-  restarting.
+  cert-manager renews battery's client certificate, and the kubelet later
+  puts it in the volume; time passes. The controllers act promptly: time
+  does not pass while the Inventory Controller has a step to take, other
+  than a `RemoveHost` battery refuses. The Operator's restart is a step
+  the scenario tests take, not the simulation: every trace starts with
+  the Operator just started.
 
-IN-012 defines the restart window this way (#74): restarts are at least a
-window apart, and every change settled in a window goes into its restart.
+The step relation is a choice between groups of steps: the Nodes, the
+Pools' lives and claims, the Pools' specs, the certificate, time, the
+Inventory Controller and the Pool Controller. Picking a group first keeps
+the many steps of one side from crowding out the other's. `make quint`
+simulates `step` with every group, and `stepPoolDeletion`, from a fresh
+install with no Node, Pool spec or certificate steps, for the long
+interleaving of a Pool whose deletion waits for a claim, which the full
+relation reaches too seldom to rely on.
 
 Invariants, all in `safety`:
 
@@ -638,27 +657,32 @@ Invariants, all in `safety`:
 | `goneLeavesNothing` | a Pool gone from the API server is not in battery: `CreatePool` waits for the stored finalizer (PO-001, PO-003, #72) |
 | `vmsBelongToPools` | every MicroVM battery holds belongs to a Pool battery holds: deleting a Pool never orphans its MicroVMs (BA-070, PO-003, #81) |
 | `drainLeavesLeases` | the deletion of a Pool never takes a MicroVM a claim holds: battery holds exactly the MicroVMs leased and not yet released (BA-070, PO-044) |
-| `hostsFollowNodes` | battery's Hosts are the Nodes that are Hosts, except for a change younger than the settle time plus one restart window (IN-001, IN-002, IN-010, IN-011) |
-| `noNewVMOnFormerHost` | a cordoned, deleted or not-ready Host gets no new MicroVM once its change has settled and its window has closed (IN-001, IN-002) |
-| `restartOnlyForSettledChanges` | a restart applies only changes that have held for the settle time, or a renewed certificate, so a flapping report restarts nothing (IN-011, DP-007) |
-| `restartsOncePerWindow` | battery restarts at most once per restart window, for Host changes and renewals alike (IN-012, DP-008) |
-| `poolsNameKnownHosts` | while battery runs, every Pool in battery names only Hosts battery knows, so `PickHost` never picks one it cannot provision on; the one exception is a Pool the Pool Controller cannot update when the drain timeout passes, until it is next written (IN-013, #73) |
-| `certificateFollowsSecret` | while battery runs, it presents the certificate its Secret holds, except for at most one restart window after a renewal (DP-007) |
+| `hostsFollowNodes` | the Hosts battery holds uncordoned are the Nodes that are Hosts, except for a change younger than the settle time (IN-001, IN-011, IN-015 to IN-017) |
+| `noNewVMOnFormerHost` | a cordoned, deleted or not-ready Host gets no new MicroVM once its change has settled (IN-015, BA-084) |
+| `publishedAreActive` | the Pool Controller has only Hosts battery holds uncordoned (IN-018) |
+| `poolsNameHeldHosts` | every Pool in battery names only Hosts battery holds, with no exception, so battery never refuses a Pool for its Hosts and `PickHost` never picks a Host battery does not hold (IN-018, BA-082, BA-083, #73) |
+| `vmsOnHeldHosts` | battery holds the Host of every MicroVM: a Host leaves battery only once nothing is on it (IN-016, BA-083) |
+| `heldHostsGetTLS` | once time has passed, every Host battery holds has the TLS settings of IN-004, after an upgrade too (IN-017, IN-020, BA-086) |
+| `certificateFollowsSecret` | every Host battery can reach presents the certificate the Secret holds, except between a renewal or the Operator's start and the `UpdateHost` calls that follow once the volume holds it (DP-035, BA-081) |
 
-The bound in `hostsFollowNodes` and `noNewVMOnFormerHost`, the settle time
-plus one restart window, is tight: one tick less fails. Until then a
-cordoned Host still gets new MicroVMs, as 04-inventory.md says.
+The bound in `hostsFollowNodes` and `noNewVMOnFormerHost` is the settle
+time alone; under battery v0.4.0 it was the settle time plus a restart
+window. Until then a cordoned Node's Host still gets new MicroVMs, as
+04-inventory.md says (`vmOnCordonedHostWithinBoundTest`).
 
-`poolsNameKnownHosts` was a finding (#73): before IN-013, a restart that
-removed a Host left the Pools naming it until the Pool Controller's
-`UpdatePool`, and battery's `PickHost` kept choosing it and failing.
-`removedHostDrainedTest` walks that scenario now, and
-`restartWaitsForThePoolsTest` shows the restart refused while the Pool
-still names the Host. The Go code stands the drain timeout's wait for a
-Pool the Pool Controller cannot update; the model lets the timeout pass
-only once the Pool Controller has nothing left to do, which leaves a Pool
-whose spec battery refuses, since `UpdatePool` cannot carry its Hosts
-without its spec (`refusedPastDrainTest`).
+`poolsNameHeldHosts` was a finding under battery v0.4.0 (#73): a restart
+that removed a Host left the Pools naming it, and battery's `PickHost`
+kept choosing it and failing. IN-013's drain (withdrawn) fixed it except for a Pool
+the Pool Controller could not update. battery now refuses both a Pool
+that names a Host it does not hold and the removal of a Host a Pool
+names, and IN-018 orders the Inventory Controller's steps so that neither
+refusal comes up: the invariant holds with no exception.
+`removalWaitsForThePoolsTest` walks a removal that battery refuses while a
+Pool names the Host and a claim holds a MicroVM on it, and that goes
+through once both are gone; `joiningHostTest` a Host removed and added
+again, which the Pool names only after battery holds it.
+`upgradeSecuresHostsTest` walks the upgrade from a battery v0.4.0
+database.
 
 `goneLeavesNothing` was a finding (#72): before PO-001 ordered `CreatePool`
 after the finalizer, a Pool deleted in between left its battery Pool
@@ -680,14 +704,19 @@ holds, after which battery deletes it with its available one.
 Pool that still has an available MicroVM (CL-063).
 
 The witnesses show that the simulation reaches a flap absorbed within the
-settle time, a restart, a restart that batches two Hosts, two restarts, a
+settle time, a Host cordoned while its Node exists, a cordoned Host
+uncordoned, a Host removed after its Node went, a `RemoveHost` battery
+refused, a Host from a v0.4.0 database given its TLS settings, the
+placeholder Host removed, every Host given a renewed certificate, a
 MicroVM placed on a Host whose Node had stopped being a Host (within the
 bound), an `UpdatePool` for a changed set of Hosts, a Pool with
 `NoEligibleHost`, a Pool deleted under its finalizer, a Pool that says
-`Rejected` while its selector matches no Host, a Pool dropping a
-leaving Host before the restart that removes it, a Pool battery deleted
+`Rejected` while its selector matches no Host, a Pool battery deleted
 with an available MicroVM, and a Pool with its drained spec waiting for a
-claim's MicroVM while it keeps an available one.
+claim's MicroVM while it keeps an available one (in the
+`stepPoolDeletion` run). An `AddHost` after a removal, and a removal after
+a refusal, are not required witnesses; `joiningHostTest` and
+`removalWaitsForThePoolsTest` walk them.
 
 ## Conventions
 

@@ -20,27 +20,26 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
-	"slices"
-	"strings"
 
 	"github.com/phoban01/battery-operator/internal/battery"
 )
 
-// Where the Manifests put battery's files. The Operator's container and
-// battery's mount the same ConfigMap volume at ConfigDir.
+// Where the Manifests put battery's files.
 const (
 	// DefaultConfigMap is the name of the ConfigMap, in the Operator's
 	// namespace, that holds battery's configuration under ConfigKey:
-	// config/manager's battery-config after kustomize's namePrefix. The
-	// Operator's RBAC grants it access to this name only.
+	// config/manager's battery-config after kustomize's namePrefix. Only
+	// battery's container mounts it; the Operator neither reads nor writes
+	// it.
 	DefaultConfigMap = "battery-operator-battery-config"
 	// ConfigKey is the ConfigMap key, and the file name, of the
 	// configuration.
 	ConfigKey = "config.json"
-	// ConfigDir is where the ConfigMap is mounted in both containers. TLSDir
-	// is beside it, not inside it, since a read-only ConfigMap volume cannot
-	// hold another volume's mount point.
+	// ConfigDir is where the ConfigMap is mounted in battery's container.
+	// TLSDir is beside it, not inside it, since a read-only ConfigMap volume
+	// cannot hold another volume's mount point.
 	ConfigDir = "/etc/battery/config"
 	// DefaultConfigFile is the configuration file's path.
 	DefaultConfigFile = ConfigDir + "/" + ConfigKey
@@ -57,10 +56,11 @@ const (
 	// TLSDir holds battery's flintlockd client certificate and key, and the
 	// serving CA's certificate (DP-005). The Operator's container mounts the
 	// same volume there, to see when a renewed certificate has reached it
-	// (DP-007).
+	// (DP-035).
 	TLSDir = "/etc/battery/tls"
 	// ClientCertFile, ClientKeyFile and ServingCAFile are the files in
-	// TLSDir.
+	// TLSDir: the TLS settings the Inventory Controller gives battery for
+	// every Host (IN-004).
 	ClientCertFile = TLSDir + "/tls.crt"
 	ClientKeyFile  = TLSDir + "/tls.key"
 	ServingCAFile  = TLSDir + "/serving-ca.crt"
@@ -71,39 +71,37 @@ const (
 	// MetricsAddress is where battery's /metrics listens, on loopback too,
 	// since nothing outside the pod needs it yet.
 	MetricsAddress = "127.0.0.1:9090"
-
-	// PlaceholderHostName and PlaceholderHostAddress name the one Host an
-	// empty inventory renders, because poolmgrd v0.4.0 refuses to start
-	// with none. The name is not a valid Node name, so it never collides
-	// with a real Host, and the address, under the reserved .invalid
-	// top-level domain, never resolves.
-	PlaceholderHostName    = "_no-hosts"
-	PlaceholderHostAddress = "no-hosts.invalid:9090"
 )
 
-// File is battery's configuration file: the schema of poolmgrd v0.4.0's
-// internal/config package, whose JSON tags these repeat.
+// Config is where the Operator finds battery's client certificate, from
+// its flags.
+type Config struct {
+	// ClientSecret names the Secret, in the Operator's namespace, that holds
+	// battery's flintlockd client certificate: what cert-manager renews.
+	ClientSecret string
+	// ClientCertFile is the Operator's mount of that Secret's certificate.
+	ClientCertFile string
+}
+
+// BindFlags binds c to the Operator's command line flags.
+func (c *Config) BindFlags(fs *flag.FlagSet) {
+	fs.StringVar(&c.ClientSecret, "battery-client-secret", DefaultClientSecret,
+		"The Secret, in the Operator's namespace, holding battery's flintlockd client certificate; battery reads it "+
+			"again when it changes. The Operator's RBAC grants access to the default name only.")
+	fs.StringVar(&c.ClientCertFile, "battery-client-cert-file", ClientCertFile,
+		"Where the Operator's container mounts battery's flintlockd client certificate, the volume battery's "+
+			"container mounts too.")
+}
+
+// File is battery's configuration file: the schema of poolmgrd's
+// internal/config package, whose JSON tags these repeat. It has no Hosts:
+// battery keeps them in its database, and refuses a file with a "hosts"
+// key (BA-087).
 type File struct {
-	Hosts         []HostConfig `json:"hosts"`
-	APIServer     *APIServer   `json:"api_server,omitempty"`
-	MetricsAddr   string       `json:"metrics_addr,omitempty"`
-	SweepInterval string       `json:"sweep_interval,omitempty"`
-	WarningWindow string       `json:"warning_window,omitempty"`
-}
-
-// HostConfig is one flintlockd battery may dial.
-type HostConfig struct {
-	Name    string  `json:"name"`
-	Address string  `json:"address"`
-	TLS     HostTLS `json:"tls"`
-}
-
-// HostTLS is how battery connects to a Host.
-type HostTLS struct {
-	Insecure bool   `json:"insecure,omitempty"`
-	CertFile string `json:"cert_file,omitempty"`
-	KeyFile  string `json:"key_file,omitempty"`
-	CAFile   string `json:"ca_file,omitempty"`
+	APIServer     *APIServer `json:"api_server,omitempty"`
+	MetricsAddr   string     `json:"metrics_addr,omitempty"`
+	SweepInterval string     `json:"sweep_interval,omitempty"`
+	WarningWindow string     `json:"warning_window,omitempty"`
 }
 
 // APIServer is battery's own gRPC API.
@@ -122,46 +120,18 @@ type ServerTLS struct {
 	ClientCAFile   string `json:"client_ca_file,omitempty"`
 }
 
-// Host is one of battery's Hosts, as the Inventory Controller knows it: a
-// Node's name and its flintlockd's address, host:port.
-type Host struct {
-	Name    string
-	Address string
-}
-
-// Render returns battery's configuration file for hosts: every Host over
-// mutual TLS with battery's client certificate, verified against the
-// serving CA, sorted by name so that the same Hosts always render the same
-// bytes; battery's API and metrics on loopback. With no Hosts it renders
-// the placeholder Host.
-func Render(hosts []Host) ([]byte, error) {
+// Render returns battery's configuration file as the Manifests ship it:
+// battery's API and metrics on loopback, and no Hosts.
+func Render() ([]byte, error) {
+	//= docs/requirements/06-deployment.md#battery-sidecar
+	//# The Manifests SHALL supply battery's configuration from a
+	//# ConfigMap that names no Hosts.
 	f := File{
 		//= docs/requirements/06-deployment.md#battery-sidecar
 		//# The Manifests SHALL run battery as a container in the
 		//# Operator's pod, listening on a loopback address only.
 		APIServer:   &APIServer{Addr: APIAddress, TLS: ServerTLS{Insecure: true}},
 		MetricsAddr: MetricsAddress,
-	}
-	if len(hosts) == 0 {
-		hosts = []Host{{Name: PlaceholderHostName, Address: PlaceholderHostAddress}}
-	}
-	sorted := slices.SortedFunc(slices.Values(hosts), func(a, b Host) int { return strings.Compare(a.Name, b.Name) })
-	for i, h := range sorted {
-		if h.Name == "" || h.Address == "" {
-			return nil, fmt.Errorf("battery configuration: host %d has no name or no address", i)
-		}
-		if i > 0 && sorted[i-1].Name == h.Name {
-			return nil, fmt.Errorf("battery configuration: duplicate host %q", h.Name)
-		}
-		f.Hosts = append(f.Hosts, HostConfig{
-			Name:    h.Name,
-			Address: h.Address,
-			//= docs/requirements/06-deployment.md#battery-sidecar
-			//# The Manifests SHALL give battery, from a Secret, a client
-			//# certificate and key for `flintlockd` and the certificate authority that
-			//# verifies the Hosts' `flintlockd` serving certificates.
-			TLS: HostTLS{CertFile: ClientCertFile, KeyFile: ClientKeyFile, CAFile: ServingCAFile},
-		})
 	}
 	out, err := json.MarshalIndent(f, "", "  ")
 	if err != nil {

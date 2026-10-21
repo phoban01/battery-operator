@@ -44,24 +44,16 @@ spec:
     spec:
       securityContext:
         # The "restricted" Pod Security Standard. Both images are distroless
-        # and run as its nonroot user, 65532; the pod names it so that the
-        # two containers are the same user, which lets the Operator signal
-        # battery (DP-006), and so that battery's volume is writable by it.
+        # and run as its nonroot user, 65532; the pod names it so that
+        # battery's volume is writable by it. The containers do not share a
+        # process namespace: nothing restarts battery, which takes its Hosts
+        # through its HostAdmin API (ADR 0008).
         runAsNonRoot: true
         runAsUser: 65532
         runAsGroup: 65532
         fsGroup: 65532
         seccompProfile:
           type: RuntimeDefault
-      #= docs/requirements/06-deployment.md#battery-sidecar
-      #/ The Operator SHALL restart battery through a single mechanism
-      #/ that the Inventory Controller invokes, and SHALL wait until battery answers
-      #/ again before any controller calls it.
-      # The Operator restarts battery by sending it SIGTERM through the
-      # shared process namespace; the kubelet starts it again, with the
-      # configuration the Inventory Controller wrote. Why this mechanism:
-      # internal/batterysidecar's package documentation.
-      shareProcessNamespace: true
       # Only the manager holds the ServiceAccount's token (its
       # kube-api-access volume): battery has no business with the API
       # server, and the Operator's identity may read the CA Secrets.
@@ -84,13 +76,9 @@ spec:
           - --exec-agent-service-account=battery-operator-exec-agent
           # battery's gRPC API, on loopback in this pod (DP-001).
           - --battery-address=127.0.0.1:50051
-          # battery's ConfigMap, after kustomize's namePrefix, and where this
-          # container mounts it: the same volume battery reads.
-          - --battery-config-map=battery-operator-battery-config
-          - --battery-config-file=/etc/battery/config/config.json
           # battery's client certificate's Secret, which cert-manager renews,
           # and where this container mounts its certificate: the same volume
-          # battery reads. battery restarts when it changes (DP-007).
+          # battery reads. battery reads it again when it changes (DP-035).
           - --battery-client-secret=battery-flintlockd-client
           - --battery-client-cert-file=/etc/battery/tls/tls.crt
         env:
@@ -133,12 +121,9 @@ spec:
         - name: kube-api-access
           mountPath: /var/run/secrets/kubernetes.io/serviceaccount
           readOnly: true
-        - name: battery-config
-          mountPath: /etc/battery/config
-          readOnly: true
         #= docs/requirements/06-deployment.md#battery-sidecar
-        #/ SHALL signal battery only once the Operator's own mount of that Secret
-        #/ holds the new certificate.
+        #/ once the Operator's own mount of that Secret holds the
+        #/ certificate the Secret holds.
         # battery's TLS volume, so that the Operator sees when a renewed
         # client certificate has reached battery's files. The Operator may
         # read that Secret through the API anyway.
@@ -155,7 +140,7 @@ spec:
       # readiness check reports battery instead (DP-012).
       - name: battery
         # The battery version go.mod pins; `make deploy` sets POOLMGRD_IMG here.
-        image: ghcr.io/liquidmetal-dev/poolmgrd:0.4.0
+        image: ghcr.io/liquidmetal-dev/poolmgrd:0.5.0
         args:
           - -config=/etc/battery/config/config.json
           - -db=/data/poolmgr.db
@@ -205,8 +190,9 @@ spec:
                 fieldRef:
                   fieldPath: metadata.namespace
       #= docs/requirements/06-deployment.md#battery-sidecar
-      #/ The Manifests SHALL supply battery's configuration, its Hosts
-      #/ included, from an object the Operator may write.
+      #/ The Manifests SHALL supply battery's configuration from a
+      #/ ConfigMap that names no Hosts.
+      # Only battery's container mounts it.
       - name: battery-config
         configMap:
           name: battery-config

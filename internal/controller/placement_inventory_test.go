@@ -18,76 +18,71 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strconv"
 	"testing"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/phoban01/battery-operator/internal/battery"
-	"github.com/phoban01/battery-operator/internal/batterysidecar"
 	"github.com/phoban01/battery-operator/internal/clock"
 	"github.com/phoban01/battery-operator/internal/controller/inventory"
 )
 
-// knownHostsRestarter checks, at each restart of battery, that no Pool in
-// battery names a Host the new configuration lacks: the property #73
-// found missing, poolsNameKnownHosts in specs/quint/pools.qnt.
-type knownHostsRestarter struct {
-	t        *testing.T
-	battery  battery.Client
-	restarts int
-}
-
-func (r *knownHostsRestarter) Restart(ctx context.Context, want batterysidecar.Mounts) error {
-	r.t.Helper()
-	r.restarts++
-	f, err := batterysidecar.Parse(want.Config)
+// knownHosts checks that no Pool in battery names a Host battery does not
+// hold: poolsNameKnownHosts in specs/quint/pools.qnt (#73). battery
+// refuses a Pool that names a Host it does not hold (BA-082), and a Host
+// that a Pool names (BA-083), so this is what keeps the Pool Controller's
+// UpdatePool and the Inventory Controller's RemoveHost from failing.
+func knownHosts(ctx context.Context, t *testing.T, bc battery.Client, admin battery.HostAdmin) {
+	t.Helper()
+	held, err := admin.ListHosts(ctx)
 	if err != nil {
-		r.t.Fatalf("parsing battery's configuration: %v", err)
+		t.Fatalf("ListHosts: %v", err)
 	}
-	known := map[string]bool{}
-	for _, h := range f.Hosts {
-		known[h.Name] = true
+	holds := map[string]bool{}
+	for _, h := range held {
+		holds[h.Host.Name] = true
 	}
-	pools, err := r.battery.ListPools(ctx, "")
+	pools, err := bc.ListPools(ctx, "")
 	if err != nil {
-		r.t.Fatalf("ListPools: %v", err)
+		t.Fatalf("ListPools: %v", err)
 	}
 	for _, p := range pools {
 		for _, h := range p.Spec.FlintlockHosts {
-			if !known[h] {
-				r.t.Errorf("restart %d: battery restarts without %s, which Pool %s still names", r.restarts, h, p.Spec.Ref)
+			if !holds[h] {
+				t.Errorf("Pool %s names %s, which battery does not hold", p.Spec.Ref, h)
 			}
 		}
 	}
-	return nil
 }
 
 //= docs/requirements/04-inventory.md#applying
 //= type=test
-//# When a restart of battery would remove a Host, the Inventory
-//# Controller SHALL first give the Pool Controller the Hosts that remain,
-//# and SHALL restart battery only once no Pool in battery names the removed
-//# Host in its `flintlock_hosts` or the configured drain timeout has passed.
+//# The Inventory Controller SHALL give the Pool Controller a Host
+//# only once battery holds it uncordoned at the Node's address, and SHALL
+//# take a Host from the Pool Controller before it cordons or removes the Host.
 
-// TestPoolsNameOnlyHostsBatteryKnowsAcrossRestarts runs the Inventory
-// Controller and the Pool Controller together against the fake battery,
-// through the same HostSet (#73): two Hosts join, and the Pool names them
-// only after the restart that gives battery them; one is cordoned, and the
-// Pool drops it before the restart that takes it away.
-func TestPoolsNameOnlyHostsBatteryKnowsAcrossRestarts(t *testing.T) {
+//= docs/requirements/04-inventory.md#admission
+//= type=test
+//# When battery holds a Host whose Node does not exist or is being
+//# deleted, the Inventory Controller SHALL cordon the Host and remove it with
+//# `RemoveHost`, and SHALL try again while battery refuses because a Pool
+//# names the Host or a MicroVM is still on it.
+
+// TestPoolsNameOnlyHostsBatteryHolds runs the Inventory Controller and the
+// Pool Controller together against the fake battery, through the same
+// HostSet: two Hosts join, and the Pool names them only once battery holds
+// them; one is cordoned, and the Pool drops it; its Node is deleted, and
+// battery removes it once the Pool no longer names it.
+func TestPoolsNameOnlyHostsBatteryHolds(t *testing.T) {
 	ctx := context.Background()
-	bc := startPoolFakeBattery(t)
-	raw, err := batterysidecar.Render(nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cmKey := client.ObjectKey{Namespace: testNamespace, Name: batterysidecar.DefaultConfigMap}
+	admin, _ := startHostAdminFakeBattery(t)
+	var bc battery.Client = admin
 	hostNode := func(name, addr string) *corev1.Node {
 		n := labelledNode(name, zoneA)
 		n.Annotations = map[string]string{
@@ -97,24 +92,17 @@ func TestPoolsNameOnlyHostsBatteryKnowsAcrossRestarts(t *testing.T) {
 		return n
 	}
 	pool := zoneAPool()
-	k8s := newPoolFakeClient(t,
-		&corev1.ConfigMap{
-			ObjectMeta: metav1.ObjectMeta{Namespace: cmKey.Namespace, Name: cmKey.Name},
-			Data:       map[string]string{batterysidecar.ConfigKey: string(raw)},
-		},
-		hostNode(testHostA, "10.0.0.1:9090"), hostNode(testHostB, "10.0.0.2:9090"), pool)
+	k8s := newPoolFakeClient(t, hostNode(testHostA, "10.0.0.1:9090"), hostNode(testHostB, "10.0.0.2:9090"), pool)
 	clk := clock.NewFake(poolTestEpoch)
 	hosts := inventory.NewHostSet()
-	restarter := &knownHostsRestarter{t: t, battery: bc}
 	inv := &InventoryReconciler{
-		Client:    k8s,
-		Store:     inventory.ConfigMapStore{Reader: k8s, Writer: k8s, Key: cmKey},
-		Restarter: restarter,
-		Hosts:     hosts,
-		Pools:     bc,
-		Options:   inventory.Options{SettleTime: 30 * time.Second, RestartWindow: time.Minute, DrainTimeout: 10 * time.Second},
-		Clock:     clk,
-		// No client certificate Secret: nothing is renewed here.
+		Client:  k8s,
+		Admin:   admin,
+		Hosts:   hosts,
+		Mount:   &mountedCertificate{},
+		Options: inventory.Options{SettleTime: 30 * time.Second, RemoveRetry: 10 * time.Second},
+		Clock:   clk,
+		// No client certificate Secret: nothing is reloaded here.
 		ClientSecret: batteryClientSecret,
 		Secrets:      k8s,
 	}
@@ -130,47 +118,85 @@ func TestPoolsNameOnlyHostsBatteryKnowsAcrossRestarts(t *testing.T) {
 		if err != nil {
 			t.Fatalf("inventory Reconcile: %v", err)
 		}
+		knownHosts(ctx, t, bc, admin)
 		return res.RequeueAfter
 	}
 
-	// Both Nodes join. Until battery restarts with them, the Pool names no
-	// Host.
+	// Both Nodes join. Until battery holds them, the Pool names no Host.
 	requeue := inventoryAfter(0)
 	f.reconcile()
 	f.wantPlaced()
-	requeue = inventoryAfter(requeue) // settled: the window opens
-	f.reconcile()
-	f.wantPlaced()
-	inventoryAfter(requeue) // the window closes: battery restarts
-	if restarter.restarts != 1 {
-		t.Fatalf("restarts = %d, want 1", restarter.restarts)
-	}
+	inventoryAfter(requeue) // settled: battery holds both
 	f.reconcile()
 	f.wantPlaced(testHostA, testHostB)
+	knownHosts(ctx, t, bc, admin)
 
-	// host-a is cordoned. When the window closes, the restart waits for the
-	// Pool to drop it.
+	// host-a is cordoned: once settled, battery cordons it and the Pool
+	// drops it.
+	update := func(name string, change func(*corev1.Node)) {
+		t.Helper()
+		n := &corev1.Node{}
+		if err := k8s.Get(ctx, client.ObjectKey{Name: name}, n); err != nil {
+			t.Fatal(err)
+		}
+		change(n)
+		if err := k8s.Update(ctx, n); err != nil {
+			t.Fatal(err)
+		}
+	}
+	update(testHostA, func(n *corev1.Node) { n.Spec.Unschedulable = true })
+	requeue = inventoryAfter(0)
+	inventoryAfter(requeue)
+	if got, _ := hosts.Hosts(); !slices.Equal(got, []inventory.Host{{Name: testHostB, Address: "10.0.0.2:9090"}}) {
+		t.Errorf("published %v, want host-b alone", got)
+	}
+	st, err := admin.GetHost(ctx, testHostA)
+	if err != nil || !st.Host.Cordoned {
+		t.Fatalf("battery holds host-a as %+v (%v), want it cordoned", st, err)
+	}
+	f.reconcile()
+	f.wantPlaced(testHostB)
+	knownHosts(ctx, t, bc, admin)
+
+	// host-a's Node is deleted. No Pool names its Host any more, but the
+	// MicroVMs the Pool made there are still on it, so battery refuses to
+	// remove it, and the Inventory Controller asks again after the remove
+	// retry.
 	n := &corev1.Node{}
 	if err := k8s.Get(ctx, client.ObjectKey{Name: testHostA}, n); err != nil {
 		t.Fatal(err)
 	}
-	n.Spec.Unschedulable = true
-	if err := k8s.Update(ctx, n); err != nil {
+	if err := k8s.Delete(ctx, n); err != nil {
 		t.Fatal(err)
 	}
-	requeue = inventoryAfter(0)
-	requeue = inventoryAfter(requeue)
-	requeue = inventoryAfter(requeue)
-	if restarter.restarts != 1 {
-		t.Fatal("battery restarted without host-a while the Pool still names it")
+	st, err = admin.GetHost(ctx, testHostA)
+	if err != nil {
+		t.Fatal(err)
 	}
-	f.reconcile()
-	f.wantPlaced(testHostB)
-	inventoryAfter(requeue)
-	if restarter.restarts != 2 {
-		t.Fatalf("restarts = %d, want 2", restarter.restarts)
+	if st.VMCount > 0 {
+		if requeue := inventoryAfter(0); requeue != 10*time.Second {
+			t.Errorf("RequeueAfter = %s, want the remove retry", requeue)
+		}
+		if _, err := admin.GetHost(ctx, testHostA); err != nil {
+			t.Fatalf("battery removed a Host with MicroVMs on it: %v", err)
+		}
+		// The Pool goes, and battery deletes its MicroVMs.
+		if err := bc.DeletePool(ctx, battery.PoolRef{Namespace: f.key.Namespace, Name: f.key.Name}); err != nil {
+			t.Fatalf("DeletePool: %v", err)
+		}
 	}
-	if got, _ := hosts.Hosts(); !slices.Equal(got, []batterysidecar.Host{{Name: testHostB, Address: "10.0.0.2:9090"}}) {
-		t.Errorf("published %v, want host-b alone", got)
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		inventoryAfter(10 * time.Second)
+		if _, err := admin.GetHost(ctx, testHostA); errors.Is(err, battery.ErrNotFound) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("battery still holds the Host of a deleted Node")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if _, err := admin.GetHost(ctx, testHostB); err != nil {
+		t.Errorf("battery lost host-b: %v", err)
 	}
 }

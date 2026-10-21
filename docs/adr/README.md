@@ -15,6 +15,7 @@ set as a quote under the text it corrects, which stays as written.
 | [0005](0005-images-built-by-dagger.md) | The images are defined in the Dagger module, not a Dockerfile | Accepted |
 | [0006](0006-unit-tests-and-kind-e2e.md) | Unit tests with fakes, and end-to-end tests on kind | Accepted |
 | [0007](0007-reference-host-image-and-cluster-api.md) | A reference Host Image built with bootc, and Cluster API host pools | Accepted |
+| [0008](0008-hosts-through-battery-hostadmin-api.md) | Hosts through battery's HostAdmin API | Accepted |
 
 A new record copies the headings of the last one: status, date, context,
 decision, consequences, open questions. Status is one of Proposed, Accepted,

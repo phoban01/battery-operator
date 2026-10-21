@@ -1,27 +1,19 @@
-# battery's configuration file (poolmgrd v0.4.0's JSON schema), mounted into
-# both the manager and battery at /etc/battery/config/config.json.
+# battery's configuration file (poolmgrd's JSON schema), mounted into
+# battery's container at /etc/battery/config/config.json.
 #
-# The Inventory Controller replaces config.json with
-# internal/batterysidecar.Render's output for the Hosts it admits, then
-# restarts battery (DP-006); the Operator's RBAC lets it update this
-# ConfigMap by name (battery-operator-battery-config, after kustomize's
-# namePrefix). What ships here is Render with no Hosts, which
-# internal/batterysidecar's tests check byte for byte: poolmgrd v0.4.0
-# refuses to start with an empty Hosts list, so it holds one placeholder
-# Host that no Pool names and whose address never resolves.
+# It names no Hosts: battery v0.5.0 keeps them in its database and refuses
+# a file with a "hosts" key, and the Inventory Controller keeps them in
+# step through battery's HostAdmin API (ADR 0008). Nothing in the Operator
+# reads or writes this ConfigMap, so applying the Manifests again changes
+# nothing battery runs with. What ships here is
+# internal/batterysidecar.Render's output, which
+# internal/batterysidecar's tests check byte for byte.
 #
-# Applying the Manifests again puts this content back. The Inventory
-# Controller watches this ConfigMap and writes back the Hosts it recorded in
-# its battery.liquidmetal-x.dev/hosts annotation, which the Manifests do not
-# give, without restarting battery (IN-014).
-#
-# Every Host is reached over mutual TLS with battery's client certificate,
-# verified against the serving CA, at the paths the battery-tls volume
-# mounts them on. battery's own API is plaintext on loopback, which only
-# this pod's containers can reach.
+# battery's own API is plaintext on loopback, which only this pod's
+# containers can reach.
 #= docs/requirements/06-deployment.md#battery-sidecar
-#/ The Manifests SHALL supply battery's configuration, its Hosts
-#/ included, from an object the Operator may write.
+#/ The Manifests SHALL supply battery's configuration from a
+#/ ConfigMap that names no Hosts.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -34,17 +26,6 @@ metadata:
 data:
   config.json: |
     {
-      "hosts": [
-        {
-          "name": "_no-hosts",
-          "address": "no-hosts.invalid:9090",
-          "tls": {
-            "cert_file": "/etc/battery/tls/tls.crt",
-            "key_file": "/etc/battery/tls/tls.key",
-            "ca_file": "/etc/battery/tls/serving-ca.crt"
-          }
-        }
-      ],
       "api_server": {
         "addr": "127.0.0.1:50051",
         "tls": {

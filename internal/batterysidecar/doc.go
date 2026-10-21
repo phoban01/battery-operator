@@ -16,82 +16,26 @@ limitations under the License.
 
 // Package batterysidecar is the Operator's side of battery running as a
 // sidecar in its pod (docs/requirements/06-deployment.md#battery-sidecar):
-// battery's configuration file, and restarting battery when that file
-// changes.
+// where the Manifests put battery's configuration file and its client
+// certificate, and the configuration file they ship.
 //
-// # Configuration
+// battery (poolmgrd) reads one JSON file at startup, with the schema of
+// its internal/config package, mirrored here as File. Since battery v0.5.0
+// the file names no Hosts, and battery refuses one that does (BA-087):
+// battery keeps its Hosts in its database, and the Inventory Controller
+// keeps them in step through battery's HostAdmin API (ADR 0008). The
+// Manifests ship the file in a ConfigMap (DP-036) that only battery's
+// container mounts; nothing in the Operator writes it. battery's gRPC API
+// and its metrics listen on loopback only (DP-001).
 //
-// battery (poolmgrd v0.4.0) reads one JSON file at startup, with the
-// schema of its internal/config package, mirrored here as File. The
-// Manifests ship it in a ConfigMap the Operator may update (DP-004), and
-// the Inventory Controller renders a new one with Render whenever its
-// Hosts change. Every Host is reached over mutual TLS with battery's client
-// certificate, verified against the serving CA (DP-005), at the paths the
-// Manifests mount them on. battery's gRPC API and its metrics listen on
-// loopback only (DP-001).
+// Every Host is reached over mutual TLS with battery's client certificate,
+// verified against the serving CA (DP-005), at the paths the Manifests
+// mount them on. battery reads those files when it connects to a Host
+// (BA-081). The Operator's container mounts the same Secret volume, so
+// that the Inventory Controller can tell when a renewed certificate has
+// reached battery's files and make battery read them again (DP-035).
 //
-// poolmgrd v0.4.0 refuses to start with no Hosts. An empty inventory
-// therefore renders one placeholder Host, PlaceholderHostName, whose name
-// is not a valid Node name and whose address, under the reserved .invalid
-// top-level domain, never resolves. battery connects to a Host lazily and
-// only for a Pool that names it, and the Operator never names the
-// placeholder in a Pool, so battery starts, listens and never dials it.
-//
-// # Restarting battery (DP-006)
-//
-// poolmgrd v0.4.0 reads its configuration once. It handles SIGINT and
-// SIGTERM by stopping gracefully and exiting, has no reload and does not
-// handle SIGHUP (which, unhandled, kills a Go program without running its
-// deferred cleanup, the SQLite store's Close among them). It does not watch
-// its file either. It reads its flintlockd client certificate once too,
-// when it starts, and presents that certificate until it exits (BA-061),
-// so a certificate cert-manager has renewed reaches the Hosts only when
-// battery restarts (DP-007).
-//
-// The mechanism chosen is a shared process namespace and SIGTERM: the
-// Operator's pod sets shareProcessNamespace, both containers run as the
-// same non-root user (65532, the distroless nonroot user of both images),
-// so the Operator may signal battery without any capability, and the pod's
-// restartPolicy, Always, has the kubelet start battery again with the new
-// file. Restarter.Restart is the single hook: the Inventory Controller
-// writes the ConfigMap and calls it with the content it wrote and the
-// client certificate battery's Secret holds, whether it restarts battery
-// for its Hosts, for a renewed certificate, or both. Restart
-//
-//  1. waits until the Operator's own mounts of the ConfigMap and of the
-//     client certificate's Secret hold that content. The kubelet updates a
-//     ConfigMap or Secret volume some time after the object changes, and
-//     both containers mount the same volumes, so what the Operator reads is
-//     what battery would read;
-//  2. finds poolmgrd in the shared /proc and sends it SIGTERM;
-//  3. waits until that process has gone, so that the old battery, still
-//     draining, cannot answer for the new one;
-//  4. waits until battery answers again.
-//
-// Gated, the battery client the controllers use, holds every call from
-// just before the signal until Restart returns, so no controller calls
-// battery between the signal and battery answering again.
-//
-// The kubelet restarts an exited container with a back-off that grows
-// while the container keeps exiting within ten minutes of starting (10s,
-// 20s, 40s, ... up to five minutes), so the Inventory Controller batches
-// Host changes into restart windows (IN-012) rather than restarting
-// battery for each one.
-//
-// The alternatives were rejected:
-//
-//   - battery exiting when its file changes needs a change to battery or a
-//     wrapper in its image, and battery is not changed (ADR 0001);
-//   - a pod template annotation with the file's hash restarts the whole
-//     pod, the Operator with it, through the Deployment's Recreate
-//     strategy;
-//   - a liveness probe that fails on a stale file needs a shell or a probe
-//     binary in battery's distroless image, which has neither.
-//
-// The shared process namespace lets each container see the other's
-// processes, and, as the same user, read the other's /proc entries: the
-// Operator can read battery's environment and files, and battery the
-// Operator's. Both are the Operator's own code and configuration, in one
-// pod that holds one identity, so this widens nothing across a trust
-// boundary.
+// Up to battery v0.4.0 this package also rendered battery's Hosts into the
+// file and restarted battery through a shared process namespace (DP-006,
+// withdrawn).
 package batterysidecar

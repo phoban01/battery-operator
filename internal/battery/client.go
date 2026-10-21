@@ -32,13 +32,14 @@ import (
 )
 
 // Connection is the Operator's connection to battery: one long-lived gRPC
-// ClientConn carrying the three generated service clients. It implements
+// ClientConn carrying the four generated service clients. It implements
 // Client, and Check is the Operator's readiness check.
 type Connection struct {
 	conn   *grpc.ClientConn
 	admin  poolmgrv1.PoolAdminClient
 	lease  poolmgrv1.LeaseClient
 	events poolmgrv1.EventsClient
+	hosts  poolmgrv1.HostAdminClient
 }
 
 var _ Client = (*Connection)(nil)
@@ -85,6 +86,7 @@ func Dial(cfg Config) (*Connection, error) {
 		admin:  poolmgrv1.NewPoolAdminClient(conn),
 		lease:  poolmgrv1.NewLeaseClient(conn),
 		events: poolmgrv1.NewEventsClient(conn),
+		hosts:  poolmgrv1.NewHostAdminClient(conn),
 	}, nil
 }
 

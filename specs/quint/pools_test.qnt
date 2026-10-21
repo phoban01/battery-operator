@@ -9,25 +9,21 @@ module pools_test {
 
   run ticks(n: int): bool = n.reps(_ => tick)
 
+  // A fresh install: battery holds every Host with its TLS settings, and
+  // the Inventory Controller, just started, gives every Host the
+  // certificate once (DP-035).
+  run fresh: bool = initWith(false).then(invRefresh)
+
   // A Pool declared to battery from scratch: created, finalizer, CreatePool.
   run declare(p: PoolName, sel: Set[Label], n: int): bool =
     createPool(p, sel, n)
       .then(ctlAddFinalizer(p))
       .then(ctlCreatePool(p))
 
-  // A change that removes a Host, once settled, goes through one restart
-  // window and the drain (IN-013); no Pool names the Host in these uses.
-  run applySettled: bool =
-    invOpenWindow
-      .then(ticks(WINDOW))
-      .then(invDrain)
-      .then(invRestart)
-      .then(batteryStart)
-
   // PO-001, PO-010: the Pool's flintlock_hosts are the Hosts its selector
   // matches. h1 and h2 are in zone a.
   run declareTest =
-    init
+    fresh
       .then(declare("p1", Set(ZONE_A), 1))
       .expect(and {
         battery.pools.get("p1").flintlockHosts == Set("h1", "h2"),
@@ -39,7 +35,7 @@ module pools_test {
   // PO-011: relabelling a Node changes the Hosts the selector matches, and
   // the Pool Controller updates battery without a new generation.
   run relabelUpdatesPoolTest =
-    init
+    fresh
       .then(declare("p1", Set(ZONE_A), 1))
       .then(relabel("h2", Set(ZONE_B)))
       .expect(and { hostsChanged("p1"), not(poolControllerIdle) })
@@ -54,7 +50,7 @@ module pools_test {
   // PO-002 and PO-012: a new selector that matches no Host is sent with
   // UpdatePool, and the Pool says NoEligibleHost.
   run noEligibleHostTest =
-    init
+    fresh
       .then(declare("p1", Set(ZONE_A), 1))
       .then(changePool("p1", Set(("zone", "c")), 1))
       .then(ctlUpdatePool("p1"))
@@ -67,7 +63,7 @@ module pools_test {
 
   // PO-003: DeletePool, then the finalizer.
   run deletePoolTest =
-    init
+    fresh
       .then(declare("p1", Set(ZONE_A), 1))
       .then(deletePool("p1"))
       .expect(and { live("p1"), inBattery("p1") })
@@ -80,7 +76,7 @@ module pools_test {
   // the claim releases its MicroVM, battery deletes the Pool with the
   // available one.
   run deleteFilledPoolTest =
-    init
+    fresh
       .then(declare("p1", Set(ZONE_A), 2))
       .then(batteryProvision("p1", "h1"))
       .then(batteryProvision("p1", "h2"))
@@ -109,7 +105,7 @@ module pools_test {
   // CL-063 (#229): no claim leases a MicroVM of a deleted Pool, though
   // battery still holds the Pool with an available one.
   run noLeaseOnDeletedPoolTest =
-    init
+    fresh
       .then(declare("p1", Set(ZONE_A), 2))
       .then(batteryProvision("p1", "h1"))
       .then(batteryProvision("p1", "h2"))
@@ -123,7 +119,7 @@ module pools_test {
   // BA-070: battery deletes a Pool no claim holds with its available
   // MicroVMs, in one DeletePool.
   run deleteAvailablePoolTest =
-    init
+    fresh
       .then(declare("p1", Set(ZONE_A), 1))
       .then(batteryProvision("p1", "h1"))
       .then(deletePool("p1"))
@@ -133,7 +129,7 @@ module pools_test {
 
   // BA-070: DeletePool is refused while a claim holds a MicroVM.
   run deleteRefusedWhileLeasedTest =
-    init
+    fresh
       .then(declare("p1", Set(ZONE_A), 1))
       .then(batteryProvision("p1", "h1"))
       .then(leaseVM("p1", "h1"))
@@ -141,129 +137,16 @@ module pools_test {
       .then(ctlDeletePool("p1"))
       .fail()
 
-  // IN-011: a report that flaps back within the settle time restarts
-  // nothing, and battery keeps the Host.
-  run flapAbsorbedTest =
-    init
-      .then(flipReport("h1"))
-      .then(tick)
-      .then(flipReport("h1"))
-      .then(ticks(SETTLE + WINDOW))
-      .expect(and {
-        hist.absorbedFlaps == 1,
-        hist.restarts == List(),
-        battery.hosts == HOSTS,
-        not(canOpenWindow),
-        safety,
-      })
-
-  // IN-002, IN-010, IN-011: a cordoned Host stays in battery until its
-  // change has settled and the restart window has closed, and then leaves.
-  // Time does not pass a settled change the controller has not acted on.
-  run cordonRemovesHostTest =
-    init
-      .then(cordon("h1"))
-      .then(ticks(SETTLE))
-      .expect(and { canOpenWindow, battery.hosts.contains("h1") })
-      .then(tick)
-      .fail()
-
-  run cordonRemovesHostAfterWindowTest =
-    init
-      .then(cordon("h1"))
-      .then(ticks(SETTLE))
-      .then(invOpenWindow)
-      .then(ticks(WINDOW - 1))
-      .expect(and { battery.hosts.contains("h1"), age("h1") == MAX_LAG - 1 })
-      .then(tick)
-      .expect(and { canCloseWindow, age("h1") == MAX_LAG, safety })
-      .then(invDrain)
-      .then(invRestart)
-      .expect(and { not(battery.up), inv.config == Set("h2", "h3") })
-      .then(batteryStart)
-      .expect(and {
-        battery.hosts == Set("h2", "h3"),
-        hist.restarts.length() == 1,
-        safety,
-      })
-
-  // IN-001: until the change is applied, battery may still place a
-  // MicroVM on the cordoned Host; within the bound, that is allowed.
-  run vmOnCordonedHostWithinBoundTest =
-    init
-      .then(declare("p1", Set(ZONE_B), 1))
-      .then(cordon("h3"))
-      .then(ticks(SETTLE))
-      .then(invOpenWindow)
-      .then(ticks(WINDOW))
-      .then(batteryProvision("p1", "h3"))
-      .expect(and { witnessVMOnFormerHost, noNewVMOnFormerHost, safety })
-
-  // IN-012: two changes that settle within one window go into one restart.
-  run batchedRestartTest =
-    init
-      .then(cordon("h1"))
-      .then(tick)
-      .then(flipReport("h3"))
-      .then(tick)
-      .then(invOpenWindow)
-      .then(ticks(WINDOW))
-      .then(invDrain)
-      .then(invRestart)
-      .then(batteryStart)
-      .expect(and {
-        battery.hosts == Set("h2"),
-        hist.restarts.length() == 1,
-        hist.restarts[0].changed == Set("h1", "h3"),
-        safety,
-      })
-
-  // IN-011, IN-012: a change that has not settled when a window closes
-  // waits for its own window, so the next restart is more than a window
-  // later.
-  run restartsAWindowApartTest =
-    init
-      .then(cordon("h1"))
-      .then(ticks(SETTLE))
-      .then(invOpenWindow)
-      .then(ticks(WINDOW - 1))
-      .then(cordon("h2"))
-      .then(tick)
-      .then(invDrain)
-      .then(invRestart)
-      .then(batteryStart)
-      .expect(and { battery.hosts == Set("h2", "h3"), not(canOpenWindow) })
-      .then(tick)
-      .expect(canOpenWindow)
-      .then(applySettled)
-      .expect(and {
-        battery.hosts == Set("h3"),
-        hist.restarts.length() == 2,
-        hist.restarts[1].at - hist.restarts[0].at == WINDOW + 1,
-        safety,
-      })
-
-  // A window whose changes flapped back closes without a restart.
-  run windowClosesWithoutRestartTest =
-    init
-      .then(cordon("h1"))
-      .then(ticks(SETTLE))
-      .then(invOpenWindow)
-      .then(uncordon("h1"))
-      .then(ticks(WINDOW))
-      .then(invRestart)
-      .fail()
-
   // PO-001 (#72): CreatePool waits for the stored finalizer, so a Pool
   // deleted before it goes at once and leaves nothing in battery.
   run createBeforeFinalizerTest =
-    init
+    fresh
       .then(createPool("p1", Set(ZONE_A), 1))
       .then(ctlCreatePool("p1"))
       .fail()
 
   run poolDeletedBeforeFinalizerTest =
-    init
+    fresh
       .then(createPool("p1", Set(ZONE_A), 1))
       .then(deletePool("p1"))
       .expect(and { isGonePool(slot("p1")), not(inBattery("p1")), goneLeavesNothing, safety })
@@ -273,7 +156,7 @@ module pools_test {
   // the Hosts of the spec it accepted. Once battery accepts a spec again,
   // the Pool says NoEligibleHost.
   run rejectedOverNoEligibleHostTest =
-    init
+    fresh
       .then(declare("p1", Set(ZONE_A), 1))
       .then(changePool("p1", Set(("zone", "c")), 1))
       .then(changePoolExpiry("p1", 0))
@@ -298,150 +181,218 @@ module pools_test {
       })
 
   // ---------------------------------------------------------------------
-  // IN-013 (#73): the Pools drop a leaving Host before the restart that
-  // removes it, and gain a joining Host only after the restart that adds
-  // it.
+  // The Inventory Controller (04-inventory.md, ADR 0008)
 
-  // p1 selects h1 and h2 and has a MicroVM on h1; h2 is cordoned, and its
-  // change has settled and its window closed.
-  run cordonNamedHost: bool =
-    init
-      .then(declare("p1", Set(ZONE_A), 2))
-      .then(batteryProvision("p1", "h1"))
-      .then(cordon("h2"))
-      .then(ticks(SETTLE))
-      .then(invOpenWindow)
-      .then(ticks(WINDOW))
-
-  // battery does not restart without h2 while p1 names it: first the
-  // Hosts that remain are published, and even then not before the Pool
-  // Controller has updated p1. Nor may the drain timeout pass while the
-  // Pool Controller still has p1 to update.
-  run restartWaitsForThePoolsTest =
-    cordonNamedHost
-      .then(invRestart)
-      .fail()
-
-  run drainedToPoolsNamingLeaving: bool =
-    cordonNamedHost
-      .then(invDrain)
-      .expect(and { inv.published == Set("h1", "h3"), hostsChanged("p1"), poolsNamingLeaving == Set("p1") })
-
-  run restartWaitsForThePoolsAfterDrainTest =
-    drainedToPoolsNamingLeaving
-      .then(invRestart)
-      .fail()
-
-  run drainTimeoutWaitsForThePoolControllerTest =
-    drainedToPoolsNamingLeaving
-      .then(invRestartPastDrain)
-      .fail()
-
-  // The Pool Controller drops h2, battery restarts without it, and p1
-  // replenishes on h1: battery never picks a Host it does not know.
-  // This is the scenario #73 found stalling the Pool.
-  run removedHostDrainedTest =
-    cordonNamedHost
-      .then(invDrain)
-      .then(ctlUpdatePool("p1"))
-      .expect(and { battery.pools.get("p1").flintlockHosts == Set("h1"), poolsNamingLeaving == Set() })
-      .then(invRestart)
-      .then(batteryStart)
+  // IN-011: a report that flaps back within the settle time reaches
+  // battery not at all.
+  run flapAbsorbedTest =
+    fresh
+      .then(flipReport("h1"))
+      .then(tick)
+      .then(flipReport("h1"))
+      .then(ticks(SETTLE + 1))
       .expect(and {
-        battery.hosts == Set("h1", "h3"),
-        leastLoaded("p1") == Set("h1"),
-        poolsNameKnownHosts,
-        witnessDrainedForPool,
-        safety,
-      })
-      .then(batteryProvision("p1", "h1"))
-      .expect(and { battery.vms.size() == 2, safety })
-
-  // h2 is deleted and comes back: p1 names it again only after battery
-  // has restarted with it.
-  run joiningHostAfterRestartTest =
-    init
-      .then(declare("p1", Set(ZONE_A), 1))
-      .then(deleteNode("h2"))
-      .then(ctlUpdatePool("p1"))
-      .then(ticks(SETTLE))
-      .then(applySettled)
-      .then(createNode("h2", Set(ZONE_A), true))
-      .then(ticks(SETTLE))
-      .then(invOpenWindow)
-      .then(ticks(WINDOW))
-      .expect(and { inv.published == Set("h1", "h3"), not(hostsChanged("p1")) })
-      .then(invRestart)
-      .expect(and { not(battery.up), battery.pools.get("p1").flintlockHosts == Set("h1") })
-      .then(batteryStart)
-      .expect(and { hostsChanged("p1"), poolsNameKnownHosts, safety })
-      .then(ctlUpdatePool("p1"))
-      .expect(and { battery.pools.get("p1").flintlockHosts == Set("h1", "h2"), safety })
-
-  // The drain timeout: a Pool whose spec battery refuses (PO-004) is one
-  // the Pool Controller cannot update, since UpdatePool cannot carry the
-  // Hosts without the spec, so once it has nothing else to do the restart
-  // goes ahead, and battery can pick the removed Host for that Pool.
-  // poolsNameKnownHosts holds for every other Pool.
-  run refusedPastDrainTest =
-    init
-      .then(declare("p1", Set(ZONE_A), 1))
-      .then(changePoolExpiry("p1", 0))
-      .then(ctlRejectPool("p1"))
-      .then(cordon("h2"))
-      .then(ticks(SETTLE))
-      .then(invOpenWindow)
-      .then(ticks(WINDOW))
-      .then(invDrain)
-      .expect(and { poolControllerIdle, poolsNamingLeaving == Set("p1") })
-      .then(invRestartPastDrain)
-      .then(batteryStart)
-      .expect(and { hist.staleAfterDrain == Set("p1"), poolsNameKnownHosts, safety })
-      .then(batteryProvisionUnknownHost("p1", "h2"))
-      .expect(and { witnessUnknownHostPicked, safety })
-
-  // DP-007: a renewed client certificate restarts battery, one restart
-  // window later, and battery then presents it. The restart removes no
-  // Host, so there is nothing to drain (IN-013): it goes straight ahead.
-  run renewalRestartsBatteryTest =
-    init
-      .then(renewCertificate)
-      .expect(and { canOpenWindow, battery.cert != secret.cert, certificateFollowsSecret })
-      .then(invOpenWindow)
-      .then(ticks(WINDOW))
-      .expect(and { leaving == Set(), inv.published == remaining, poolsNamingLeaving == Set() })
-      .then(invRestart)
-      .then(batteryStart)
-      .expect(and {
-        battery.cert == secret.cert,
-        hist.restarts.length() == 1,
-        hist.restarts[0].renewed,
-        hist.restarts[0].changed == Set(),
-        not(canOpenWindow),
+        hist.absorbedFlaps == 1,
+        hist.cordons == 0,
+        HOSTS.forall(h => active(h)),
+        inv.published == HOSTS,
         safety,
       })
 
-  // DP-008: a renewal while a window is open for a Host change goes into
-  // the same restart, after the drain for the Host it removes.
-  run renewalJoinsHostWindowTest =
-    init
+  // IN-011, IN-015, IN-018: a cordoned Node's Host stays uncordoned in
+  // battery until its change has settled; then time does not pass until
+  // the Inventory Controller has taken it from the Pool Controller and
+  // cordoned it, and battery keeps it.
+  run cordonedNode: bool =
+    fresh
       .then(cordon("h1"))
       .then(ticks(SETTLE))
-      .then(invOpenWindow)
+
+  run settledCordonActsAtOnceTest =
+    cordonedNode
+      .expect(and { active("h1"), canUnpublish("h1"), not(canCordon("h1")) })
       .then(tick)
-      .then(renewCertificate)
-      .expect(not(canOpenWindow))
-      .then(ticks(WINDOW - 1))
-      .then(invDrain)
-      .then(invRestart)
-      .then(batteryStart)
+      .fail()
+
+  run cordonTest =
+    cordonedNode
+      .then(invUnpublish("h1"))
+      .expect(canCordon("h1"))
+      .then(invCordon("h1"))
       .expect(and {
-        battery.hosts == Set("h2", "h3"),
-        battery.cert == secret.cert,
-        hist.restarts.length() == 1,
-        hist.restarts[0].renewed,
-        hist.restarts[0].changed == Set("h1"),
-        not(canOpenWindow),
+        held("h1"),
+        bhost("h1").cordoned,
+        not(inv.published.contains("h1")),
+        witnessCordoned,
         safety,
       })
+      .then(tick)
+      .expect(safety)
+
+  // IN-017: the Node is uncordoned; once that has settled, the Host is
+  // uncordoned in battery and given back to the Pool Controller.
+  run uncordonTest =
+    cordonedNode
+      .then(invUnpublish("h1"))
+      .then(invCordon("h1"))
+      .then(uncordon("h1"))
+      .then(ticks(SETTLE))
+      .expect(canRegister("h1"))
+      .then(invRegister("h1"))
+      .expect(and {
+        active("h1"),
+        inv.published.contains("h1"),
+        hist.uncordons == 1,
+        hist.adds == 0,
+        safety,
+      })
+
+  // IN-001: until the change settles, battery may still place a MicroVM
+  // on the cordoned Node's Host; within the bound, that is allowed.
+  run vmOnCordonedHostWithinBoundTest =
+    fresh
+      .then(declare("p1", Set(ZONE_B), 1))
+      .then(cordon("h3"))
+      .then(ticks(SETTLE))
+      .then(batteryProvision("p1", "h3"))
+      .expect(and { witnessVMOnFormerHost, noNewVMOnFormerHost, safety })
+
+  // BA-084: once the Host is cordoned, battery places nothing on it, even
+  // while a Pool still names it.
+  run noVMOnCordonedHostTest =
+    fresh
+      .then(declare("p1", Set(ZONE_A), 2))
+      .then(cordon("h2"))
+      .then(ticks(SETTLE))
+      .then(invUnpublish("h2"))
+      .then(invCordon("h2"))
+      .expect(and { battery.pools.get("p1").flintlockHosts.contains("h2"), eligible("p1") == Set("h1") })
+      .then(batteryProvision("p1", "h2"))
+      .fail()
+
+  // IN-016, BA-083: a deleted Node's Host is cordoned, and battery refuses
+  // to remove it while a Pool names it and a claim holds a MicroVM on it.
+  // The Inventory Controller tries again, and the removal goes through
+  // once the Pool Controller has dropped it and the claim has ended.
+  run deletedNodeWithVM: bool =
+    fresh
+      .then(declare("p1", Set(ZONE_A), 2))
+      .then(batteryProvision("p1", "h1"))
+      .then(batteryProvision("p1", "h2"))
+      .then(leaseVM("p1", "h2"))
+      .then(deleteNode("h2"))
+      .then(ticks(SETTLE))
+      .then(invUnpublish("h2"))
+      .then(invCordon("h2"))
+
+  run removalRefusedTest =
+    deletedNodeWithVM
+      .expect(and { wantsRemoved("h2"), not(removable("h2")) })
+      .then(invRemove("h2"))
+      .fail()
+
+  run removalWaitsForThePoolsTest =
+    deletedNodeWithVM
+      .then(invRemoveRefused("h2"))
+      .then(tick)
+      .then(ctlUpdatePool("p1"))
+      .expect(and { battery.pools.get("p1").flintlockHosts == Set("h1"), not(removable("h2")), held("h2") })
+      .then(invRemoveRefused("h2"))
+      .then(releaseVM("p1", "h2"))
+      .expect(removable("h2"))
+      .then(invRemove("h2"))
+      .expect(and {
+        not(held("h2")),
+        hist.removeRefusals == 2,
+        witnessRemovalRefused,
+        witnessRemoved,
+        safety,
+      })
+
+  // IN-017, IN-018: a Node deleted and created again: the Host leaves
+  // battery, and comes back with AddHost; the Pool names it again only
+  // after battery holds it.
+  run joiningHostTest =
+    fresh
+      .then(declare("p1", Set(ZONE_A), 1))
+      .then(deleteNode("h2"))
+      .then(ticks(SETTLE))
+      .then(invUnpublish("h2"))
+      .then(ctlUpdatePool("p1"))
+      .then(invCordon("h2"))
+      .then(invRemove("h2"))
+      .then(createNode("h2", Set(ZONE_A), true))
+      .then(ticks(SETTLE))
+      .expect(and { canRegister("h2"), not(held("h2")), not(hostsChanged("p1")) })
+      .then(invRegister("h2"))
+      .expect(and { active("h2"), hist.adds == 1, hostsChanged("p1"), safety })
+      .then(ctlUpdatePool("p1"))
+      .expect(and { battery.pools.get("p1").flintlockHosts == Set("h1", "h2"), poolsNameHeldHosts, safety })
+
+  // BA-086, IN-020, IN-016: battery starts on a v0.4.0 database. Its Hosts
+  // have no TLS settings, and time does not pass until each has them. The
+  // placeholder Host has no Node, so once that has settled it is cordoned
+  // and removed.
+  run upgradeTest =
+    initWith(true)
+      .expect(and { canSecure("h1"), held(PLACEHOLDER) })
+      .then(tick)
+      .fail()
+
+  run upgradeSecuresHostsTest =
+    initWith(true)
+      .then(invSecure("h1"))
+      .then(invSecure("h2"))
+      .then(invSecure("h3"))
+      .then(invSecure(PLACEHOLDER))
+      .then(invRefresh)
+      .expect(and { heldHosts.forall(h => bhost(h).tls), hist.tlsUpdates == 4, safety })
+      .then(ticks(SETTLE))
+      .expect(and { canCordon(PLACEHOLDER), not(inv.published.contains(PLACEHOLDER)) })
+      .then(invCordon(PLACEHOLDER))
+      .then(invRemove(PLACEHOLDER))
+      .expect(and { not(held(PLACEHOLDER)), witnessPlaceholderRemoved, witnessUpgradedHost, safety })
+
+  // Before it has its TLS settings, battery cannot reach a Host from a
+  // v0.4.0 database, and provisioning there fails.
+  run unreachableBeforeSecuredTest =
+    initWith(true)
+      .then(declare("p1", Set(ZONE_A), 1))
+      .then(batteryProvisionUnreachable("p1", "h1"))
+      .expect(and { hist.unreachablePicks == 1, battery.vms == Set(), safety })
+
+  // DP-035, BA-081: a renewal reaches battery through UpdateHost on every
+  // Host, once the kubelet has put it in the volume, and time does not
+  // pass meanwhile.
+  run renewalTest =
+    fresh
+      .then(renewCertificate)
+      .expect(and { not(canRefresh), certificateFollowsSecret })
+      .then(tick)
+      .then(mountCertificate)
+      .expect(canRefresh)
+      .then(tick)
+      .fail()
+
+  run renewalRefreshedTest =
+    fresh
+      .then(renewCertificate)
+      .then(tick)
+      .then(mountCertificate)
+      .then(invRefresh)
+      .expect(and {
+        HOSTS.forall(h => bhost(h).cert == 1),
+        hist.renewalRefreshes == 1,
+        witnessRenewalRefreshed,
+        safety,
+      })
+
+  // DP-035: after the Operator starts again, every Host gets the
+  // certificate once more.
+  run operatorRestartTest =
+    fresh
+      .then(restartOperator)
+      .expect(canRefresh)
+      .then(invRefresh)
+      .expect(and { hist.refreshes == 2, hist.renewalRefreshes == 0, safety })
 }

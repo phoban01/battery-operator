@@ -33,7 +33,7 @@ import (
 //# The fake battery SHALL serve battery v0.4.0's `PoolAdmin`,
 //# `Lease` and `Events` services over gRPC with the generated server stubs.
 
-// newGRPCServer builds a server with the three services registered from
+// newGRPCServer builds a server with the four services registered from
 // battery's generated stubs and the UNAVAILABLE fault interceptors. Serve
 // and the loopback each build one over the same Battery.
 func (b *Battery) newGRPCServer() *grpc.Server {
@@ -44,6 +44,7 @@ func (b *Battery) newGRPCServer() *grpc.Server {
 	poolmgrv1.RegisterPoolAdminServer(srv, &poolAdminServer{b: b})
 	poolmgrv1.RegisterLeaseServer(srv, &leaseServer{b: b})
 	poolmgrv1.RegisterEventsServer(srv, &eventsServer{b: b})
+	poolmgrv1.RegisterHostAdminServer(srv, &hostAdminServer{b: b})
 	return srv
 }
 
