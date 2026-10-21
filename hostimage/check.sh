@@ -593,8 +593,8 @@ expect "the kubelet, Exec Agent, flintlockd and metrics ports are dropped" \
 #/ The Host Image SHALL drop traffic from the guest subnet to every
 #/ protected CIDR listed in the Host configuration file.
 expect "the protected CIDRs are a set" has "$nftf" 'elements = \{ 10\.0\.0\.0/16, 192\.168\.0\.0/16 \}'
-expect "traffic to the protected set is dropped" has "$nftf" 'iifname "virbr-battery" ip daddr @protected drop'
-drop_line=$(grep -n '@protected drop' "$nftf" | tail -n 1 | cut -d: -f1)
+expect "traffic to the protected set is dropped" has "$nftf" 'iifname "virbr-battery" ip daddr @protected ip daddr != @guest_allowed drop'
+drop_line=$(grep -n '@protected .*!= @guest_allowed drop' "$nftf" | tail -n 1 | cut -d: -f1)
 accept_line=$(grep -n 'oifname "eth0" accept' "$nftf" | cut -d: -f1)
 expect "the drops come before guests are let out" test "${drop_line:-9999}" -lt "${accept_line:-0}"
 
