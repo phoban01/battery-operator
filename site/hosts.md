@@ -342,6 +342,11 @@ Then, in the checkout:
   a MicroVM must not reach.
 - `GUEST_SUBNET`: the MicroVMs' subnet. Keep it clear of the ranges above.
 
+If MicroVMs need a service whose addresses lie in a protected range, such
+as a VPC interface endpoint in the node range, add `GUEST_ALLOWED_CIDRS`
+with those addresses, as /32 entries. Only Host Images after `v0.5.0` read
+it; an older one skips it, and its guests cannot reach those addresses.
+
 Use only the keys that the
 [Host configuration file](https://github.com/phoban01/battery-operator/blob/v0.3.2/hostimage/README.md#host-configuration-file)
 section names. The Host skips any other key without an error.

@@ -66,6 +66,18 @@ fi
 # read into BATTERY_GATEWAY_SERVICE_UIDS, or no rule when it is empty. The
 # ports are the control ports of HI-034 and flintlockd's own, once each.
 # This citation is out of the heredoc for its backticks too.
+#
+#= docs/requirements/11-host-image.md#image-networking
+#/ The Host Image SHALL drop traffic from the guest subnet to the
+#/ instance metadata service addresses, to every address of the Host other
+#/ than the bridge gateway address, to the Host's own `flintlockd`, kubelet,
+#/ Exec Agent and metrics ports, and to every interface of the Host other
+#/ than its primary interface, whatever the guest allowed CIDRs hold.
+# GUEST_ALLOWED_CIDRS reaches only the two protected drops of the forward
+# chain, and opens nothing by itself. The metadata drops come before them,
+# the input chain never reads the set, and the forward chain accepts a
+# guest only out of the primary interface, after them. This citation is out
+# of the heredoc for its backticks.
 service_blocked_ports=$BATTERY_HOST_CONTROL_PORTS
 case ",$service_blocked_ports," in
 *",$BATTERY_FLINTLOCKD_PORT,"*) ;;
@@ -81,6 +93,15 @@ table inet battery {
 		flags interval
 		auto-merge
 $([ -z "$BATTERY_PROTECTED_CIDRS" ] || echo "		elements = { ${BATTERY_PROTECTED_CIDRS//,/, } }")
+	}
+
+	# Addresses guests may reach although they lie in @protected, such as
+	# the addresses of a VPC interface endpoint in the node range.
+	set guest_allowed {
+		type ipv4_addr
+		flags interval
+		auto-merge
+$([ -z "$BATTERY_GUEST_ALLOWED_CIDRS" ] || echo "		elements = { ${BATTERY_GUEST_ALLOWED_CIDRS//,/, } }")
 	}
 
 	# The Operator's pod network, from which battery reaches flintlockd.
@@ -151,15 +172,26 @@ $(if [ -n "$BATTERY_GATEWAY_SERVICE_PORTS" ]; then
 		#= docs/requirements/11-host-image.md#image-networking
 		#/ The Host Image SHALL drop traffic from the guest subnet to every
 		#/ protected CIDR listed in the Host configuration file.
-		iifname "$bridge" ip daddr @protected drop
+		#
+		#= docs/requirements/11-host-image.md#image-networking
+		#/ Where the Host configuration file lists guest allowed CIDRs, the
+		#/ Host Image SHALL treat an address in a guest allowed CIDR as outside
+		#/ every protected CIDR.
+		# Both protected drops skip @guest_allowed. Nothing accepts it: a
+		# guest's traffic to an allowed address goes on down the chain, so
+		# it still leaves by the primary interface or not at all (HI-085).
+		iifname "$bridge" ip daddr @protected ip daddr != @guest_allowed drop
 		#= docs/requirements/11-host-image.md#image-networking
 		#/ The Host Image SHALL drop traffic from the guest subnet whose
 		#/ destination before any destination NAT on the Host is in a protected CIDR.
 		# kube-proxy rewrites a Service's address to one of its pods' in
 		# prerouting, before this chain. Conntrack keeps the address the
 		# guest asked for, so a protected Service range drops the Service
-		# whatever pod it lands on.
-		iifname "$bridge" ct original ip daddr @protected drop
+		# whatever pod it lands on. An allowed address is checked on its own
+		# in each rule: a Service the guest may reach can send it on only
+		# to an address it may reach too, and a protected Service cannot
+		# send it to an allowed one.
+		iifname "$bridge" ct original ip daddr @protected ct original ip daddr != @guest_allowed drop
 		#= docs/requirements/11-host-image.md#image-networking
 		#/ The Host Image SHALL forward traffic from the guest subnet only
 		#/ out of the Host's primary interface, and SHALL drop traffic from the guest
@@ -275,6 +307,7 @@ log "bridge $bridge at $BATTERY_GATEWAY/$BATTERY_PREFIX, guests NATed out of $pr
 log "flintlockd serves $address:$BATTERY_FLINTLOCKD_PORT to user id $BATTERY_EXEC_AGENT_UID on the Host and to ${BATTERY_FLINTLOCKD_CLIENT_CIDRS:-no network}"
 [ -n "$BATTERY_FLINTLOCKD_CLIENT_CIDRS" ] || log "warning: FLINTLOCKD_CLIENT_CIDRS is empty, so battery cannot reach flintlockd on this Host"
 [ -n "$BATTERY_PROTECTED_CIDRS" ] || log "warning: PROTECTED_CIDRS is empty, so guests reach every address of the cluster off this Host"
+[ -z "$BATTERY_GUEST_ALLOWED_CIDRS" ] || log "guests reach $BATTERY_GUEST_ALLOWED_CIDRS although they may lie in PROTECTED_CIDRS"
 if [ -n "$BATTERY_GATEWAY_SERVICE_PORTS" ]; then
   log "guests reach TCP ports $BATTERY_GATEWAY_SERVICE_PORTS on $BATTERY_GATEWAY; user ids ${BATTERY_GATEWAY_SERVICE_UIDS:-none} are kept from the metadata service and the control ports"
 fi

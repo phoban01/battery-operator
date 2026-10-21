@@ -93,3 +93,7 @@ data:
     # DNS on the gateway.
     # GATEWAY_SERVICE_PORTS=REPLACE-tcp-ports
     # GATEWAY_SERVICE_UIDS=REPLACE-user-ids
+    # Addresses in PROTECTED_CIDRS that guests may still reach, such as a
+    # VPC interface endpoint in the node range, as /32 entries
+    # (hostimage/README.md). Left out, guests reach none of them.
+    # GUEST_ALLOWED_CIDRS=REPLACE-endpoint-addresses
