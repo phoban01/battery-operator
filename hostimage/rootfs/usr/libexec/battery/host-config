@@ -11,7 +11,7 @@ BATTERY_UNIT=battery-host-config
 #/ configuration file that cloud-init writes at first boot, containing the
 #/ guest subnet, the thin pool device, the protected CIDRs and the Host
 #/ reserve.
-KEYS="GUEST_SUBNET THIN_POOL_DEVICE PROTECTED_CIDRS HOST_RESERVE_VCPU HOST_RESERVE_MEMORY_MB HOST_CONTROL_PORTS EXEC_AGENT_UID FLINTLOCKD_CLIENT_CIDRS GATEWAY_SERVICE_PORTS GATEWAY_SERVICE_UIDS"
+KEYS="GUEST_SUBNET THIN_POOL_DEVICE MICROVM_BASE_IMAGE_SIZE PROTECTED_CIDRS HOST_RESERVE_VCPU HOST_RESERVE_MEMORY_MB HOST_CONTROL_PORTS EXEC_AGENT_UID FLINTLOCKD_CLIENT_CIDRS GATEWAY_SERVICE_PORTS GATEWAY_SERVICE_UIDS"
 declare -A CONF=()
 
 #= docs/requirements/11-host-image.md#host-configuration
@@ -72,6 +72,31 @@ device=${CONF[THIN_POOL_DEVICE]}
 if [ -n "$device" ] && ! [[ $device =~ ^/dev/[A-Za-z0-9._/-]+$ ]]; then
   bad "THIN_POOL_DEVICE $device is not a /dev path"
 fi
+
+#= docs/requirements/11-host-image.md#image-storage
+#/ If the MicroVM base image size in the Host configuration file
+#/ is not a whole number of megabytes, gigabytes or terabytes from 1 GB to
+#/ 16 TB, then the Host Image SHALL NOT start `flintlockd` and SHALL report
+#/ the Host as not ready with the reason.
+# containerd reads the size with go-units' RAMInBytes, in powers of 1024,
+# and would accept more forms than these. A size it could not read would
+# leave containerd without the devmapper snapshotter, so only the plain
+# forms pass, and they pass in containerd's own spelling. The bounds are in
+# MB: 1GB is 1024 and 16TB is 16777216. Below 1GB an image hardly fits; far
+# above 16TB is a typo, not a disk.
+base_size=${CONF[MICROVM_BASE_IMAGE_SIZE]// /}
+if ! [[ $base_size =~ ^([0-9]{1,8})(MB|GB|TB)$ ]]; then
+  bad "MICROVM_BASE_IMAGE_SIZE $base_size is not a whole number of MB, GB or TB, such as 10GB"
+fi
+base_mb=$((10#${BASH_REMATCH[1]}))
+case ${BASH_REMATCH[2]} in
+GB) base_mb=$((base_mb * 1024)) ;;
+TB) base_mb=$((base_mb * 1048576)) ;;
+esac
+if [ "$base_mb" -lt 1024 ] || [ "$base_mb" -gt 16777216 ]; then
+  bad "MICROVM_BASE_IMAGE_SIZE $base_size is not from 1GB to 16TB"
+fi
+base_size=$((10#${BASH_REMATCH[1]}))${BASH_REMATCH[2]}
 
 cidrs=${CONF[PROTECTED_CIDRS]// /}
 for c in ${cidrs//,/ }; do
@@ -194,6 +219,7 @@ BATTERY_GATEWAY=$gateway
 BATTERY_DHCP_START=$(int_to_ip4 "$dhcp_start")
 BATTERY_DHCP_END=$(int_to_ip4 $((base + size - 2)))
 BATTERY_THIN_POOL_DEVICE=$device
+BATTERY_MICROVM_BASE_IMAGE_SIZE=$base_size
 BATTERY_PROTECTED_CIDRS=$cidrs
 BATTERY_HOST_RESERVE_VCPU=$((10#${CONF[HOST_RESERVE_VCPU]}))
 BATTERY_HOST_RESERVE_MEMORY_MB=$((10#${CONF[HOST_RESERVE_MEMORY_MB]}))
@@ -219,4 +245,4 @@ chmod 0644 "$tmp"
 relabel "$tmp" || refuse "cannot label $BATTERY_HOST_ENV for containers"
 mv -f "$tmp" "$BATTERY_HOST_ENV"
 ready
-log "guest subnet $(int_to_ip4 "$base")/$prefix, gateway $gateway, thin pool device ${device:-auto-detect}"
+log "guest subnet $(int_to_ip4 "$base")/$prefix, gateway $gateway, thin pool device ${device:-auto-detect}, MicroVM base image size $base_size"

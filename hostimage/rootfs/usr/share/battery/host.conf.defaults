@@ -27,6 +27,18 @@ GUEST_SUBNET=10.220.0.0/16
 # unused instance-store device.
 THIN_POOL_DEVICE=
 
+#= docs/requirements/11-host-image.md#image-storage
+#/ The Host Image SHALL configure containerd's devicemapper
+#/ snapshotter with the MicroVM base image size that it reads from the Host
+#/ configuration file, and with 10 GB when none is set.
+# The size of every MicroVM volume that comes from a container image: the
+# base_image_size of containerd's devmapper snapshotter. flintlock ignores
+# a volume's size_in_mb, so this is the only way to a larger disk. A whole
+# number with MB, GB or TB, from 1GB to 16TB; containerd counts in powers
+# of 1024, so 10GB is 10 GiB. It applies to images unpacked after it
+# changes. See hostimage/README.md for what a larger size costs.
+MICROVM_BASE_IMAGE_SIZE=10GB
+
 # Comma-separated IPv4 CIDRs no guest may reach, by address or through a
 # Service: the cluster's node, pod and Service ranges, and anything else a
 # MicroVM has no business with. Empty protects nothing off the Host.

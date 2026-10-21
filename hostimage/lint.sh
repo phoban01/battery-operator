@@ -5,7 +5,8 @@
 # the shellcheck tool over every script; the digest pin and the versions file; the
 # thin-pool cases against stand-in tools; the flintlockd access and
 # certificate cases (HI-067 to HI-072); the guest isolation cases (HI-075
-# to HI-079); the gateway service egress cases (HI-080); the nft syntax of
+# to HI-079); the gateway service egress cases (HI-080); the MicroVM disk
+# size cases (HI-087 to HI-089); the nft syntax of
 # the rendered firewall; and
 # `systemd-analyze verify` where it is installed.
 #
@@ -23,7 +24,8 @@ fail() {
 }
 
 scripts=(hostimage/check.sh hostimage/check-thin-pool.sh hostimage/check-flintlockd-access.sh hostimage/check-flintlockd-certs.sh
-  hostimage/check-guest-isolation.sh hostimage/check-gateway-service-egress.sh hostimage/check-selinux-contexts.sh hostimage/check-labels.sh hostimage/lint.sh
+  hostimage/check-guest-isolation.sh hostimage/check-gateway-service-egress.sh hostimage/check-microvm-disk-size.sh hostimage/check-selinux-contexts.sh
+  hostimage/check-labels.sh hostimage/lint.sh
   hostimage/build/*.sh hostimage/rootfs/usr/libexec/battery/*)
 scripts+=(hostimage/publish-ami.sh hostimage/pin-base.sh)
 for s in "${scripts[@]}"; do
@@ -242,6 +244,20 @@ if hostimage/check-gateway-service-egress.sh "$tmp" hostimage/rootfs/usr/libexec
   echo "ok    gateway service egress cases"
 else
   fail "gateway service egress cases"
+fi
+
+#= docs/requirements/11-host-image.md#image-storage
+#= type=test
+#/ The Host Image SHALL configure containerd's devicemapper
+#/ snapshotter with the MicroVM base image size that it reads from the Host
+#/ configuration file, and with 10 GB when none is set.
+# The check stage's cases against the sources; `containerd config dump`
+# runs only where containerd is installed.
+if hostimage/check-microvm-disk-size.sh "$tmp" hostimage/rootfs/usr/libexec/battery hostimage/rootfs/usr/share/battery/host.conf.defaults \
+  hostimage/rootfs/etc/containerd/config.toml hostimage/rootfs/usr/lib/systemd/system; then
+  echo "ok    MicroVM disk size cases"
+else
+  fail "MicroVM disk size cases"
 fi
 
 #= docs/requirements/11-host-image.md#kernel-and-kvm

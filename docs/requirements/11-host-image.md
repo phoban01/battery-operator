@@ -147,6 +147,16 @@ their label.
   the thin pool as the thin pool device rather than as in use.
 - **HI-024** The Host Image SHALL keep all `flintlockd` and containerd state
   under `/var`.
+- **HI-087** The Host Image SHALL configure containerd's devicemapper
+  snapshotter with the MicroVM base image size that it reads from the Host
+  configuration file, and with 10 GB when none is set.
+- **HI-088** If the MicroVM base image size in the Host configuration file
+  is not a whole number of megabytes, gigabytes or terabytes from 1 GB to
+  16 TB, then the Host Image SHALL NOT start `flintlockd` and SHALL report
+  the Host as not ready with the reason.
+- **HI-089** If the Host environment file is absent when containerd starts,
+  then the Host Image SHALL start containerd with the base image size of the
+  image's own containerd configuration.
 
 Instance-store devices survive a reboot and do not survive a stop or a
 terminate. HI-021 is therefore what makes an in-place upgrade cheap: after
@@ -154,6 +164,17 @@ terminate. HI-021 is therefore what makes an in-place upgrade cheap: after
 still there, where replacing the machine starts cold. HI-023 comes from a
 bug flintlock-runner fixed: a disk that carries the pool's own LVM
 structures looks in use, and must not be refused for it.
+
+HI-087 exists because the base image size is the size of every MicroVM
+volume that comes from a container image. flintlock v0.16.0 accepts a
+volume's `size_in_mb` and does nothing with it, and containerd's
+devicemapper snapshotter makes every device at its one configured size.
+`hostimage/README.md` gives the evidence. A Host that runs MicroVMs with
+large disks therefore needs a larger base image size, and the size is a
+per-Host setting. HI-088 keeps a mistyped size away from containerd, which
+would not load the snapshotter. HI-089 keeps containerd, and with it the
+Host's Node, running when the Host configuration is invalid, as it does
+when the thin pool is missing.
 
 ## Networking {#image-networking}
 
