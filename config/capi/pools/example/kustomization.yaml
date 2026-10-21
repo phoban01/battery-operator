@@ -9,3 +9,7 @@ resources:
 
 components:
   - ../../host-pool-params
+  # Options for a C8i, M8i or R8i pool. Each needs its keys in
+  # host-pool.yaml (config/capi/README.md, "Options").
+  # - ../../host-pool-nested-virtualization
+  # - ../../host-pool-data-volume
