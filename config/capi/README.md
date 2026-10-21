@@ -28,7 +28,8 @@ run on.
   the architecture of the pool's instance type: x86_64 or arm64. See
   [Publishing an AMI](../../hostimage/README.md#publishing-an-ami).
 - A subnet for the Hosts.
-- A security group that lets battery reach `flintlockd` on each Host. See
+- A security group that lets battery reach `flintlockd` on each Host, and
+  lets the Client Library's consumers reach the Exec Agent. See
   [The security group](#the-security-group).
 
 ## Layout
@@ -82,19 +83,28 @@ so it never reaches a cluster.
 
 ## The security group
 
-battery runs in the Operator's pod and calls each Host's `flintlockd` on
-TCP port 9090. CAPA's default node security group does not open that port.
-So at least one group in `additionalSecurityGroups` needs this inbound
-rule:
+A Host serves on two ports that CAPA's default node security group does
+not open:
+
+- battery runs in the Operator's pod and calls each Host's `flintlockd` on
+  TCP port 9090.
+- The Exec Agent serves on TCP port 10270. A consumer of the Client
+  Library dials it at the address in the claim's status.
+
+So the groups in `additionalSecurityGroups` need these inbound rules:
 
 | Protocol | Port | Source |
 |----------|------|--------|
 | TCP | 9090 | The Operator's pod network: the same ranges as `FLINTLOCKD_CLIENT_CIDRS` |
+| TCP | 10270 | The networks of the Client Library's consumers: usually the pod network |
 
 If your CNI masquerades pod traffic between Nodes, the traffic arrives
-from the source Node's address. Then add the node range as a source too,
-and to `FLINTLOCKD_CLIENT_CIDRS`. The Host's own firewall still admits only
-`FLINTLOCKD_CLIENT_CIDRS`.
+from the source Node's address. Then add the node range as a source of
+both rules, and to `FLINTLOCKD_CLIENT_CIDRS`. The Host's own firewall still
+admits only `FLINTLOCKD_CLIENT_CIDRS` to port 9090.
+
+Without the rule for port 10270, claims bind but nothing runs in them. A
+consumer off the Host fails with `dial tcp <host>:10270: i/o timeout`.
 
 `additionalSecurityGroups` is a list in `host-pool.yaml`, not a string.
 The settings object is never applied, so kustomize copies the list into
