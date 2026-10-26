@@ -3,8 +3,10 @@
 # configuration file with protected CIDRs, and checks the guest firewall
 # rules that keep a MicroVM away from the cluster: the Host's own addresses,
 # the Host's other interfaces, and Services behind destination NAT (HI-075
-# to HI-077), and the gateway service ports that open the gateway to guests
-# and to nothing else (HI-078, HI-079). Installed as
+# to HI-077), the gateway service ports that open the gateway to guests
+# and to nothing else (HI-078, HI-079), and the guest allowed CIDRs that
+# open chosen addresses in a protected range and nothing else (HI-084 to
+# HI-086). Installed as
 # /usr/libexec/battery/check-guest-isolation-cases and
 # called by the check stage; `hostimage/check-guest-isolation.sh DIR LIBEXEC
 # DEFAULTS` runs it outside the image against the sources, which
@@ -15,6 +17,30 @@
 # guest connects to the outside, to the gateway, to the Host's primary
 # address, to a pod on the Host and to a Service that the Host translates.
 # A pod on the Host, and the Host itself, connect to a gateway service port.
+# The guest also connects to an allowed and a protected address of a
+# stand-in VPC endpoint, to allowed Services, and to the metadata service,
+# the Host and a pod on the Host, which the allowed list names too.
+#
+#= docs/requirements/11-host-image.md#image-networking
+#= type=test
+#/ Where the Host configuration file lists guest allowed CIDRs, the
+#/ Host Image SHALL treat an address in a guest allowed CIDR as outside
+#/ every protected CIDR.
+#
+#= docs/requirements/11-host-image.md#image-networking
+#= type=test
+#/ The Host Image SHALL drop traffic from the guest subnet to the
+#/ instance metadata service addresses, to every address of the Host other
+#/ than the bridge gateway address, to the Host's own `flintlockd`, kubelet,
+#/ Exec Agent and metrics ports, and to every interface of the Host other
+#/ than its primary interface, whatever the guest allowed CIDRs hold.
+#
+#= docs/requirements/11-host-image.md#image-networking
+#= type=test
+#/ If an entry of the guest allowed CIDRs in the Host configuration
+#/ file is not an IPv4 CIDR, then the Host Image SHALL NOT start
+#/ `flintlockd` and SHALL report the Host as not ready with the reason that
+#/ the Host configuration file is invalid.
 #
 #= docs/requirements/11-host-image.md#image-networking
 #= type=test
@@ -66,6 +92,15 @@ primary=192.0.2.10
 outside=192.0.2.1
 pod=10.244.0.2
 service=10.96.0.10
+# A VPC interface endpoint in the protected node range: the guest may reach
+# one of its addresses and not the other. A second Service is allowed too.
+# The allowed list also names the metadata service, the Host's primary
+# address and the pod, which stay closed to guests.
+endpoint=10.0.5.20
+endpoint_other=10.0.5.21
+allowed_service=10.96.0.20
+metadata=169.254.169.254
+allowed="$endpoint/32, $allowed_service/32,$metadata/32, $primary/32,$pod/32"
 nftf=$C/net/guest-firewall.nft
 # The guest bridge, as lib.sh names it.
 bridge=$(sed -n 's/^BATTERY_BRIDGE=//p' "$libexec/lib.sh")
@@ -128,7 +163,36 @@ for bad in 10250 9090 5000,10270 0 65536 http 5000,5000 '5000,' '5000;reboot' '$
   fi
 done
 
-printf 'GUEST_SUBNET=10.200.4.0/22\nPROTECTED_CIDRS=10.0.0.0/16,10.96.0.0/12\nGATEWAY_SERVICE_PORTS = "5000, 03128"\n' >"$C.conf"
+# HI-084: by default the allowed list is empty, and the set has no
+# elements, so the protected drops skip nothing.
+if render "$C.absent.conf"; then
+  if grep -qx 'BATTERY_GUEST_ALLOWED_CIDRS=' "$C/run/host.env"; then
+    ok "host.env carries the empty default of GUEST_ALLOWED_CIDRS"
+  else
+    fail "host.env lacks BATTERY_GUEST_ALLOWED_CIDRS="
+  fi
+  if awk '/^\tset guest_allowed \{/ { on = 1; next } on && /^\t\}/ { exit } on' "$nftf" | grep -q elements; then
+    fail "by default the guest_allowed set has elements"
+  else
+    ok "by default the guest_allowed set is empty"
+  fi
+fi
+
+# HI-086: an entry that is not an IPv4 CIDR stops the Host, and says why.
+# shellcheck disable=SC2016
+for bad in 10.0.5.20 10.0.5.300/32 10.0.5.20/33 fd00::/64 '10.0.5.20/32,' '10.0.5.20/32,,10.0.5.21/32' \
+  '10.0.5.20/32;reboot' '$(id -u)'; do
+  printf 'GUEST_ALLOWED_CIDRS=%s\n' "$bad" >"$C.conf"
+  if render "$C.conf"; then
+    fail "host-config accepts GUEST_ALLOWED_CIDRS='$bad'"
+  elif grep -q '^host configuration invalid: GUEST_ALLOWED_CIDRS' "$C/run/not-ready.d/battery-host-config" 2>/dev/null; then
+    ok "host-config refuses GUEST_ALLOWED_CIDRS='$bad' and says why"
+  else
+    fail "host-config refuses GUEST_ALLOWED_CIDRS='$bad' without recording why"
+  fi
+done
+
+printf 'GUEST_SUBNET=10.200.4.0/22\nPROTECTED_CIDRS=10.0.0.0/16,10.96.0.0/12\nGATEWAY_SERVICE_PORTS = "5000, 03128"\nGUEST_ALLOWED_CIDRS="%s"\n' "$allowed" >"$C.conf"
 if ! render "$C.conf"; then
   fail "host-config or network render fails for $(tr '\n' ' ' <"$C.conf")"
   rm -rf "$C" "$C.conf" "$C.absent.conf"
@@ -176,12 +240,46 @@ else
 fi
 
 # HI-076: the destination the guest asked for, before kube-proxy's DNAT.
-original=$(printf '%s\n' "$forward" | grep -n -xF 'iifname "BRIDGE" ct original ip daddr @protected drop' | cut -d: -f1)
+original=$(printf '%s\n' "$forward" | grep -n -xF 'iifname "BRIDGE" ct original ip daddr @protected ct original ip daddr != @guest_allowed drop' | cut -d: -f1)
 accept=$(printf '%s\n' "$forward" | grep -n -xF 'iifname "BRIDGE" oifname "eth0" accept' | cut -d: -f1)
 if [ -n "$original" ] && [ -n "$accept" ] && [ "$original" -lt "$accept" ]; then
   ok "guest traffic whose original destination is protected is dropped before guests are let out"
 else
   fail "the forward chain does not drop the original destination in @protected before its accept"
+fi
+
+# HI-084: the allowed list, as written, and both protected drops skip it.
+if grep -qxF "BATTERY_GUEST_ALLOWED_CIDRS=$endpoint/32,$allowed_service/32,$metadata/32,$primary/32,$pod/32" "$C/run/host.env"; then
+  ok "host.env carries the configured guest allowed CIDRs"
+else
+  fail "host.env's guest allowed CIDRs are: $(grep GUEST_ALLOWED_CIDRS "$C/run/host.env")"
+fi
+if grep -qxF "		elements = { $endpoint/32, $allowed_service/32, $metadata/32, $primary/32, $pod/32 }" "$nftf"; then
+  ok "the guest_allowed set holds the configured CIDRs"
+else
+  fail "the guest_allowed set does not hold the configured CIDRs"
+fi
+protected=$(printf '%s\n' "$forward" | grep -n -xF 'iifname "BRIDGE" ip daddr @protected ip daddr != @guest_allowed drop' | cut -d: -f1)
+if [ -n "$protected" ] && [ -n "$accept" ] && [ "$protected" -lt "$accept" ]; then
+  ok "guest traffic to a protected address that is not allowed is dropped before guests are let out"
+else
+  fail "the forward chain does not drop @protected less @guest_allowed before its accept"
+fi
+
+# HI-085: the allowed set appears in those two drops and nowhere else, so
+# it accepts nothing, and the metadata drops come before both.
+uses=$(sed 's/#.*//' "$nftf" | grep '@guest_allowed' | sed -e 's/^[[:space:]]*//' -e "s/\"$bridge\"/\"BRIDGE\"/g")
+want=$(printf '%s\n' "$forward" | grep -F '@guest_allowed')
+if [ -n "$uses" ] && [ "$uses" = "$want" ] && [ "$(printf '%s\n' "$uses" | wc -l)" = 2 ]; then
+  ok "only the two protected drops name @guest_allowed"
+else
+  fail "the rules that name @guest_allowed are: $(printf '%s\n' "$uses" | tr '\n' ';')"
+fi
+meta=$(printf '%s\n' "$forward" | grep -n -xF "iifname \"BRIDGE\" ip daddr $metadata drop" | cut -d: -f1)
+if [ -n "$meta" ] && [ -n "$protected" ] && [ "$meta" -lt "$protected" ] && [ -n "$original" ] && [ "$meta" -lt "$original" ]; then
+  ok "the metadata service is dropped before the protected drops, whatever the allowed list holds"
+else
+  fail "the forward chain does not drop the metadata service before the protected drops"
 fi
 
 # HI-077: every rule of the input chain that accepts from the bridge names
@@ -214,6 +312,7 @@ enforce() {
   unshare --user --map-root-user --net bash -c '
     set -u
     nftf=$1 gateway=$2 guest=$3 primary=$4 outside=$5 pod=$6 service=$7 bridge=$8
+    endpoint=$9 endpoint_other=${10} allowed_service=${11} metadata=${12}
     ns() { unshare --net sleep 30 >/dev/null 2>&1 & echo $!; }
     inns() { local p=$1; shift; nsenter -t "$p" -n "$@"; }
     {
@@ -230,6 +329,8 @@ enforce() {
       ip link set p0 netns "$p" &&
       inns "$g" sh -c "ip link set lo up && ip addr add $guest/22 dev g0 && ip link set g0 up && ip route add default via $gateway" &&
       inns "$o" sh -c "ip link set lo up && ip addr add $outside/24 dev o0 && ip link set o0 up" &&
+      inns "$o" sh -c "ip addr add $endpoint/32 dev o0 && ip addr add $endpoint_other/32 dev o0 && ip addr add $metadata/32 dev o0" &&
+      ip route add $endpoint/32 dev eth0 && ip route add $endpoint_other/32 dev eth0 && ip route add $metadata/32 dev eth0 &&
       inns "$p" sh -c "ip link set lo up && ip addr add $pod/24 dev p0 && ip link set p0 up && ip route add default via 10.244.0.1" &&
       nft -f "$nftf" &&
       nft -f - <<EOF
@@ -243,6 +344,9 @@ table ip kube_proxy {
 	chain prerouting {
 		type nat hook prerouting priority dstnat; policy accept;
 		ip daddr $service tcp dport 80 dnat to $outside:80
+		ip daddr $service tcp dport 81 dnat to $endpoint:81
+		ip daddr $allowed_service tcp dport 80 dnat to $outside:80
+		ip daddr $allowed_service tcp dport 81 dnat to $endpoint_other:81
 	}
 }
 EOF
@@ -276,8 +380,14 @@ EOF
     n=$(nft list chain ip probe forward | sed -n "s/.*oifname \"cni0\" counter packets \([0-9]*\) .*/\1/p")
     [ "${n:-0}" = 0 ] || echo "pod forwarded"
     try service $service 80
+    try service-to-allowed $service 81
+    try endpoint $endpoint 443
+    try endpoint-other $endpoint_other 443
+    try allowed-service $allowed_service 80
+    try allowed-service-to-protected $allowed_service 81
+    try metadata $metadata 80
     kill "$g" "$o" "$p" 2>/dev/null
-  ' _ "$nftf" $gateway $guest $primary $outside $pod $service "$bridge" 2>/dev/null
+  ' _ "$nftf" $gateway $guest $primary $outside $pod $service "$bridge" $endpoint $endpoint_other $allowed_service $metadata 2>/dev/null
 }
 if ! command -v nft >/dev/null 2>&1 || ! command -v ip >/dev/null 2>&1 || ! command -v nsenter >/dev/null 2>&1; then
   printf 'skip  enforcement: nft, ip or nsenter is not installed\n'
@@ -293,9 +403,16 @@ else
     if [ "$(result gateway-other)" = dropped ]; then ok "enforced: a guest's traffic to port 1234 on the gateway, which is not listed, is dropped"; else fail "enforced: port 1234 on the gateway is $(result gateway-other)"; fi
     if [ "$(result pod-to-service)" = dropped ]; then ok "enforced: a pod on the Host cannot reach gateway service port 5000"; else fail "enforced: gateway service port 5000 is $(result pod-to-service) for a pod on the Host"; fi
     if [ "$(result host-to-service)" = reached ]; then ok "enforced: the Host itself reaches gateway service port 5000"; else fail "enforced: gateway service port 5000 is $(result host-to-service) for the Host itself"; fi
-    if [ "$(result primary)" = dropped ]; then ok "enforced: a guest's traffic to the Host's primary address is dropped"; else fail "enforced: the Host's primary address is $(result primary)"; fi
-    if [ "$(result pod | xargs)" = dropped ]; then ok "enforced: a guest's traffic to a pod on the Host, outside every protected range, is dropped"; else fail "enforced: a pod on the Host is $(result pod | xargs)"; fi
+    if [ "$(result primary)" = dropped ]; then ok "enforced: a guest's traffic to the Host's primary address is dropped, although the allowed list names it"; else fail "enforced: the Host's primary address is $(result primary)"; fi
+    if [ "$(result pod | xargs)" = dropped ]; then ok "enforced: a guest's traffic to a pod on the Host, outside every protected range and in the allowed list, is dropped"; else fail "enforced: a pod on the Host is $(result pod | xargs)"; fi
     if [ "$(result service)" = dropped ]; then ok "enforced: a guest's traffic to a protected Service address is dropped after kube-proxy's DNAT"; else fail "enforced: a protected Service address is $(result service)"; fi
+    # HI-084 and HI-085, against the allowed list.
+    if [ "$(result endpoint)" = reached ]; then ok "enforced: a guest reaches an allowed address inside a protected range"; else fail "enforced: an allowed address inside a protected range is $(result endpoint)"; fi
+    if [ "$(result endpoint-other)" = dropped ]; then ok "enforced: a guest's traffic to the rest of the protected range is dropped"; else fail "enforced: a protected address next to an allowed one is $(result endpoint-other)"; fi
+    if [ "$(result allowed-service)" = reached ]; then ok "enforced: a guest reaches an allowed Service address that DNAT sends outside every protected range"; else fail "enforced: an allowed Service address is $(result allowed-service)"; fi
+    if [ "$(result allowed-service-to-protected)" = dropped ]; then ok "enforced: an allowed Service address that DNAT sends to a protected address is dropped"; else fail "enforced: an allowed Service sent to a protected address is $(result allowed-service-to-protected)"; fi
+    if [ "$(result service-to-allowed)" = dropped ]; then ok "enforced: a protected Service address that DNAT sends to an allowed address is dropped"; else fail "enforced: a protected Service sent to an allowed address is $(result service-to-allowed)"; fi
+    if [ "$(result metadata)" = dropped ]; then ok "enforced: the metadata service stays dropped although the allowed list names it"; else fail "enforced: the metadata service, in the allowed list, is $(result metadata)"; fi
   fi
 fi
 

@@ -274,7 +274,7 @@ render_nft() {
   env "${env[@]}" bash "$lib/host-config" >/dev/null 2>&1 &&
     env "${env[@]}" BATTERY_PRIMARY_INTERFACE=eth0 BATTERY_PRIMARY_ADDRESS=192.0.2.10 bash "$lib/network" render "$dir/net" >/dev/null 2>&1
 }
-printf 'PROTECTED_CIDRS=10.0.0.0/16,10.96.0.0/12\nFLINTLOCKD_CLIENT_CIDRS=10.244.0.0/16\nGATEWAY_SERVICE_PORTS=5000,3128\nGATEWAY_SERVICE_UIDS=1000,100000-165535\n' >"$tmp/nft-set.conf"
+printf 'PROTECTED_CIDRS=10.0.0.0/16,10.96.0.0/12\nFLINTLOCKD_CLIENT_CIDRS=10.244.0.0/16\nGATEWAY_SERVICE_PORTS=5000,3128\nGATEWAY_SERVICE_UIDS=1000,100000-165535\nGUEST_ALLOWED_CIDRS=10.0.5.20/32,10.0.6.0/28\n' >"$tmp/nft-set.conf"
 if ! command -v nft >/dev/null 2>&1; then
   if [ -n "${HOST_IMAGE_REQUIRE_NFT:-}" ]; then fail "HOST_IMAGE_REQUIRE_NFT is set but nft is not installed"; else echo "skip  nft is not installed"; fi
 else

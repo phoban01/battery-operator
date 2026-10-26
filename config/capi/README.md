@@ -195,6 +195,11 @@ A consumer that runs services for its MicroVMs on the bridge gateway sets
 them commented out. Left out, guests reach only DHCP and DNS on the
 gateway.
 
+If guests need a service whose addresses lie in `PROTECTED_CIDRS`, such as
+a VPC interface endpoint in the node range, set `GUEST_ALLOWED_CIDRS` to
+those addresses, as /32 entries. The example has it commented out. See
+"Reaching a service inside a protected range" in `hostimage/README.md`.
+
 The file holds settings, never secrets. The bootstrap data goes to the
 instance as user-data, not through AWS Secrets Manager, because a Host has
 no instance profile.
