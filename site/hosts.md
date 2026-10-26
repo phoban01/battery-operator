@@ -35,8 +35,8 @@ say what a Node needs.
 The Host Image is a bootc image that a Node boots from to become a Host. It
 gives the Host:
 
-- containerd with a thin pool, which it makes on the instance-store disk at
-  first boot;
+- containerd with a thin pool, which it makes at first boot on the
+  instance-store disk, or on the EBS volume that `host.conf` names;
 - Firecracker, Cloud Hypervisor and `flintlockd`, which serves over mutual
   TLS on port 9090 with certificates from the Exec Agent;
 - the guest bridge, with DHCP, NAT and a firewall between the MicroVMs and
@@ -53,13 +53,30 @@ ghcr.io/phoban01/battery-operator/host-image:<version>
 The [Host Image README](https://github.com/phoban01/battery-operator/blob/v0.3.2/hostimage/README.md)
 has the detail.
 
+## Pick an instance type
+
+A Host needs KVM, and a disk for the thin pool. On EC2 there are two kinds
+of Host:
+
+| Kind | KVM from | Thin pool on | Example |
+|------|----------|--------------|---------|
+| Metal | the hardware | the instance-store disk | `m6id.metal`; on arm64, `c7gd.metal` |
+| C8i, M8i or R8i | nested virtualization | an EBS data volume | `m8i.xlarge` |
+
+A small C8i, M8i or R8i pool costs much less than metal. But these
+families have no instance-store disk, so the MicroVMs' disks are on EBS.
+gp3 gives 3,000 IOPS and 125 MiB/s at any size, less than a local disk.
+Graviton has no nested virtualization, so an arm64 Host is always a metal
+size. A C8i, M8i or R8i pool needs CAPA v2.13 or later.
+
 ## The steps
 
 1. Make an AMI from the Host Image.
 2. Make a management cluster with Cluster API and CAPA.
 3. Make a workload cluster, with a CNI and the AWS cloud controller
    manager.
-4. Make a security group that lets battery reach `flintlockd`.
+4. Make a security group that lets battery reach `flintlockd`, and lets
+   consumers reach the Exec Agent.
 5. Fill in a Host pool, and apply it to the management cluster.
 6. Check that the Hosts joined.
 7. Install battery-operator in the workload cluster, and check that the
@@ -71,8 +88,8 @@ has the detail.
 The Host pools boot the Host Image from an AMI in the region of the
 cluster. An AMI has one architecture, so you make one for x86_64 Hosts
 and another for arm64 Hosts. An arm64 Host is a Graviton metal instance,
-such as `c7gd.metal` or `c8gd.metal-24xl`: Graviton's VM sizes have no
-nested virtualization, and a Host needs KVM.
+such as `c7gd.metal` or `c8gd.metal-24xl`: Graviton has no nested
+virtualization, and a Host needs KVM.
 
 `make host-image-ami` makes the AMI with bootc-image-builder. You need:
 
@@ -254,27 +271,39 @@ and the Host pool. With CAPA's defaults they are:
 
 ## Make the security group
 
-battery runs in the Operator's pod and calls each Host's `flintlockd` on
-TCP port 9090. CAPA's node security group does not open that port. Make a
-security group in the cluster's VPC that does.
+A Host serves on two ports that CAPA's node security group does not open:
 
-The source is the Operator's pod network. If the CNI masquerades pod
-traffic to other Nodes, the traffic comes from the Node's address instead,
-so admit the node range too. Calico's default IP pool masquerades traffic
+- battery runs in the Operator's pod and calls each Host's `flintlockd` on
+  TCP port 9090.
+- The Exec Agent serves on TCP port 10270. A consumer of the Client
+  Library dials it at the address in the claim's status.
+
+Make a security group in the cluster's VPC that opens both.
+
+The source of port 9090 is the Operator's pod network. The source of port
+10270 is the networks of the Client Library's consumers, usually the pod
+network too. If the CNI masquerades pod traffic to other Nodes, the
+traffic comes from the Node's address instead, so admit the node range
+too. Calico's default IP pool masquerades traffic
 to addresses outside the pool, and a Host's address is outside it.
 
 ```sh
 vpc=$(kubectl get awscluster battery -o jsonpath='{.spec.network.vpc.id}')
 sg=$(aws ec2 create-security-group --region eu-west-1 --vpc-id "$vpc" \
   --group-name battery-flintlockd \
-  --description "flintlockd from the battery-operator pods" \
+  --description "flintlockd and the Exec Agent from the cluster's pods" \
   --query GroupId --output text)
-aws ec2 authorize-security-group-ingress --region eu-west-1 --group-id "$sg" \
-  --protocol tcp --port 9090 --cidr 192.168.0.0/16
-aws ec2 authorize-security-group-ingress --region eu-west-1 --group-id "$sg" \
-  --protocol tcp --port 9090 --cidr 10.0.0.0/16
+for port in 9090 10270; do
+  for cidr in 192.168.0.0/16 10.0.0.0/16; do
+    aws ec2 authorize-security-group-ingress --region eu-west-1 \
+      --group-id "$sg" --protocol tcp --port "$port" --cidr "$cidr"
+  done
+done
 echo "$sg"
 ```
+
+Without the rule for port 10270, claims bind but nothing runs in them. A
+consumer off the Host fails with `dial tcp <host>:10270: i/o timeout`.
 
 The Host's own firewall admits only `FLINTLOCKD_CLIENT_CIDRS` from the
 Host pool, below, so set the same ranges there.
@@ -342,9 +371,47 @@ Then, in the checkout:
   a MicroVM must not reach.
 - `GUEST_SUBNET`: the MicroVMs' subnet. Keep it clear of the ranges above.
 
+If MicroVMs need a service whose addresses lie in a protected range, such
+as a VPC interface endpoint in the node range, add `GUEST_ALLOWED_CIDRS`
+with those addresses, as /32 entries. Only Host Images after `v0.5.0` read
+it; an older one skips it, and its guests cannot reach those addresses.
+
 Use only the keys that the
 [Host configuration file](https://github.com/phoban01/battery-operator/blob/v0.3.2/hostimage/README.md#host-configuration-file)
 section names. The Host skips any other key without an error.
+
+For a C8i, M8i or R8i pool, use the two options: nested virtualization,
+and an EBS data volume for the thin pool. Each is a kustomize Component
+and some keys. Add both Components to
+`config/capi/pools/example/kustomization.yaml`:
+
+```yaml
+components:
+  - ../../host-pool-params
+  - ../../host-pool-nested-virtualization
+  - ../../host-pool-data-volume
+```
+
+Then set their keys in `host-pool.yaml`, and name the data volume in
+`host.conf`. The volume is attached as `/dev/sdb`, which Nitro shows as
+`/dev/nvme1n1`:
+
+```yaml
+data:
+  instanceType: m8i.xlarge
+  nestedVirtualization: enabled
+  dataVolumeGiB: "200"
+  dataVolumeType: gp3
+  dataVolumeEncrypted: "true"
+  host.conf: |
+    THIN_POOL_DEVICE=/dev/nvme1n1
+    # and the keys above
+```
+
+The build fails if an included Component's key is missing. A key without
+its Component does nothing.
+[Options](https://github.com/phoban01/battery-operator/blob/main/config/capi/README.md#options)
+has the detail.
 
 Look at what the pool renders, then apply it to the management cluster:
 
@@ -372,7 +439,7 @@ kubectl get machinedeployment battery-hosts-example
 kubectl get machines -l battery.liquidmetal-x.dev/host-pool=battery-hosts-example
 ```
 
-A metal instance takes some minutes to boot. The first boot also makes the
+An instance takes some minutes to boot, a metal one longer. The first boot also makes the
 thin pool and pulls images. The MachineHealthCheck gives a Host 20 minutes
 before it replaces the Machine.
 
@@ -423,10 +490,12 @@ When the report says ready, the Operator gives the Node to battery as a
 Host. If it says `false`, the reason names the first missing prerequisite:
 
 - `HostImageNotReady`: a unit of the Host Image failed, for example
-  because the instance has no KVM or no free instance-store disk, or
+  because the instance has no KVM, no free instance-store disk and no
+  `THIN_POOL_DEVICE`, or
   `host.conf` is not valid. The message says which. See
   [Not ready reasons](https://github.com/phoban01/battery-operator/blob/v0.3.2/hostimage/README.md#not-ready-reasons).
-- `KVMUnavailable`: the instance type has no KVM. Use a metal instance.
+- `KVMUnavailable`: the instance type has no KVM. Use a metal instance,
+  or C8i, M8i or R8i with the nested virtualization option.
 - `ThinPoolMissing`: there is no thin pool.
 - `FlintlockdNotReady`: the Exec Agent cannot reach `flintlockd` yet.
 

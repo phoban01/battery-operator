@@ -11,7 +11,7 @@ BATTERY_UNIT=battery-host-config
 #/ configuration file that cloud-init writes at first boot, containing the
 #/ guest subnet, the thin pool device, the protected CIDRs and the Host
 #/ reserve.
-KEYS="GUEST_SUBNET THIN_POOL_DEVICE MICROVM_BASE_IMAGE_SIZE PROTECTED_CIDRS HOST_RESERVE_VCPU HOST_RESERVE_MEMORY_MB HOST_CONTROL_PORTS EXEC_AGENT_UID FLINTLOCKD_CLIENT_CIDRS GATEWAY_SERVICE_PORTS GATEWAY_SERVICE_UIDS"
+KEYS="GUEST_SUBNET THIN_POOL_DEVICE MICROVM_BASE_IMAGE_SIZE PROTECTED_CIDRS HOST_RESERVE_VCPU HOST_RESERVE_MEMORY_MB HOST_CONTROL_PORTS EXEC_AGENT_UID FLINTLOCKD_CLIENT_CIDRS GATEWAY_SERVICE_PORTS GATEWAY_SERVICE_UIDS GUEST_ALLOWED_CIDRS"
 declare -A CONF=()
 
 #= docs/requirements/11-host-image.md#host-configuration
@@ -102,6 +102,21 @@ cidrs=${CONF[PROTECTED_CIDRS]// /}
 for c in ${cidrs//,/ }; do
   valid_cidr4 "$c" || bad "PROTECTED_CIDRS entry $c is not an IPv4 CIDR"
 done
+
+#= docs/requirements/11-host-image.md#image-networking
+#/ If an entry of the guest allowed CIDRs in the Host configuration
+#/ file is not an IPv4 CIDR, then the Host Image SHALL NOT start
+#/ `flintlockd` and SHALL report the Host as not ready with the reason that
+#/ the Host configuration file is invalid.
+# Comma-separated IPv4 CIDRs, like PROTECTED_CIDRS, and empty by default.
+# An entry need not lie inside PROTECTED_CIDRS: one outside them changes
+# nothing, because the Host forwards guests there anyway. battery-network,
+# and so flintlockd, requires this unit, so a refusal stops both.
+allowed_cidrs=${CONF[GUEST_ALLOWED_CIDRS]// /}
+for c in ${allowed_cidrs//,/ }; do
+  valid_cidr4 "$c" || bad "GUEST_ALLOWED_CIDRS entry $c is not an IPv4 CIDR"
+done
+if [[ $allowed_cidrs =~ (^,|,,|,$) ]]; then bad "GUEST_ALLOWED_CIDRS has an empty entry"; fi
 
 is_uint "${CONF[HOST_RESERVE_VCPU]}" || bad "HOST_RESERVE_VCPU is not a whole number"
 is_uint "${CONF[HOST_RESERVE_MEMORY_MB]}" || bad "HOST_RESERVE_MEMORY_MB is not a whole number"
@@ -221,6 +236,7 @@ BATTERY_DHCP_END=$(int_to_ip4 $((base + size - 2)))
 BATTERY_THIN_POOL_DEVICE=$device
 BATTERY_MICROVM_BASE_IMAGE_SIZE=$base_size
 BATTERY_PROTECTED_CIDRS=$cidrs
+BATTERY_GUEST_ALLOWED_CIDRS=$allowed_cidrs
 BATTERY_HOST_RESERVE_VCPU=$((10#${CONF[HOST_RESERVE_VCPU]}))
 BATTERY_HOST_RESERVE_MEMORY_MB=$((10#${CONF[HOST_RESERVE_MEMORY_MB]}))
 BATTERY_HOST_CONTROL_PORTS=$control_ports

@@ -369,7 +369,7 @@ for kv in BATTERY_GUEST_SUBNET=10.220.0.0/16 BATTERY_GATEWAY=10.220.0.1 BATTERY_
   BATTERY_HOST_RESERVE_VCPU=2 BATTERY_HOST_RESERVE_MEMORY_MB=4096 \
   BATTERY_HOST_CONTROL_PORTS=9090,8090,10248,10250,10255,10256,10270,1338 \
   BATTERY_EXEC_AGENT_UID=65532 BATTERY_FLINTLOCKD_CLIENT_CIDRS= \
-  BATTERY_GATEWAY_SERVICE_PORTS= BATTERY_GATEWAY_SERVICE_UIDS=; do
+  BATTERY_GATEWAY_SERVICE_PORTS= BATTERY_GATEWAY_SERVICE_UIDS= BATTERY_GUEST_ALLOWED_CIDRS=; do
   expect "default $kv" grep -qxF -- "$kv" "$BATTERY_HOST_ENV"
 done
 
@@ -594,8 +594,8 @@ expect "the kubelet, Exec Agent, flintlockd and metrics ports are dropped" \
 #/ The Host Image SHALL drop traffic from the guest subnet to every
 #/ protected CIDR listed in the Host configuration file.
 expect "the protected CIDRs are a set" has "$nftf" 'elements = \{ 10\.0\.0\.0/16, 192\.168\.0\.0/16 \}'
-expect "traffic to the protected set is dropped" has "$nftf" 'iifname "virbr-battery" ip daddr @protected drop'
-drop_line=$(grep -n '@protected drop' "$nftf" | tail -n 1 | cut -d: -f1)
+expect "traffic to the protected set is dropped" has "$nftf" 'iifname "virbr-battery" ip daddr @protected ip daddr != @guest_allowed drop'
+drop_line=$(grep -n '@protected .*!= @guest_allowed drop' "$nftf" | tail -n 1 | cut -d: -f1)
 accept_line=$(grep -n 'oifname "eth0" accept' "$nftf" | cut -d: -f1)
 expect "the drops come before guests are let out" test "${drop_line:-9999}" -lt "${accept_line:-0}"
 

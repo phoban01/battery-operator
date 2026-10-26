@@ -44,6 +44,17 @@ MICROVM_BASE_IMAGE_SIZE=10GB
 # MicroVM has no business with. Empty protects nothing off the Host.
 PROTECTED_CIDRS=
 
+#= docs/requirements/11-host-image.md#image-networking
+#/ Where the Host configuration file lists guest allowed CIDRs, the
+#/ Host Image SHALL treat an address in a guest allowed CIDR as outside
+#/ every protected CIDR.
+# Comma-separated IPv4 CIDRs that guests may reach although they lie in
+# PROTECTED_CIDRS, such as the addresses of a VPC interface endpoint in the
+# node range. List only the service's addresses, as /32 entries. They
+# never open the instance metadata service, the Host itself or the Host's
+# other interfaces. Empty allows nothing.
+GUEST_ALLOWED_CIDRS=
+
 # The Host reserve: what the Host's own Node offers to pods. Everything
 # beyond it belongs to the MicroVMs that battery places on the Host.
 HOST_RESERVE_VCPU=2

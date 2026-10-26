@@ -1,0 +1,60 @@
+# An option for a Host pool: an EBS data volume for the thin pool, for an
+# instance type with no instance-store disk, such as the C8i, M8i and R8i
+# families. A pool includes this Component after host-pool-params, and sets
+# dataVolumeGiB, dataVolumeType and dataVolumeEncrypted in its
+# host-pool.yaml. config/capi/README.md, "Options", says how to use it.
+#
+# The Host Image never takes an EBS volume for the thin pool on its own:
+# the pool's host.conf names it with THIN_POOL_DEVICE. The volume is
+# attached as /dev/sdb, which Nitro shows as an NVMe disk, normally
+# /dev/nvme1n1. If Nitro numbers the root disk nvme1n1 instead, the Host
+# Image takes the one other unused NVMe disk.
+#
+# The build fails if the pool's settings leave out any of the three keys.
+#
+#= docs/requirements/12-host-pool.md#host-pool
+#/ Where a Host pool's settings give a data volume, the Host Pool
+#/ Templates SHALL attach to every Host of the pool one EBS volume, as the
+#/ device `/dev/sdb`, of the size, type and encryption that the settings
+#/ give.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+patches:
+  - target:
+      kind: AWSMachineTemplate
+    patch: |-
+      - op: add
+        path: /spec/template/spec/nonRootVolumes
+        value:
+          - deviceName: /dev/sdb
+            size: 100
+            type: DATA_VOLUME_TYPE
+            encrypted: true
+
+replacements:
+  - source:
+      kind: ConfigMap
+      fieldPath: data.dataVolumeGiB
+    targets:
+      - select:
+          kind: AWSMachineTemplate
+        fieldPaths:
+          - spec.template.spec.nonRootVolumes.[deviceName=/dev/sdb].size
+  - source:
+      kind: ConfigMap
+      fieldPath: data.dataVolumeType
+    targets:
+      - select:
+          kind: AWSMachineTemplate
+        fieldPaths:
+          - spec.template.spec.nonRootVolumes.[deviceName=/dev/sdb].type
+  # "true" or "false".
+  - source:
+      kind: ConfigMap
+      fieldPath: data.dataVolumeEncrypted
+    targets:
+      - select:
+          kind: AWSMachineTemplate
+        fieldPaths:
+          - spec.template.spec.nonRootVolumes.[deviceName=/dev/sdb].encrypted

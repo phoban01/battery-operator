@@ -192,6 +192,7 @@ user-data.
 | `THIN_POOL_DEVICE` | empty | Block device for the thin pool. Empty means detect the unused instance-store disk |
 | `MICROVM_BASE_IMAGE_SIZE` | `10GB` | The size of every MicroVM volume made from a container image: containerd's devmapper `base_image_size`. A whole number of `MB`, `GB` or `TB`, from 1GB to 16TB. It applies to images unpacked after it changes. See [MicroVM disk size](#microvm-disk-size) (HI-087, HI-088) |
 | `PROTECTED_CIDRS` | empty | Comma-separated IPv4 CIDRs no guest may reach, by address or through a Service: the node, pod and Service CIDRs of the cluster, and anything else. Empty protects nothing off the Host, and `battery-network` logs a warning |
+| `GUEST_ALLOWED_CIDRS` | empty | Comma-separated IPv4 CIDRs that guests may reach although they lie in `PROTECTED_CIDRS`, such as the addresses of a VPC interface endpoint in the node range. They never open the metadata service, the Host or its other interfaces. Empty allows nothing (HI-084 to HI-086). See [Reaching a service inside a protected range](#reaching-a-service-inside-a-protected-range) |
 | `HOST_RESERVE_VCPU` | `2` | CPUs the Host's own Node offers to pods |
 | `HOST_RESERVE_MEMORY_MB` | `4096` | Memory the Host's own Node offers to pods |
 | `HOST_CONTROL_PORTS` | `9090,8090,10248,10250,10255,10256,10270,1338` | The Host's own ports, dropped for guests by name as well as by the final drop |
@@ -783,7 +784,10 @@ not the API server's Service.
   unlisted port on the gateway, the Host's
   primary address, a pod behind its own interface on the Host, or a
   protected Service address that a DNAT rule sends outside every protected
-  range.
+  range. With `GUEST_ALLOWED_CIDRS` set, the guest reaches an allowed
+  address in a protected range, and an allowed Service, and does not reach
+  the next address in the range, or the metadata service, the Host and the
+  pod when the list names them.
 - `br_netfilter` is loaded because kubeadm's preflight wants it. With it,
   bridged guest-to-guest frames traverse the forward chain, whose last rule
   drops traffic into the bridge that is not a reply, so guests cannot reach
@@ -792,6 +796,57 @@ not the API server's Service.
   loopback or the bridge gateway. A guest's traffic to any address of the
   Host arrives on the bridge and is dropped there, so it cannot reach
   `flintlockd` even if something (kube-proxy can) sets `route_localnet`.
+
+### Reaching a service inside a protected range
+
+Some services that guests need have addresses inside a protected range. In
+AWS, a VPC interface endpoint (PrivateLink) takes one address from each
+subnet it sits in. Put an endpoint for a self-hosted Git server in the
+Hosts' subnets, and its addresses are in the node range. `PROTECTED_CIDRS`
+then drops them, and guests cannot clone.
+
+Do not split the node range around the endpoint. For three addresses in a
+/23 that takes 22 entries. List the endpoint's addresses in
+`GUEST_ALLOWED_CIDRS` instead:
+
+```sh
+# The endpoint's addresses, one per subnet:
+aws ec2 describe-network-interfaces \
+  --filters Name=vpc-endpoint-id,Values=vpce-0123456789abcdef0 \
+  --query 'NetworkInterfaces[].PrivateIpAddress' --output text
+```
+
+```
+PROTECTED_CIDRS=10.0.0.0/23,192.168.0.0/16,10.96.0.0/12
+GUEST_ALLOWED_CIDRS=10.0.0.37/32,10.0.0.170/32,10.0.1.92/32
+```
+
+The endpoint keeps its addresses for its life. A new endpoint has new
+addresses, so update the list when you replace it.
+
+How it works (HI-084 to HI-086):
+
+- `battery-network` loads the list into the set `guest_allowed`. Both
+  protected drops of the forward chain skip it: the one for the address in
+  the packet, and the one for the address the guest asked for before
+  kube-proxy's DNAT. Each skips it on its own. So an allowed Service that
+  DNAT sends to a protected pod is still dropped, and so is a protected
+  Service that DNAT sends to an allowed address.
+- No rule accepts an allowed address. The rest of the forward chain still
+  decides, so a guest's traffic to it leaves by the primary interface or
+  not at all.
+- The list never opens what other rules protect. The metadata drops come
+  before the protected drops. The input chain, which keeps guests off the
+  Host's own addresses and ports, never reads the set. An entry that names
+  the metadata service, the Host or a pod on the Host changes nothing.
+- An entry outside `PROTECTED_CIDRS` changes nothing either, because the
+  Host forwards guests there anyway. It does not have to lie inside.
+- The list cannot tell a service from another Node. An entry that holds
+  another Node's address opens that Node's kubelet to guests. List only the
+  service's addresses, as /32 entries.
+- Entries are IPv4 CIDRs, like `PROTECTED_CIDRS`. A malformed entry fails
+  `battery-host-config`, so `flintlockd` does not start, and the Host
+  reports why.
 
 ## Publishing an AMI
 

@@ -28,7 +28,8 @@ run on.
   the architecture of the pool's instance type: x86_64 or arm64. See
   [Publishing an AMI](../../hostimage/README.md#publishing-an-ami).
 - A subnet for the Hosts.
-- A security group that lets battery reach `flintlockd` on each Host. See
+- A security group that lets battery reach `flintlockd` on each Host, and
+  lets the Client Library's consumers reach the Exec Agent. See
   [The security group](#the-security-group).
 
 ## Layout
@@ -38,10 +39,12 @@ run on.
 | `kustomization.yaml` | The entry point: the namespace, and the list of pools |
 | `host-pool/` | The objects of one pool, with placeholders: MachineDeployment, AWSMachineTemplate, KubeadmConfigTemplate, MachineHealthCheck |
 | `host-pool-params/` | A kustomize Component that writes a pool's settings into those objects |
+| `host-pool-nested-virtualization/` | An option: a Component that enables nested virtualization. See [Options](#options) |
+| `host-pool-data-volume/` | An option: a Component that adds an EBS data volume for the thin pool. See [Options](#options) |
 | `pools/example/` | One pool: its `host-pool.yaml` and its kustomization. Copy it for each pool |
 
-Do not change `host-pool/` or `host-pool-params/` to fill in a pool. Put
-every value in the pool's `host-pool.yaml`.
+Do not change `host-pool/`, `host-pool-params/` or the option Components to
+fill in a pool. Put every value in the pool's `host-pool.yaml`.
 
 ## Fill in a pool
 
@@ -55,7 +58,7 @@ every value in the pool's `host-pool.yaml`.
    | `name` | The name of the pool, and of each of its objects |
    | `clusterName` | The Cluster API `Cluster` the Hosts join |
    | `replicas` | The pool size: the number of Hosts |
-   | `instanceType` | One EC2 instance type. A Host needs KVM, so a metal instance, and an instance-store disk for the thin pool. Its architecture must be the AMI's: `m6id.metal` for an x86_64 AMI, a Graviton metal size such as `c7gd.metal` or `c8gd.metal-24xl` for an arm64 AMI. Graviton's VM sizes have no nested virtualization, so a Graviton Host is a metal size |
+   | `instanceType` | One EC2 instance type. See [The instance type](#the-instance-type). Its architecture must be the AMI's: `m6id.metal` or `m8i.xlarge` for an x86_64 AMI, a Graviton metal size such as `c7gd.metal` or `c8gd.metal-24xl` for an arm64 AMI |
    | `amiID` | The AMI of the Host Image, by id. Its `battery.liquidmetal-x.dev/architecture` tag names its architecture, `x86_64` or `arm64` |
    | `subnetID` | The subnet of the Hosts, by id |
    | `additionalSecurityGroups` | A list of `id: sg-…` entries: security groups for the Hosts besides CAPA's own. See below |
@@ -80,21 +83,84 @@ The ConfigMap in `host-pool.yaml` holds the settings only. Its
 `config.kubernetes.io/local-config` annotation keeps it out of the output,
 so it never reaches a cluster.
 
+## The instance type
+
+A Host needs two things from its instance type:
+
+- KVM. A metal instance has it. So does a C8i, M8i or R8i size with nested
+  virtualization, which the `nestedVirtualization` option enables.
+  Graviton has no nested virtualization, so an arm64 Host is a metal size.
+- A disk for the thin pool, where containerd keeps the MicroVMs' disks. A
+  metal size with an instance-store disk, such as `m6id.metal`, has one,
+  and the Host Image finds it. C8i, M8i and R8i have no instance-store
+  disk, so their pools need the `dataVolume` option: an EBS volume.
+
+| Instance type | Options |
+|---------------|---------|
+| x86_64 metal with an instance-store disk, such as `m6id.metal` | none |
+| C8i, M8i or R8i, such as `m8i.xlarge` | `nestedVirtualization` and `dataVolume` |
+| Graviton metal with an instance-store disk, such as `c7gd.metal` | none |
+
+A small pool of C8i, M8i or R8i sizes costs much less than metal. But the
+MicroVMs' disk I/O then goes to EBS, not to a local disk. gp3 gives 3,000
+IOPS and 125 MiB/s at any size, which is less than an instance-store disk.
+The settings do not raise them.
+
+## Options
+
+An option is a kustomize Component and some keys in `host-pool.yaml`. To
+use one, add its Component to the pool's `kustomization.yaml`, after
+`host-pool-params`, and set its keys. The build fails if a key of an
+included Component is missing. A key without its Component does nothing.
+
+```yaml
+components:
+  - ../../host-pool-params
+  - ../../host-pool-nested-virtualization
+  - ../../host-pool-data-volume
+```
+
+| Component | Keys | What it sets |
+|-----------|------|--------------|
+| `host-pool-nested-virtualization` | `nestedVirtualization: enabled` | `cpuOptions.nestedVirtualization` on the AWSMachineTemplate. It needs CAPA v2.13 or later |
+| `host-pool-data-volume` | `dataVolumeGiB`, `dataVolumeType`, `dataVolumeEncrypted` | One EBS volume in `nonRootVolumes`, as the device `/dev/sdb`, of that size in GiB, type (such as `gp3`) and encryption (`"true"` or `"false"`) |
+
+The Host Image never puts the thin pool on an EBS volume on its own. So a
+pool with a data volume also sets `THIN_POOL_DEVICE` in its `host.conf`.
+Nitro shows `/dev/sdb` as an NVMe disk, normally `/dev/nvme1n1`:
+
+```
+THIN_POOL_DEVICE=/dev/nvme1n1
+```
+
+Nitro does not promise that order. If the root disk is `nvme1n1`, the Host
+Image takes the one other unused NVMe disk instead
+([The thin pool device](../../hostimage/README.md#the-thin-pool-device)).
+
 ## The security group
 
-battery runs in the Operator's pod and calls each Host's `flintlockd` on
-TCP port 9090. CAPA's default node security group does not open that port.
-So at least one group in `additionalSecurityGroups` needs this inbound
-rule:
+A Host serves on two ports that CAPA's default node security group does
+not open:
+
+- battery runs in the Operator's pod and calls each Host's `flintlockd` on
+  TCP port 9090.
+- The Exec Agent serves on TCP port 10270. A consumer of the Client
+  Library dials it at the address in the claim's status.
+
+So the groups in `additionalSecurityGroups` need these inbound rules:
 
 | Protocol | Port | Source |
 |----------|------|--------|
 | TCP | 9090 | The Operator's pod network: the same ranges as `FLINTLOCKD_CLIENT_CIDRS` |
+| TCP | 10270 | The networks of the Client Library's consumers: usually the pod network |
 
 If your CNI masquerades pod traffic between Nodes, the traffic arrives
-from the source Node's address. Then add the node range as a source too,
-and to `FLINTLOCKD_CLIENT_CIDRS`. The Host's own firewall still admits only
-`FLINTLOCKD_CLIENT_CIDRS`.
+from the source Node's address. Then add the node range as a source of
+both rules, and to `FLINTLOCKD_CLIENT_CIDRS`. The Host's own firewall still
+admits only `FLINTLOCKD_CLIENT_CIDRS` to port 9090.
+
+Without the rule for port 10270, claims bind but nothing runs in them. A
+consumer off the Host fails with `dial tcp <host>:10270: i/o timeout`.
 
 `additionalSecurityGroups` is a list in `host-pool.yaml`, not a string.
 The settings object is never applied, so kustomize copies the list into
@@ -129,6 +195,11 @@ A consumer that runs services for its MicroVMs on the bridge gateway sets
 them commented out. Left out, guests reach only DHCP and DNS on the
 gateway.
 
+If guests need a service whose addresses lie in `PROTECTED_CIDRS`, such as
+a VPC interface endpoint in the node range, set `GUEST_ALLOWED_CIDRS` to
+those addresses, as /32 entries. The example has it commented out. See
+"Reaching a service inside a protected range" in `hostimage/README.md`.
+
 The file holds settings, never secrets. The bootstrap data goes to the
 instance as user-data, not through AWS Secrets Manager, because a Host has
 no instance profile.
@@ -157,9 +228,10 @@ not see this, so replace such a Machine by hand.
 ## Checks
 
 - `make test` runs `internal/manifests/capi_test.go`. It renders
-  `config/capi` and two filled-in pools in
+  `config/capi` and three filled-in pools in
   `internal/manifests/testdata/capi`, and checks them against the
-  requirements.
+  requirements. One of them, `pool-c`, is an `m8i.xlarge` pool with both
+  options.
 - `make capi-check` renders the same, and validates every object against
   the CRDs of Cluster API and CAPA, strictly: an unknown field fails. It
   downloads the CRDs from the pinned releases once, and checks their
