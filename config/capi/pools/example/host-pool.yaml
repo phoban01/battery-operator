@@ -26,11 +26,13 @@ data:
   clusterName: REPLACE-workload-cluster
   # The pool size: the number of Hosts.
   replicas: "1"
-  # One instance type. A Host needs KVM, so a metal instance, and an
-  # instance-store disk for the thin pool. Its architecture must be the
-  # AMI's, the AMI's battery.liquidmetal-x.dev/architecture tag: x86_64
-  # here. For an arm64 AMI, a Graviton metal size, such as c7gd.metal or
-  # c8gd.metal-24xl; Graviton's VM sizes have no nested virtualization.
+  # One instance type. A Host needs KVM: a metal instance, or a C8i, M8i or
+  # R8i size with nested virtualization (see the options below). It also
+  # needs a disk for the thin pool: a metal size with an instance-store
+  # disk, or an EBS data volume. Its architecture must be the AMI's, the
+  # AMI's battery.liquidmetal-x.dev/architecture tag: x86_64 here. For an
+  # arm64 AMI, a Graviton metal size, such as c7gd.metal or c8gd.metal-24xl;
+  # Graviton has no nested virtualization.
   instanceType: m6id.metal
   # The AMI published from the Host Image (make host-image-ami), by id, of
   # the instance type's architecture.
@@ -56,7 +58,8 @@ data:
   #/ root volume, in GiB, from the pool's settings.
   # The size of each Host's root volume, in GiB. It holds the operating
   # system, containerd's images, and the emptyDir volumes of the Host's
-  # pods. The thin pool is on the instance-store disk, not here.
+  # pods. The thin pool is on the instance-store disk or the data volume,
+  # not here.
   rootVolumeGiB: "100"
   #= docs/requirements/12-host-pool.md#host-pool
   #/ The Host Pool Templates SHALL default a Host pool's Kubernetes
@@ -71,6 +74,22 @@ data:
   # How long a Host's Node may stay not ready before its Machine is
   # replaced.
   unhealthySeconds: "300"
+  # Options for a C8i, M8i or R8i pool, which is not metal and has no
+  # instance-store disk (config/capi/README.md, "Options"). To use them,
+  # uncomment these keys, and add their Components to this pool's
+  # kustomization.yaml. A key without its Component does nothing.
+  #
+  # nestedVirtualization: KVM from nested virtualization. Its Component is
+  # host-pool-nested-virtualization.
+  # nestedVirtualization: enabled
+  #
+  # dataVolume*: an EBS volume for the thin pool, attached as /dev/sdb.
+  # Nitro shows it as /dev/nvme1n1: set THIN_POOL_DEVICE=/dev/nvme1n1 in
+  # host.conf below. gp3 gives 3000 IOPS and 125 MiB/s at any size. Its
+  # Component is host-pool-data-volume.
+  # dataVolumeGiB: "200"
+  # dataVolumeType: gp3
+  # dataVolumeEncrypted: "true"
   #= docs/requirements/12-host-pool.md#host-configuration
   #/ The Host Pool Templates SHALL set `FLINTLOCKD_CLIENT_CIDRS` and
   #/ `PROTECTED_CIDRS` in every Host configuration file they write.
