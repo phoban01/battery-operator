@@ -187,7 +187,10 @@ spec:
                             is_read_only).
                           type: boolean
                         sizeInMb:
-                          description: sizeInMb resizes the volume.
+                          description: |-
+                            sizeInMb is flintlock's size_in_mb. flintlock v0.16.0 accepts it and
+                            does nothing with it: a volume from a container image is as big as the
+                            Host's MICROVM_BASE_IMAGE_SIZE (hostimage/README.md, HI-087).
                           format: int32
                           minimum: 1
                           type: integer
@@ -369,7 +372,10 @@ spec:
                           is_read_only).
                         type: boolean
                       sizeInMb:
-                        description: sizeInMb resizes the volume.
+                        description: |-
+                          sizeInMb is flintlock's size_in_mb. flintlock v0.16.0 accepts it and
+                          does nothing with it: a volume from a container image is as big as the
+                          Host's MICROVM_BASE_IMAGE_SIZE (hostimage/README.md, HI-087).
                         format: int32
                         minimum: 1
                         type: integer
