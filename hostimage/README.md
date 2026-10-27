@@ -21,7 +21,7 @@ from flintlock-runner's `image/`, with `flr` names made `battery` names.
 | `build/` | The build steps the Containerfile runs |
 | `rootfs/` | Copied to `/`: units, `/usr/libexec/battery` scripts, configuration |
 | `selinux/` | The policy module |
-| `check.sh`, `check-thin-pool.sh`, `check-flintlockd-access.sh`, `check-flintlockd-certs.sh`, `check-guest-isolation.sh`, `check-gateway-service-egress.sh`, `check-selinux-contexts.sh` | The check stage, run inside the built image; all but `check.sh` run in `make host-image-lint` too |
+| `check.sh`, `check-thin-pool.sh`, `check-flintlockd-access.sh`, `check-flintlockd-certs.sh`, `check-guest-isolation.sh`, `check-gateway-service-egress.sh`, `check-microvm-disk-size.sh`, `check-selinux-contexts.sh` | The check stage, run inside the built image; all but `check.sh` run in `make host-image-lint` too |
 | `check-labels.sh`, `lint.sh` | Checks that run outside the image |
 | `publish-ami.sh` | Makes an AMI of a published image, on request only; see [Publishing an AMI](#publishing-an-ami) |
 | `pin-base.sh` | Pins a copy of the base in the Containerfile (`make host-image-base-pin`); see [Updating the base image](#updating-the-base-image) |
@@ -158,7 +158,7 @@ updates it on purpose, and a pull request shows the change.
 | `battery-network` | bridge `virbr-battery`, forwarding, NAT, guest firewall, `flintlockd`'s endpoint and who may connect to it | HI-030, HI-032 to HI-037, HI-067, HI-069, HI-070, HI-075 to HI-080, HI-083 |
 | `battery-dnsmasq` | DHCP and DNS on the bridge | HI-031 |
 | `battery-flintlockd-certs` | makes `/etc/battery/flintlockd` for the Exec Agent, owned by its user id and labelled for its container | HI-072 |
-| `containerd` | one containerd for the kubelet and for `flintlockd` | HI-040, HI-066, HI-081 |
+| `containerd` | one containerd for the kubelet and for `flintlockd`; `devmapper-config` first writes its configuration with the MicroVM base image size | HI-040, HI-066, HI-081, HI-087, HI-089 |
 | `flintlockd.path` | starts `flintlockd` once the Exec Agent has written its certificates | HI-071 |
 | `flintlockd` | `Requires=` the KVM gate, the thin pool, the bridge, the certificate directory and containerd; serves mutual TLS on the Host's internal address; reads registry configuration from `/etc/containerd/certs.d`; a stop or restart leaves the MicroVMs running | HI-040, HI-041, HI-043, HI-067, HI-068, HI-073, HI-081 |
 | `battery-flintlockd-restart.path` | restarts `flintlockd` when its serving certificate or client CA bundle changes | HI-071, HI-072 |
@@ -190,6 +190,7 @@ user-data.
 |-----|---------|---------|
 | `GUEST_SUBNET` | `10.220.0.0/16` | The bridge's IPv4 subnet, /29 or larger. The first address is the gateway. Keep it clear of the cluster's node, pod and Service ranges. See [Networking notes](#networking-notes) |
 | `THIN_POOL_DEVICE` | empty | Block device for the thin pool. Empty means detect the unused instance-store disk |
+| `MICROVM_BASE_IMAGE_SIZE` | `10GB` | The size of every MicroVM volume made from a container image: containerd's devmapper `base_image_size`. A whole number of `MB`, `GB` or `TB`, from 1GB to 16TB. It applies to images unpacked after it changes. See [MicroVM disk size](#microvm-disk-size) (HI-087, HI-088) |
 | `PROTECTED_CIDRS` | empty | Comma-separated IPv4 CIDRs no guest may reach, by address or through a Service: the node, pod and Service CIDRs of the cluster, and anything else. Empty protects nothing off the Host, and `battery-network` logs a warning |
 | `GUEST_ALLOWED_CIDRS` | empty | Comma-separated IPv4 CIDRs that guests may reach although they lie in `PROTECTED_CIDRS`, such as the addresses of a VPC interface endpoint in the node range. They never open the metadata service, the Host or its other interfaces. Empty allows nothing (HI-084 to HI-086). See [Reaching a service inside a protected range](#reaching-a-service-inside-a-protected-range) |
 | `HOST_RESERVE_VCPU` | `2` | CPUs the Host's own Node offers to pods |
@@ -232,6 +233,109 @@ The volume group is laid out as the pool (95%), its metadata (1%) and 4%
 left free for the pool's autoextension. The logical volume `thinpool` in
 the volume group `flintlock` is the pool `flintlock-thinpool`, which is
 containerd's `pool_name` and the Exec Agent's `--thin-pool`.
+
+### MicroVM disk size
+
+Every MicroVM volume that comes from a container image, the root volume
+and each additional volume, is `MICROVM_BASE_IMAGE_SIZE` big: 10 GB unless
+the Host configuration says otherwise (HI-087). A volume's `sizeInMb` on a
+Pool, battery's `size_in_mb`, and a flintlock-runner Profile's `size_mb`
+change nothing. A Host that runs MicroVMs with larger disks needs a larger
+`MICROVM_BASE_IMAGE_SIZE`.
+
+`devmapper-config`, an `ExecStartPre` of `containerd.service`, copies
+`/etc/containerd/config.toml` to `/run/battery/containerd.toml` with
+`base_image_size` set from `/run/battery/host.env`, and containerd starts
+with the copy. When `battery-host-config` has failed there is no
+`host.env`. containerd then starts with the image's 10GB (HI-089), and the
+devmapper snapshotter has no pool anyway, because the thin pool unit
+requires the Host configuration. A size that is not a whole number of `MB`,
+`GB` or `TB` from 1GB to 16TB fails `battery-host-config`, and with it
+`flintlockd` (HI-088). containerd counts in powers of 1024, so `10GB` is
+10 GiB.
+
+#### Why `sizeInMb` does nothing
+
+This was read from the source at the versions the image and the Operator
+pin, not tried on a Host.
+
+- battery v0.5.0 passes the size through. A Pool's `microvm_template` is
+  flintlock's `types.MicroVMSpec` (`api/proto/poolmgr/v1alpha1/types.proto`),
+  and `internal/reconciler/provision.go` clones it with `proto.Clone` and
+  sends it in `CreateMicroVM`. It sets only `id`, `namespace` and
+  `allow_guest_agent`. The Operator copies `sizeInMb` into the template
+  (`internal/controller/pool_convert.go`).
+- flintlock v0.16.0 drops it. `api/types/microvm.proto` documents
+  `Volume.size_in_mb` as "the size to resize this volume to", and
+  `infrastructure/grpc/convert.go` copies it into `models.Volume.Size`
+  (`core/models/volumes.go`). No other code reads that field.
+  `core/steps/runtime/volume_mount.go` (`getMountSpec`) builds a
+  `ports.ImageMountSpec` from the image name, the owner, the volume ID and
+  the use; the type has no size. `infrastructure/containerd/image_service.go`
+  (`snapshotAndMount`) calls the snapshotter's `Prepare` with two labels,
+  `flintlock/owner` and `flintlock/owner-usage`, and nothing else. Nothing
+  in flintlock runs `resize2fs` or `growpart`.
+- containerd v2.2.9's devmapper snapshotter has one size for everything.
+  In `plugins/snapshots/devmapper/snapshotter.go` (`createSnapshot`) a
+  snapshot without a parent gets `pool.CreateThinDevice(...,
+  config.BaseImageSizeBytes)` and `mkfs`; a snapshot with a parent gets
+  `pool.CreateSnapshotDevice(..., config.BaseImageSizeBytes)`. The one
+  label it reads or writes is `containerd.io/snapshot/devmapper/fstype`.
+  There is no size label, and nothing grows a device or its filesystem.
+- The guest does not grow it either. The Guest Images' root filesystem
+  (`guestimage/rootfs`) has no cloud-init, so no `growpart` or
+  `resize_rootfs`. None is needed: `mkfs` fills the device it makes.
+
+So a size above `base_image_size` is ignored, and so is one below it.
+Making `sizeInMb` work needs a change in flintlock: a size label that the
+snapshotter honours does not exist, so flintlock would have to grow the
+thin device and the filesystem itself.
+
+#### What a larger size costs
+
+The pool is thin. A device takes pool space only for the blocks written to
+it, and a MicroVM's volume shares the unwritten blocks of its image. A
+larger size costs space in three ways:
+
+- `mkfs`. containerd makes the filesystem once per image, on the device of
+  the image's first layer, with `lazy_itable_init=0` and
+  `lazy_journal_init=0`. So it writes every inode table and the whole
+  journal at once. With mke2fs's usual defaults the inode tables are about
+  1.6% of the size, so about 160 MiB at 10GB and 1.6 GiB at 100GB, plus
+  the journal. This is paid once for each image on the Host, not for each
+  MicroVM.
+- Guest writes. A MicroVM can write up to the full size, and every block it
+  writes is taken from the pool until the MicroVM is deleted
+  (`discard_blocks = true` returns it then).
+- Overcommit. The pool holds what the MicroVMs write, not what they could
+  write. Nothing checks that the sizes add up. containerd makes its devices
+  with `dmsetup` messages, not as LVM logical volumes, so LVM's thin pool
+  overcommit checks never see them, and neither battery nor the Operator
+  places MicroVMs by disk space. The image's LVM profile
+  (`flintlock-thinpool.profile`) grows the pool by 20% at 80% full, but
+  only into the 4% of the volume group that `battery-thin-pool` leaves free,
+  so it cannot grow far. When the pool is full, writes from every MicroVM
+  on the Host stall and then fail.
+
+Size the thin pool device for the number of MicroVMs a Host runs times
+what each writes, not times `MICROVM_BASE_IMAGE_SIZE`, and leave headroom.
+
+#### Changing the size on a running Host
+
+containerd uses the new size for devices it makes after it restarts. It
+does not resize the ones it has, and the thin pool need not be recreated.
+
+- An image unpacked after the change gets a filesystem of the new size.
+- An image unpacked before it keeps its old filesystem. A new MicroVM from
+  that image gets a device of the new size, because `CreateSnapshotDevice`
+  takes the configured size, but the filesystem in it keeps the old size,
+  and nothing grows it.
+
+So a Host that already has images in its pool keeps old-size disks for
+those images. Replacing the Host is the sure way to get the new size
+everywhere. Removing the image from containerd's `flintlock` namespace,
+once no MicroVM on the Host uses it, should make the next MicroVM unpack
+it afresh, but this has not been tried.
 
 ### flintlockd's clients
 

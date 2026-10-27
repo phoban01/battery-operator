@@ -12,15 +12,27 @@
 #/ The Host Image SHALL run `flintlockd`, its containerd and every
 #/ hypervisor process they start as systemd services outside the cgroup of
 #/ any Kubernetes pod.
+#
+#= docs/requirements/11-host-image.md#image-storage
+#/ The Host Image SHALL configure containerd's devicemapper
+#/ snapshotter with the MicroVM base image size that it reads from the Host
+#/ configuration file, and with 10 GB when none is set.
+# devmapper-config writes /run/battery/containerd.toml from
+# /etc/containerd/config.toml with base_image_size from the Host
+# configuration, and containerd reads that. It runs after
+# battery-host-config.service, which writes the size into host.env, and
+# without requiring it, so that containerd starts when the Host
+# configuration is invalid.
 [Unit]
 Description=containerd container runtime
 Documentation=https://containerd.io
-After=network.target dbus.service local-fs.target battery-thin-pool.service
+After=network.target dbus.service local-fs.target battery-host-config.service battery-thin-pool.service
 Wants=battery-thin-pool.service
 
 [Service]
 ExecStartPre=-/usr/sbin/modprobe overlay
-ExecStart=/usr/bin/containerd --config /etc/containerd/config.toml
+ExecStartPre=/usr/libexec/battery/devmapper-config
+ExecStart=/usr/bin/containerd --config /run/battery/containerd.toml
 Type=notify
 Delegate=yes
 KillMode=process

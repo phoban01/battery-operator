@@ -231,7 +231,7 @@ done
 if [ "$(systemctl is-enabled flintlockd.service 2>/dev/null)" = static ]; then ok "flintlockd.service starts only when flintlockd.path starts it"; else fail "flintlockd.service is $(systemctl is-enabled flintlockd.service 2>/dev/null), want static"; fi
 if [ -e "$UNITS/cloud-init-network.service" ]; then enabled cloud-init-network.service; else enabled cloud-init.service; fi
 refute "the distribution's dnsmasq.service is not enabled" systemctl is-enabled dnsmasq.service
-for s in host-config kvm-gate thin-pool network kubelet-config flintlockd-certs; do
+for s in host-config kvm-gate thin-pool network kubelet-config flintlockd-certs devmapper-config; do
   expect "$LIBEXEC/$s is executable and parses" sh -c "test -x $LIBEXEC/$s && bash -n $LIBEXEC/$s"
 done
 if command -v systemd-analyze >/dev/null 2>&1; then
@@ -364,7 +364,8 @@ host_config() { BATTERY_HOST_CONF=$1 "$LIBEXEC/host-config"; }
 #/ SHALL boot with its defaults for every setting.
 expect "host-config succeeds with no Host configuration file" host_config "$work/absent.conf"
 for kv in BATTERY_GUEST_SUBNET=10.220.0.0/16 BATTERY_GATEWAY=10.220.0.1 BATTERY_PREFIX=16 BATTERY_NETMASK=255.255.0.0 \
-  BATTERY_DHCP_START=10.220.0.10 BATTERY_DHCP_END=10.220.255.254 BATTERY_THIN_POOL_DEVICE= BATTERY_PROTECTED_CIDRS= \
+  BATTERY_DHCP_START=10.220.0.10 BATTERY_DHCP_END=10.220.255.254 BATTERY_THIN_POOL_DEVICE= BATTERY_MICROVM_BASE_IMAGE_SIZE=10GB \
+  BATTERY_PROTECTED_CIDRS= \
   BATTERY_HOST_RESERVE_VCPU=2 BATTERY_HOST_RESERVE_MEMORY_MB=4096 \
   BATTERY_HOST_CONTROL_PORTS=9090,8090,10248,10250,10255,10256,10270,1338 \
   BATTERY_EXEC_AGENT_UID=65532 BATTERY_FLINTLOCKD_CLIENT_CIDRS= \
@@ -660,6 +661,30 @@ if "$LIBEXEC/check-gateway-service-egress-cases" "$work"; then
   ok "gateway service egress cases (listed user ids kept from the metadata service and the control ports)"
 else
   fail "gateway service egress cases"
+fi
+
+#= docs/requirements/11-host-image.md#image-storage
+#= type=test
+#/ The Host Image SHALL configure containerd's devicemapper
+#/ snapshotter with the MicroVM base image size that it reads from the Host
+#/ configuration file, and with 10 GB when none is set.
+#
+#= docs/requirements/11-host-image.md#image-storage
+#= type=test
+#/ If the MicroVM base image size in the Host configuration file
+#/ is not a whole number of megabytes, gigabytes or terabytes from 1 GB to
+#/ 16 TB, then the Host Image SHALL NOT start `flintlockd` and SHALL report
+#/ the Host as not ready with the reason.
+#
+#= docs/requirements/11-host-image.md#image-storage
+#= type=test
+#/ If the Host environment file is absent when containerd starts,
+#/ then the Host Image SHALL start containerd with the base image size of the
+#/ image's own containerd configuration.
+if "$LIBEXEC/check-microvm-disk-size-cases" "$work"; then
+  ok "MicroVM disk size cases (default, valid and invalid sizes, no host.env)"
+else
+  fail "MicroVM disk size cases"
 fi
 # nft -c needs a netlink socket, which a build container may not grant.
 nft_out=$(nft -c -f "$nftf" 2>&1)
