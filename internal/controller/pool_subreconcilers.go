@@ -50,7 +50,7 @@ func poolChain() reconcile.Chain[*poolScope] {
 		poolDeclaration{},
 		poolUpdate{},
 		poolRejection{},
-		poolReseed{},
+		poolStall{},
 		poolCounts{},
 		poolExhaustion{},
 		poolReadiness{},

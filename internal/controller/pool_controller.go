@@ -65,10 +65,10 @@ type PoolReconciler struct {
 	// recorder.
 	Recorder events.EventRecorder
 
-	// reseeds is the memory of stalled Pools that poolReseed keeps across
-	// reconciles, a workaround for battery v0.3.3 (PO-035 to PO-038).
-	reseedsOnce sync.Once
-	reseeds     *poolReseeds
+	// stalls is the memory of stalled Pools that poolStall keeps across
+	// reconciles, for the NotFilling reason (PO-045).
+	stallsOnce sync.Once
+	stalls     *poolStalls
 }
 
 // +kubebuilder:rbac:groups=battery.liquidmetal-x.dev,resources=pools,verbs=get;list;watch;update;patch
@@ -79,11 +79,11 @@ type PoolReconciler struct {
 
 // Reconcile runs the Pool Controller's chain for one Pool.
 func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	r.reseedsOnce.Do(func() { r.reseeds = newPoolReseeds() })
+	r.stallsOnce.Do(func() { r.stalls = newPoolStalls() })
 	pool := &batteryv1alpha1.Pool{}
 	if err := r.Get(ctx, req.NamespacedName, pool); err != nil {
 		if apierrors.IsNotFound(err) {
-			r.reseeds.forget(req.NamespacedName)
+			r.stalls.forget(req.NamespacedName)
 		}
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
@@ -92,7 +92,7 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		clk = clock.Real{}
 	}
 	s := newPoolScope(pool, r.Client, r.Battery, r.Hosts, logf.FromContext(ctx), clk)
-	s.Reseeds = r.reseeds
+	s.Stalls = r.stalls
 	res, chainErr := poolChain().Run(ctx, s)
 	patchErr := s.Patch(ctx)
 	return res.Ctrl(), errors.Join(chainErr, patchErr)

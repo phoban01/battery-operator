@@ -39,7 +39,7 @@ func TestDocumentedDifferences(t *testing.T) {
 		host := h.stubs[hostA]
 		// A REPLACE_ON_DELETE Pool whose first create fails has no deletion
 		// to replace; battery would leave it short, the fake's tick fills it.
-		// Config.SeedOnce turns this difference off (TestSeedOnce).
+		// battery v0.4.0 fills it too (BA-075), so this is no difference now.
 		spec := h.spec("pool", 1, hostA)
 		spec.Replenishment = replenishment{Type: poolmgrv1.ReplenishmentStrategyType_REPLACE_ON_DELETE}
 		h.failSeed(host, spec)

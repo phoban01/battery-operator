@@ -57,13 +57,13 @@ type poolScope struct {
 	// for the Pool again (BA-074).
 	sent bool
 
-	// notFilling is set by poolReseed when a reseed has not filled the
-	// Pool, for poolReadiness (PO-039).
+	// notFilling is set by poolStall when the Pool has been stalled with
+	// the same shortfall for a minute, for poolReadiness (PO-045).
 	notFilling *poolNotFilling
 
-	// Reseeds is the Pool Controller's memory of its stalled Pools, for
-	// poolReseed; nil turns the reseed off.
-	Reseeds *poolReseeds
+	// Stalls is the Pool Controller's memory of its stalled Pools, for
+	// poolStall; nil turns the NotFilling reason off.
+	Stalls *poolStalls
 }
 
 func newPoolScope(pool *batteryv1alpha1.Pool, c client.Client, b battery.Client, hosts PoolHosts,

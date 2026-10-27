@@ -58,11 +58,6 @@ limitations under the License.
 //
 // The fake deliberately differs from battery in these ways:
 //
-//   - With Config.SeedOnce, the control loop's tick tops up an
-//     event-driven Pool only on the first tick after its CreatePool or
-//     UpdatePool, as battery v0.3.3 seeded such a Pool, so that a test
-//     can reach a Pool that stays short (TD-007). Without it the tick
-//     tops every Pool up to its target, as battery v0.4.0 does (BA-075).
 //   - The fake does not check a Host's flintlock version; battery refuses
 //     to create a MicroVM on a Host whose ServerInfo reports a version
 //     older than v0.15.2.
