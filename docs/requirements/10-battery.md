@@ -415,8 +415,9 @@ battery v0.3.3 seeded a Pool of these two strategies once, when its
 reconciler started, marked it seeded whether or not the provisions
 succeeded, and after that provisioned for it only on a claim or a
 deletion, so a Pool whose seed failed stayed short until the next claim,
-deletion or restart; the Pool Controller works around that (03-pools.md,
-PO-035 to PO-038). battery v0.4.0's reconciler reconciles when it starts,
+deletion or restart; the Pool Controller worked around that until #242
+(03-pools.md, PO-036 to PO-038, withdrawn). battery v0.4.0's reconciler
+reconciles when it starts,
 on every tick and on every claim and deletion notification, each time
 provisioning the strategy's shortfall, so a failed provision is tried
 again on the next tick for every strategy (liquidmetal-dev/battery
@@ -514,11 +515,7 @@ in its code as an exception:
   (BA-050);
 - it reaches its Hosts over connections the test gives it, and reads no
   certificate (BA-081); a Host is reachable for `AddHost` and `UpdateHost`
-  when the test's `Dial` gives a connection for its address (BA-080);
-- where a test sets `SeedOnce` (TD-007), its tick tops up an
-  event-driven Pool only on the first tick after its `CreatePool` or
-  `UpdatePool`, as battery v0.3.3 seeded such a Pool, where battery
-  v0.4.0 tops it up on every tick (BA-075).
+  when the test's `Dial` gives a connection for its address (BA-080).
 
 The pools model (`specs/quint/pools.qnt`) has no phases between created
 and available, so no MicroVM is being provisioned when `UpdatePool` comes

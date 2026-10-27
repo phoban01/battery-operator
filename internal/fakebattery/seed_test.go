@@ -42,14 +42,6 @@ func (h *harness) failSeed(host *testHost, spec poolSpec) {
 	host.set(func(s *testHost) { s.createErr = nil })
 }
 
-//= docs/requirements/08-test-doubles.md#fake-battery
-//= type=test
-//# Where a test sets `SeedOnce`, the fake battery SHALL
-//# provision for a Pool whose replenishment strategy is `IMMEDIATE_ON_LEASE`
-//# or `REPLACE_ON_DELETE` on its tick only on the first tick after each
-//# `CreatePool` or `UpdatePool` of the Pool, whether or not those provisions
-//# succeed, as battery v0.3.3 seeded such a Pool.
-
 //= docs/requirements/10-battery.md#seeding
 //= type=test
 //# When a Pool's reconciler starts, and on each of its ticks
@@ -58,8 +50,8 @@ func (h *harness) failSeed(host *testHost, spec poolSpec) {
 //# and its size less its available, claiming, leased and provisioning
 //# MicroVMs for `REPLACE_ON_DELETE`.
 
-// TestTickTopsUpAnEventDrivenPool covers BA-075: without SeedOnce, an
-// event-driven Pool whose seed fails is filled by the next tick, as
+// TestTickTopsUpAnEventDrivenPool covers BA-075: an event-driven Pool
+// whose seed fails is filled by the next tick, as
 // battery v0.4.0's reconciler provisions the shortfall on every tick, and
 // a Pool at its size gets nothing more.
 func TestTickTopsUpAnEventDrivenPool(t *testing.T) {
@@ -87,84 +79,4 @@ func TestTickTopsUpAnEventDrivenPool(t *testing.T) {
 			}
 		})
 	}
-}
-
-// TestSeedOnce covers TD-007: with Config.SeedOnce, an event-driven Pool
-// whose seed fails stays short however many ticks pass, as in battery
-// v0.3.3, and UpdatePool, which starts a new reconciler, seeds it again. A
-// MIN_SIZE_THRESHOLD Pool still tops up on the tick.
-func TestSeedOnce(t *testing.T) {
-	for _, typ := range []poolmgrv1.ReplenishmentStrategyType{
-		poolmgrv1.ReplenishmentStrategyType_IMMEDIATE_ON_LEASE,
-		poolmgrv1.ReplenishmentStrategyType_REPLACE_ON_DELETE,
-	} {
-		t.Run(typ.String()+" stays short after a failed seed", func(t *testing.T) {
-			h := newHarness(t, Config{SeedOnce: true}, hostA)
-			host := h.stubs[hostA]
-			spec := h.spec("pool", 2, hostA)
-			spec.Replenishment = replenishment{Type: typ}
-			h.failSeed(host, spec)
-			if created, _ := host.counts(); created != 0 {
-				t.Fatalf("%d MicroVMs created while the Host refused, want none", created)
-			}
-
-			for range 3 {
-				h.advance(testInterval)
-				if vms := h.b.VMs(); len(vms) != 0 {
-					t.Fatalf("the tick provisioned %v for a seeded %s Pool, want nothing", vms, typ)
-				}
-			}
-			if st := h.pool("pool").Status; st.Available != 0 || st.Provisioning != 0 {
-				t.Fatalf("status after the ticks = %+v, want the Pool still empty", st)
-			}
-
-			// UpdatePool with the same spec starts a new reconciler, which
-			// seeds the whole size again.
-			if _, err := h.client.UpdatePool(h.ctx, spec); err != nil {
-				t.Fatalf("UpdatePool: %v", err)
-			}
-			for range spec.Size {
-				h.waitEvent(poolmgrv1.EventType_VM_AVAILABLE)
-			}
-			if st := h.pool("pool").Status; st.Available != 2 {
-				t.Fatalf("status after UpdatePool = %+v, want 2 available", st)
-			}
-		})
-	}
-
-	t.Run("the seed fills the Pool to its size", func(t *testing.T) {
-		h := newHarness(t, Config{SeedOnce: true}, hostA)
-		spec := h.spec("pool", 3, hostA)
-		spec.Replenishment = replenishment{Type: poolmgrv1.ReplenishmentStrategyType_REPLACE_ON_DELETE}
-		h.createPool(spec)
-		if st := h.pool("pool").Status; st.Available != 3 {
-			t.Fatalf("status after the seed = %+v, want 3 available", st)
-		}
-	})
-
-	t.Run("a claim still replenishes an IMMEDIATE_ON_LEASE Pool", func(t *testing.T) {
-		h := newHarness(t, Config{SeedOnce: true}, hostA)
-		h.createPool(h.spec("pool", 1, hostA))
-		h.claim("pool")
-		h.waitEvent(poolmgrv1.EventType_VM_AVAILABLE)
-		if st := h.pool("pool").Status; st.Available != 1 || st.Leased != 1 {
-			t.Fatalf("status after the claim = %+v, want 1 available and 1 leased", st)
-		}
-	})
-
-	t.Run("MIN_SIZE_THRESHOLD still tops up on the tick", func(t *testing.T) {
-		h := newHarness(t, Config{SeedOnce: true}, hostA)
-		host := h.stubs[hostA]
-		spec := h.spec("pool", 1, hostA)
-		spec.Replenishment = replenishment{
-			Type:    poolmgrv1.ReplenishmentStrategyType_MIN_SIZE_THRESHOLD,
-			MinSize: minSize(1),
-		}
-		h.failSeed(host, spec)
-		h.tick()
-		h.waitEvent(poolmgrv1.EventType_VM_AVAILABLE)
-		if st := h.pool("pool").Status; st.Available != 1 {
-			t.Fatalf("status after the tick = %+v, want the Pool filled", st)
-		}
-	})
 }
