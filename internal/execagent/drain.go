@@ -109,7 +109,12 @@ func (d *drainGuard) reconcile(ctx context.Context, host *corev1.Node) error {
 	if d.vms != nil {
 		// Likewise without flintlockd's answer: a flintlockd that is down
 		// may still have MicroVMs, which battery deletes once it answers.
-		if onHost, err = d.vms.CountMicroVMs(ctx); err != nil {
+		// The call is bounded as the readiness probe's is, so a flintlockd
+		// that hangs does not stall the Node report.
+		listCtx, cancel := context.WithTimeout(ctx, d.cfg.CallTimeout)
+		onHost, err = d.vms.CountMicroVMs(listCtx)
+		cancel()
+		if err != nil {
 			return fmt.Errorf("listing the microvms on this host: %w", err)
 		}
 	}
