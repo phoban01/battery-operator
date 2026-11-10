@@ -179,7 +179,8 @@ func (r *InventoryReconciler) SetupWithManager(mgr ctrl.Manager) error {
 }
 
 // nodeReportChanged passes a Node's creation and deletion, and an update
-// that changes whether it is schedulable or its Node report's readiness or
+// that changes whether it is schedulable, whether the cluster autoscaler
+// has tainted it for deletion, or its Node report's readiness or
 // flintlockd address.
 var nodeReportChanged = predicate.Funcs{
 	UpdateFunc: func(e event.UpdateEvent) bool {
@@ -189,6 +190,7 @@ var nodeReportChanged = predicate.Funcs{
 			return true
 		}
 		return o.Spec.Unschedulable != n.Spec.Unschedulable ||
+			inventory.AutoscalerTainted(o) != inventory.AutoscalerTainted(n) ||
 			o.DeletionTimestamp.IsZero() != n.DeletionTimestamp.IsZero() ||
 			o.Annotations[inventory.AnnotationReady] != n.Annotations[inventory.AnnotationReady] ||
 			o.Annotations[inventory.AnnotationFlintlockdAddress] != n.Annotations[inventory.AnnotationFlintlockdAddress]

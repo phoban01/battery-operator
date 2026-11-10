@@ -15,7 +15,8 @@ every change (IN-010, IN-012 to IN-014, DP-006 to DP-008, all withdrawn).
 ## Admission {#admission}
 
 - **IN-001** The Inventory Controller SHALL treat a Node as a Host only while
-  the Node's Node report says the Host is ready and the Node is schedulable.
+  the Node's Node report says the Host is ready, the Node is schedulable,
+  and the Node carries no `ToBeDeletedByClusterAutoscaler` taint.
 - **IN-002** (withdrawn): replaced by IN-015 and IN-016.
 - **IN-003** The Inventory Controller SHALL give battery each Host under the
   Node's name, at the `flintlockd` address the Host's Node report gives.
@@ -23,42 +24,56 @@ every change (IN-010, IN-012 to IN-014, DP-006 to DP-008, all withdrawn).
   Host's `flintlockd` over TLS, verifying the serving certificate against
   the configured certificate authority and presenting the Operator's client
   certificate for `flintlockd`.
-- **IN-015** When a Node that is a Host is cordoned, or its Node report
-  says the Host is not ready or gives no `flintlockd` address, the
-  Inventory Controller SHALL cordon the Host in battery with `CordonHost`,
-  and SHALL keep it in battery's Hosts.
+- **IN-015** When a Node that is a Host has a Node report that says the
+  Host is not ready or gives no `flintlockd` address, the Inventory
+  Controller SHALL cordon the Host in battery with `CordonHost`, and SHALL
+  keep it in battery's Hosts.
 - **IN-016** When battery holds a Host whose Node does not exist or is being
-  deleted, the Inventory Controller SHALL cordon the Host and remove it with
+  deleted, the Inventory Controller SHALL drain the Host and remove it with
   `RemoveHost`, and SHALL try again while battery refuses because a Pool
   names the Host or a MicroVM is still on it.
+- **IN-021** When a Node that is a Host is cordoned, or carries the
+  `ToBeDeletedByClusterAutoscaler` taint, the Inventory Controller SHALL
+  drain the Host in battery with `DrainHost`, and SHALL keep it in
+  battery's Hosts.
 
 A Host joins only after its own Exec Agent has checked it (decision 10), so
 the Inventory Controller never admits a Node that could not run MicroVMs.
 
-A Host that stops being one is cordoned, not removed, while its Node
-exists (IN-015). battery then places no new MicroVM there (BA-084), and
-every MicroVM already there stays: a claim Bound on it keeps its Lease and
+A Host that stops being one is kept in battery while its Node exists,
+cordoned or draining, never removed (IN-015, IN-021). battery then places
+no new MicroVM there (BA-084). A claim Bound on it keeps its Lease and
 runs to its end, and the Exec Agent holds the Node's drain open until it
-does (EA-040). The two cases that cordon are these:
+does (EA-040). The two cases differ in what happens to the MicroVMs that
+are not leased:
 
-- A cordoned Node is most often one being drained for maintenance, and it
-  comes back. Uncordoning the Host is then one call, and battery keeps its
-  record of the Host and of every MicroVM on it.
+- A cordoned Node is one being drained: by hand for maintenance, or by the
+  cluster autoscaler, which taints the Node `ToBeDeletedByClusterAutoscaler`
+  before it drains and deletes it. Either way the machine may go, so the
+  Host is drained (IN-021): battery deletes every MicroVM on it that is not
+  leased, now and on every sweep (BA-090, BA-091), and the Pools refill on
+  the other Hosts. The Exec Agent holds the Node's drain open while any
+  MicroVM is on the Host (EA-042), so the Node's drain completes once the
+  Host is empty, and not before. A Node that comes back is uncordoned in
+  battery (IN-017), which ends the drain (BA-094), and the Pools fill it
+  again.
 - A Host whose report says not ready may have a `flintlockd` that is down.
-  battery refuses to remove a Host while any MicroVM is on it (BA-083), so a
-  removal would fail anyway. Kept, the Host lets battery delete its
-  MicroVMs once `flintlockd` answers again. A claim on such a Host shows it
-  at once, in its condition `HostReady` (CL-051).
+  battery can delete nothing on it, so the Host is only cordoned (IN-015),
+  and keeps every MicroVM for when `flintlockd` answers again. A claim on
+  such a Host shows it at once, in its condition `HostReady` (CL-051).
 
-A deleted Node is gone for good, so its Host is removed (IN-016). battery
-allows that only once no Pool names the Host and no MicroVM is counted
-against it. The Pool Controller drops the Host from every Pool once the
-Inventory Controller takes it away (IN-018), and the MicroVMs on it go as
-their Leases end. Until then the Host stays in battery, cordoned, and the
+A deleted Node is gone for good, so its Host is drained and removed
+(IN-016). battery allows the removal only once no Pool names the Host and
+no MicroVM is counted against it. The Pool Controller drops the Host from
+every Pool once the Inventory Controller takes it away (IN-018), the drain
+deletes the MicroVMs that are not leased, and the leased ones go as their
+Leases end. Until then the Host stays in battery, draining, and the
 Inventory Controller tries again every `--inventory-remove-retry`, 30
 seconds by default. If the Host's machine is gone too, battery cannot
 delete the MicroVMs on it, and the Host stays; this is battery's rule, so
-that it never loses track of a MicroVM.
+that it never loses track of a MicroVM. Draining before the machine goes
+(IN-021) is what keeps that case rare: a Node the autoscaler or a drain by
+hand takes away is empty before its machine is.
 
 IN-016 also removes a Host that battery holds and no Node names at all:
 one left behind by a Node deleted while the Operator was down, and the

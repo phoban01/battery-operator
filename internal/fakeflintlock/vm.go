@@ -289,3 +289,7 @@ func newUID() string {
 	_, _ = rand.Read(b[:]) // crypto/rand.Read never fails.
 	return hex.EncodeToString(b[:])
 }
+
+// DeleteMicroVM deletes the MicroVM uid as a DeleteMicroVM call would, for
+// a test that sets the Host's state directly. An unknown uid is NOT_FOUND.
+func (s *Server) DeleteMicroVM(uid string) error { return s.deleteMicroVM(uid) }

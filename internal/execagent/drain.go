@@ -42,10 +42,17 @@ const (
 	labelDrainGuard = Prefix + "drain-guard"
 )
 
+// MicroVMCounter counts the MicroVMs on the Host, as its flintlockd reports
+// them. Flintlockd implements it.
+type MicroVMCounter interface {
+	CountMicroVMs(ctx context.Context) (int, error)
+}
+
 // drainGuard holds an eviction-based drain of the Host's Node open while
-// claims are Bound on the Host. The Host's MicroVMs are no pods, so a drain
-// would otherwise evict everything it can see and complete under a
-// running command.
+// claims are Bound on the Host, or any MicroVM is on it. The Host's
+// MicroVMs are no pods, so a drain would otherwise evict everything it can
+// see and complete under a running command, or before the warm MicroVMs
+// the Inventory Controller has battery drain from the Host are gone.
 //
 // It remembers what it last did and talks to the API server only when
 // that has to change; every resync period it forgets, so that a guard
@@ -56,13 +63,15 @@ type drainGuard struct {
 	clk      clock.Clock
 	kube     kubernetes.Interface
 	claims   ClaimLookup
+	vms      MicroVMCounter
 	hostNode string
 	resync   time.Duration
 
-	synced     time.Time
-	guardKnown bool
-	guard      bool
-	abandoned  map[string]bool
+	synced       time.Time
+	guardKnown   bool
+	guard        bool
+	abandoned    map[string]bool
+	abandonedVMs bool
 }
 
 // GuardName is the name of the guard pod and budget of a Host's Node.
@@ -73,10 +82,17 @@ func GuardName(hostNode string) string { return GuardNamePrefix + hostNode }
 //# eviction-based drain of the Host's Node open, and SHALL let the drain
 //# complete when none remain or when the configured drain timeout elapses.
 
-// reconcile places the guard while claims are Bound on the Host and
-// removes it when none are, or once the Host's Node has been unschedulable
-// for the drain timeout, at which point the claims still Bound are logged
-// as abandoned. When the Node was first seen unschedulable is kept on the
+//= docs/requirements/05-exec-agent.md#drain
+//# While its Host's `flintlockd` reports any MicroVM, the Exec
+//# Agent SHALL hold the drain of EA-040 open as for a Bound claim, and SHALL
+//# let the drain complete when none remains or when the configured drain
+//# timeout elapses.
+
+// reconcile places the guard while claims are Bound on the Host or
+// MicroVMs are on it, and removes it when neither is, or once the Host's
+// Node has been unschedulable for the drain timeout, at which point the
+// claims still Bound and the MicroVMs still there are logged as
+// abandoned. When the Node was first seen unschedulable is kept on the
 // Node itself, so that a restart of the agent does not restart the
 // timeout.
 func (d *drainGuard) reconcile(ctx context.Context, host *corev1.Node) error {
@@ -89,16 +105,30 @@ func (d *drainGuard) reconcile(ctx context.Context, host *corev1.Node) error {
 		// is: removing it could let a drain through under a running command.
 		return fmt.Errorf("listing the claims bound on this host: %w", err)
 	}
+	onHost := 0
+	if d.vms != nil {
+		// Likewise without flintlockd's answer: a flintlockd that is down
+		// may still have MicroVMs, which battery deletes once it answers.
+		// The call is bounded as the readiness probe's is, so a flintlockd
+		// that hangs does not stall the Node report.
+		listCtx, cancel := context.WithTimeout(ctx, d.cfg.CallTimeout)
+		onHost, err = d.vms.CountMicroVMs(listCtx)
+		cancel()
+		if err != nil {
+			return fmt.Errorf("listing the microvms on this host: %w", err)
+		}
+	}
+	held := len(bound) > 0 || onHost > 0
 
 	started, drainTracked := drainStarted(host)
 	if !host.Spec.Unschedulable {
-		d.abandoned = nil
+		d.abandoned, d.abandonedVMs = nil, false
 		if drainTracked {
 			if err := patchNodeAnnotations(ctx, d.kube, d.hostNode, map[string]any{AnnotationDrainStarted: nil}); err != nil {
 				return err
 			}
 		}
-		return d.setGuard(ctx, host, len(bound) > 0)
+		return d.setGuard(ctx, host, held)
 	}
 
 	if !drainTracked {
@@ -108,11 +138,11 @@ func (d *drainGuard) reconcile(ctx context.Context, host *corev1.Node) error {
 		}); err != nil {
 			return err
 		}
-		d.log.Info("Recorded the start of a drain of the Host's Node; Bound claims hold it open for at most the drain timeout",
-			"node", d.hostNode, "boundClaims", len(bound), "drainTimeout", d.cfg.DrainTimeout.String())
+		d.log.Info("Recorded the start of a drain of the Host's Node; Bound claims and MicroVMs hold it open for at most the drain timeout",
+			"node", d.hostNode, "boundClaims", len(bound), "microVMs", onHost, "drainTimeout", d.cfg.DrainTimeout.String())
 	}
 
-	if waited := d.clk.Now().Sub(started); len(bound) > 0 && waited >= d.cfg.DrainTimeout {
+	if waited := d.clk.Now().Sub(started); held && waited >= d.cfg.DrainTimeout {
 		for _, c := range bound {
 			if d.abandoned[c.String()] {
 				continue
@@ -124,9 +154,14 @@ func (d *drainGuard) reconcile(ctx context.Context, host *corev1.Node) error {
 			d.log.Info("Abandoned a Bound claim: the drain timeout elapsed and the drain of the Host's Node was let through",
 				"claim", c.String(), "microVM", c.VMUID, "node", d.hostNode, "waited", waited.String(), "drainTimeout", d.cfg.DrainTimeout.String())
 		}
+		if onHost > 0 && !d.abandonedVMs {
+			d.abandonedVMs = true
+			d.log.Info("Abandoned the MicroVMs on the Host: the drain timeout elapsed and the drain of the Host's Node was let through",
+				"microVMs", onHost, "node", d.hostNode, "waited", waited.String(), "drainTimeout", d.cfg.DrainTimeout.String())
+		}
 		return d.setGuard(ctx, host, false)
 	}
-	return d.setGuard(ctx, host, len(bound) > 0)
+	return d.setGuard(ctx, host, held)
 }
 
 // drainStarted reads when the agent first saw the Node unschedulable.

@@ -207,6 +207,8 @@ of date. `make duvet-models-write` rewrites it. `type=test` and
 | BA-084 | `specs/quint/pools.qnt` |
 | BA-086 | `specs/quint/pools.qnt` |
 | BA-089 | `specs/quint/pools.qnt` |
+| BA-090 | `specs/quint/pools.qnt` |
+| BA-091 | `specs/quint/pools.qnt` |
 | CL-001 | `specs/quint/claims.qnt` |
 | CL-002 | `specs/quint/claims.qnt` |
 | CL-003 | `specs/quint/claims.qnt` |
@@ -259,6 +261,7 @@ of date. `make duvet-models-write` rewrites it. `type=test` and
 | IN-018 | `specs/quint/pools.qnt` |
 | IN-019 | `specs/quint/pools.qnt` |
 | IN-020 | `specs/quint/pools.qnt` |
+| IN-021 | `specs/quint/pools.qnt` |
 | PO-001 | `specs/quint/pools.qnt` |
 | PO-002 | `specs/quint/pools.qnt` |
 | PO-003 | `specs/quint/pools.qnt` |

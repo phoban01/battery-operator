@@ -484,6 +484,10 @@ func heldHost(name, addr string) battery.Host {
 // Changes to a Node.
 func cordon(n *corev1.Node)   { n.Spec.Unschedulable = true }
 func uncordon(n *corev1.Node) { n.Spec.Unschedulable = false }
+func taint(n *corev1.Node) {
+	n.Spec.Taints = append(n.Spec.Taints, corev1.Taint{Key: TaintToBeDeletedByClusterAutoscaler, Value: "1762775000", Effect: corev1.TaintEffectNoSchedule})
+}
+func untaint(n *corev1.Node)  { n.Spec.Taints = nil }
 func notReady(n *corev1.Node) { n.Annotations[AnnotationReady] = "false" }
 func noAddress(n *corev1.Node) {
 	delete(n.Annotations, AnnotationFlintlockdAddress)

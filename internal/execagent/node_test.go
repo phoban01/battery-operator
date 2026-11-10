@@ -31,6 +31,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8stypes "k8s.io/apimachinery/pkg/types"
 
+	"github.com/liquidmetal-dev/flintlock/api/types"
+
 	"github.com/phoban01/battery-operator/internal/execagent"
 	"github.com/phoban01/battery-operator/internal/fakeflintlock"
 	"github.com/phoban01/battery-operator/internal/hostcert"
@@ -230,6 +232,67 @@ func (noClaims) BoundOnHost(context.Context, string) ([]execagent.Claim, error) 
 //# The Exec Agent SHALL hold a drain open only with a guard pod
 //# and a PodDisruptionBudget of its own, both bound to its own Host's Node.
 
+// guardChecks returns, for the fixture's Host, whether its guard pod and
+// budget are both there, and whether both are gone.
+func guardChecks(ctx context.Context, f *fixture) (guarded, gone func() bool) {
+	pods := f.host.Kube.CoreV1().Pods(agentNamespace)
+	pdbs := f.host.Kube.PolicyV1().PodDisruptionBudgets(agentNamespace)
+	name := execagent.GuardName(f.host.Node)
+	guarded = func() bool {
+		_, podErr := pods.Get(ctx, name, metav1.GetOptions{})
+		_, pdbErr := pdbs.Get(ctx, name, metav1.GetOptions{})
+		return podErr == nil && pdbErr == nil
+	}
+	gone = func() bool {
+		_, podErr := pods.Get(ctx, name, metav1.GetOptions{})
+		_, pdbErr := pdbs.Get(ctx, name, metav1.GetOptions{})
+		return apierrors.IsNotFound(podErr) && apierrors.IsNotFound(pdbErr)
+	}
+	return guarded, gone
+}
+
+//= docs/requirements/05-exec-agent.md#drain
+//= type=test
+//# While its Host's `flintlockd` reports any MicroVM, the Exec
+//# Agent SHALL hold the drain of EA-040 open as for a Bound claim, and SHALL
+//# let the drain complete when none remains or when the configured drain
+//# timeout elapses.
+
+// TestDrainGuardHoldsForMicroVMs checks that a MicroVM on the Host, with
+// no claim Bound, puts the guard on the Host's Node, that the guard goes
+// once flintlockd reports no MicroVM, and that on a cordoned Node a
+// MicroVM that stays holds the guard only until the drain timeout.
+func TestDrainGuardHoldsForMicroVMs(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f := newFixture(t, hostOptions{DrainTimeout: 2 * time.Second})
+	guarded, gone := guardChecks(ctx, f)
+
+	// The fixture's Host starts with one MicroVM on it.
+	eventually(t, "the guard to be placed for the microvm on the host", guarded)
+	if err := f.host.Fake.DeleteMicroVM(f.host.VMUID); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the guard to go when no microvm is on the host", gone)
+
+	vm, err := f.host.Fake.CreateMicroVM(&types.MicroVMSpec{Id: "warm", Namespace: "other"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the guard to be placed again for a microvm in another namespace", guarded)
+	if _, err := f.host.Kube.CoreV1().Nodes().Patch(ctx, f.host.Node, k8stypes.MergePatchType,
+		[]byte(`{"spec":{"unschedulable":true}}`), metav1.PatchOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the guard to go when the drain timeout has passed", gone)
+	if !strings.Contains(f.host.Log(), "Abandoned the MicroVMs on the Host") {
+		t.Errorf("the abandoned microvms were not logged:\n%s", f.host.Log())
+	}
+	if err := f.host.Fake.DeleteMicroVM(vm.GetSpec().GetUid()); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // TestDrainGuard checks that a Bound claim on the Host puts a guard pod on
 // the Host's Node under a budget that allows no disruption, and that the
 // guard goes when the claim does. With a claim still Bound on a cordoned
@@ -242,17 +305,14 @@ func TestDrainGuard(t *testing.T) {
 	pods := f.host.Kube.CoreV1().Pods(agentNamespace)
 	pdbs := f.host.Kube.PolicyV1().PodDisruptionBudgets(agentNamespace)
 	name := execagent.GuardName(f.host.Node)
-	guarded := func() bool {
-		_, podErr := pods.Get(ctx, name, metav1.GetOptions{})
-		_, pdbErr := pdbs.Get(ctx, name, metav1.GetOptions{})
-		return podErr == nil && pdbErr == nil
-	}
-	gone := func() bool {
-		_, podErr := pods.Get(ctx, name, metav1.GetOptions{})
-		_, pdbErr := pdbs.Get(ctx, name, metav1.GetOptions{})
-		return apierrors.IsNotFound(podErr) && apierrors.IsNotFound(pdbErr)
-	}
+	guarded, gone := guardChecks(ctx, f)
 
+	// The fixture's MicroVM would hold the guard on its own (EA-042); this
+	// test is about the claims.
+	if err := f.host.Fake.DeleteMicroVM(f.host.VMUID); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the guard to go with the host's microvm", gone)
 	time.Sleep(300 * time.Millisecond)
 	if !gone() {
 		t.Fatal("a guard was placed with no claim bound on the host")

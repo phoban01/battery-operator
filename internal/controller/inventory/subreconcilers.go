@@ -57,9 +57,10 @@ func (Admit) Reconcile(_ context.Context, s *Scope) (reconcile.Result, error) {
 		}
 		//= docs/requirements/04-inventory.md#admission
 		//# The Inventory Controller SHALL treat a Node as a Host only while
-		//# the Node's Node report says the Host is ready and the Node is schedulable.
+		//# the Node's Node report says the Host is ready, the Node is schedulable,
+		//# and the Node carries no `ToBeDeletedByClusterAutoscaler` taint.
 		ready := n.Annotations[AnnotationReady] == annotationTrue
-		schedulable := !n.Spec.Unschedulable
+		schedulable := !n.Spec.Unschedulable && !AutoscalerTainted(n)
 
 		//= docs/requirements/04-inventory.md#admission
 		//# The Inventory Controller SHALL give battery each Host under the
@@ -143,28 +144,57 @@ func (Withdraw) Reconcile(_ context.Context, s *Scope) (reconcile.Result, error)
 	return reconcile.Result{}, nil
 }
 
-// Cordon cordons in battery every Host battery places on that it should
-// no longer: its Node is cordoned, not ready, gives no address, or is
-// gone. Bound claims on the Host keep running, and battery places nothing
-// new there (BA-084).
+// Cordon takes out of service in battery every Host battery places on that
+// it should no longer. A Host whose Node is cordoned, carries the cluster
+// autoscaler's taint, or is gone is drained: battery deletes the MicroVMs
+// on it that are not leased, now and on every sweep (BA-090, BA-091), so
+// that the Host is empty before its machine goes. A Host whose Node report
+// says not ready or gives no address is only cordoned: its flintlockd may
+// be down, and its MicroVMs stay for when it answers. Either way, Bound
+// claims on the Host keep running, and battery places nothing new there
+// (BA-084).
 type Cordon struct{}
 
 func (Cordon) Reconcile(ctx context.Context, s *Scope) (reconcile.Result, error) {
 	for _, name := range slices.Sorted(maps.Keys(s.Held)) {
 		h := s.Held[name]
-		if h.Cordoned {
-			continue
-		}
 		if _, ok := s.Desired[name]; ok {
 			continue
 		}
 		reason := s.leaving(name)
+		if s.drains(name) {
+			if h.Draining {
+				continue
+			}
+			//= docs/requirements/04-inventory.md#admission
+			//# When a Node that is a Host is cordoned, or carries the
+			//# `ToBeDeletedByClusterAutoscaler` taint, the Inventory Controller SHALL
+			//# drain the Host in battery with `DrainHost`, and SHALL keep it in
+			//# battery's Hosts.
+
+			//= docs/requirements/04-inventory.md#admission
+			//# When battery holds a Host whose Node does not exist or is being
+			//# deleted, the Inventory Controller SHALL drain the Host and remove it with
+			//# `RemoveHost`, and SHALL try again while battery refuses because a Pool
+			//# names the Host or a MicroVM is still on it.
+			got, err := s.Admin.DrainHost(ctx, name, reason)
+			if err != nil {
+				s.Errs = append(s.Errs, fmt.Errorf("draining Host %s in battery: %w", name, err))
+				continue
+			}
+			s.Held[name] = *got
+			s.Log.Info("Drained Host in battery", "host", name, "reason", reason)
+			continue
+		}
+		if h.Cordoned {
+			continue
+		}
 
 		//= docs/requirements/04-inventory.md#admission
-		//# When a Node that is a Host is cordoned, or its Node report
-		//# says the Host is not ready or gives no `flintlockd` address, the
-		//# Inventory Controller SHALL cordon the Host in battery with `CordonHost`,
-		//# and SHALL keep it in battery's Hosts.
+		//# When a Node that is a Host has a Node report that says the
+		//# Host is not ready or gives no `flintlockd` address, the Inventory
+		//# Controller SHALL cordon the Host in battery with `CordonHost`, and SHALL
+		//# keep it in battery's Hosts.
 		got, err := s.Admin.CordonHost(ctx, name, reason)
 		if err != nil {
 			s.Errs = append(s.Errs, fmt.Errorf("cordoning Host %s in battery: %w", name, err))
@@ -291,8 +321,8 @@ func (Remove) Reconcile(ctx context.Context, s *Scope) (reconcile.Result, error)
 	}
 	var res reconcile.Result
 	for _, name := range slices.Sorted(maps.Keys(s.Held)) {
-		if live[name] || !s.Held[name].Cordoned {
-			continue // a Node's Host, or not yet cordoned: Cordon has failed for it
+		if live[name] || !s.Held[name].Draining {
+			continue // a Node's Host, or not yet draining: Cordon has failed for it
 		}
 		if _, ok := s.Desired[name]; ok {
 			continue // still settling
@@ -300,7 +330,7 @@ func (Remove) Reconcile(ctx context.Context, s *Scope) (reconcile.Result, error)
 
 		//= docs/requirements/04-inventory.md#admission
 		//# When battery holds a Host whose Node does not exist or is being
-		//# deleted, the Inventory Controller SHALL cordon the Host and remove it with
+		//# deleted, the Inventory Controller SHALL drain the Host and remove it with
 		//# `RemoveHost`, and SHALL try again while battery refuses because a Pool
 		//# names the Host or a MicroVM is still on it.
 		err := s.Admin.RemoveHost(ctx, name)
@@ -424,24 +454,63 @@ func (s *Scope) placeable() Hosts {
 	return out
 }
 
-// leaving says why the Host called name is no longer to be placed on, for
-// CordonHost's reason.
-func (s *Scope) leaving(name string) string {
-	var node *corev1.Node
-	for i := range s.Nodes {
-		if s.Nodes[i].Name == name {
-			node = &s.Nodes[i]
+// TaintToBeDeletedByClusterAutoscaler is the key of the taint the cluster
+// autoscaler puts on a Node it is about to drain and delete.
+const TaintToBeDeletedByClusterAutoscaler = "ToBeDeletedByClusterAutoscaler"
+
+// The reasons CordonHost and DrainHost are given, as leaving gives them.
+const (
+	ReasonNodeDeleted   = "Node deleted"
+	ReasonNodeCordoned  = "Node cordoned"
+	ReasonNodeAutoscale = "Node to be deleted by the cluster autoscaler"
+	ReasonHostNotReady  = "Host not ready"
+	ReasonNoAddress     = "Node report gives no flintlockd address"
+)
+
+// AutoscalerTainted reports whether the cluster autoscaler has marked n
+// for deletion.
+func AutoscalerTainted(n *corev1.Node) bool {
+	for _, t := range n.Spec.Taints {
+		if t.Key == TaintToBeDeletedByClusterAutoscaler {
+			return true
 		}
 	}
+	return false
+}
+
+// node is the Node called name, or nil.
+func (s *Scope) node(name string) *corev1.Node {
+	for i := range s.Nodes {
+		if s.Nodes[i].Name == name {
+			return &s.Nodes[i]
+		}
+	}
+	return nil
+}
+
+// drains reports whether the Host called name is to be drained rather than
+// cordoned: its Node is gone or going, cordoned, or tainted by the cluster
+// autoscaler, so its machine may go (IN-021, IN-016).
+func (s *Scope) drains(name string) bool {
+	node := s.node(name)
+	return node == nil || !node.DeletionTimestamp.IsZero() || node.Spec.Unschedulable || AutoscalerTainted(node)
+}
+
+// leaving says why the Host called name is no longer to be placed on, for
+// CordonHost's and DrainHost's reason.
+func (s *Scope) leaving(name string) string {
+	node := s.node(name)
 	switch {
 	case node == nil || !node.DeletionTimestamp.IsZero():
-		return "Node deleted"
+		return ReasonNodeDeleted
 	case node.Spec.Unschedulable:
-		return "Node cordoned"
+		return ReasonNodeCordoned
+	case AutoscalerTainted(node):
+		return ReasonNodeAutoscale
 	case node.Annotations[AnnotationReady] != annotationTrue:
-		return "Host not ready"
+		return ReasonHostNotReady
 	case node.Annotations[AnnotationFlintlockdAddress] == "":
-		return "Node report gives no flintlockd address"
+		return ReasonNoAddress
 	}
 	return "not a Host"
 }

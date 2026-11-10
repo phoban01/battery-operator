@@ -39,7 +39,8 @@ func TestReportAnnotationsMatchTheExecAgent(t *testing.T) {
 //= docs/requirements/04-inventory.md#admission
 //= type=test
 //# The Inventory Controller SHALL treat a Node as a Host only while
-//# the Node's Node report says the Host is ready and the Node is schedulable.
+//# the Node's Node report says the Host is ready, the Node is schedulable,
+//# and the Node carries no `ToBeDeletedByClusterAutoscaler` taint.
 
 //= docs/requirements/04-inventory.md#admission
 //= type=test
@@ -58,9 +59,11 @@ func TestAdmit(t *testing.T) {
 		deleting,
 		host("node-e", ""),
 		{ObjectMeta: metav1.ObjectMeta{Name: "node-f"}},
+		host("node-g", "10.0.0.7:9090"),
 	}
 	cordon(nodes[1])
 	notReady(nodes[2])
+	taint(nodes[6])
 	h := newHarness(t, nodes...)
 	s := h.scope()
 	if _, err := (Admit{}).Reconcile(context.Background(), s); err != nil {
@@ -195,23 +198,34 @@ func TestAddHostThatBatteryHolds(t *testing.T) {
 
 //= docs/requirements/04-inventory.md#admission
 //= type=test
-//# When a Node that is a Host is cordoned, or its Node report
-//# says the Host is not ready or gives no `flintlockd` address, the
-//# Inventory Controller SHALL cordon the Host in battery with `CordonHost`,
-//# and SHALL keep it in battery's Hosts.
+//# When a Node that is a Host has a Node report that says the
+//# Host is not ready or gives no `flintlockd` address, the Inventory
+//# Controller SHALL cordon the Host in battery with `CordonHost`, and SHALL
+//# keep it in battery's Hosts.
+
+//= docs/requirements/04-inventory.md#admission
+//= type=test
+//# When a Node that is a Host is cordoned, or carries the
+//# `ToBeDeletedByClusterAutoscaler` taint, the Inventory Controller SHALL
+//# drain the Host in battery with `DrainHost`, and SHALL keep it in
+//# battery's Hosts.
 
 // TestCordonsAHostThatStopsBeingOne checks each way a Node can stop being a
-// Host while it exists: battery cordons its Host once the change has
-// settled, keeps it, and is never asked to remove it; and the Host is
+// Host while it exists: once the change has settled, battery drains its
+// Host when the Node is cordoned or tainted for deletion, and only cordons
+// it when the Node report says not ready or gives no address; either way
+// battery keeps the Host and is never asked to remove it, and the Host is
 // uncordoned when the Node is a Host again.
 func TestCordonsAHostThatStopsBeingOne(t *testing.T) {
 	for name, tc := range map[string]struct {
 		change, undo func(*corev1.Node)
 		reason       string
+		drained      bool
 	}{
-		"cordoned":   {cordon, uncordon, "Node cordoned"},
-		"not ready":  {notReady, func(n *corev1.Node) { n.Annotations[AnnotationReady] = annotationTrue }, "Host not ready"},
-		"no address": {noAddress, moveTo(addrA), "Node report gives no flintlockd address"},
+		"cordoned":   {cordon, uncordon, ReasonNodeCordoned, true},
+		"tainted":    {taint, untaint, ReasonNodeAutoscale, true},
+		"not ready":  {notReady, func(n *corev1.Node) { n.Annotations[AnnotationReady] = annotationTrue }, ReasonHostNotReady, false},
+		"no address": {noAddress, moveTo(addrA), ReasonNoAddress, false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			h := newHarness(t, host(nodeA, addrA))
@@ -224,8 +238,15 @@ func TestCordonsAHostThatStopsBeingOne(t *testing.T) {
 			}
 			h.advance(settle)
 			got, ok := h.admin.held(nodeA)
-			if !ok || !got.Cordoned || got.CordonedReason != tc.reason {
-				t.Fatalf("battery holds %+v (%v), want node-a cordoned for %q", got, ok, tc.reason)
+			if !ok || !got.Cordoned || got.CordonedReason != tc.reason || got.Draining != tc.drained {
+				t.Fatalf("battery holds %+v (%v), want node-a cordoned for %q, draining %v", got, ok, tc.reason, tc.drained)
+			}
+			ops := h.admin.ops()
+			if drainCalled := slices.Contains(ops, opDrainHost+" "+nodeA); drainCalled != tc.drained {
+				t.Errorf("calls %v, want DrainHost called: %v", ops, tc.drained)
+			}
+			if cordonCalled := slices.Contains(ops, opCordonHost+" "+nodeA); cordonCalled == tc.drained {
+				t.Errorf("calls %v, want CordonHost called: %v", ops, !tc.drained)
 			}
 			h.advance(removeRetry)
 			if slices.Contains(h.admin.ops(), opRemoveHost+" "+nodeA) {
@@ -237,13 +258,32 @@ func TestCordonsAHostThatStopsBeingOne(t *testing.T) {
 
 			h.changeA(tc.undo)
 			h.settled()
-			if got, _ := h.admin.held(nodeA); got.Cordoned || got.Address != addrA {
+			if got, _ := h.admin.held(nodeA); got.Cordoned || got.Draining || got.Address != addrA {
 				t.Errorf("battery holds %+v, want node-a uncordoned at %s", got, addrA)
 			}
 			if !h.published().Equal(Hosts{nodeA: addrA}) {
 				t.Errorf("published %v, want node-a back", h.published())
 			}
 		})
+	}
+}
+
+// TestACordonedHostIsDrainedOnceItsNodeIs checks that a Host cordoned for
+// its Node report is drained once its Node is cordoned too, so that the
+// machine can go.
+func TestACordonedHostIsDrainedOnceItsNodeIs(t *testing.T) {
+	h := newHarness(t, host(nodeA, addrA))
+	h.admin.put(heldHost(nodeA, addrA))
+	h.mustReconcile()
+	h.changeA(notReady)
+	h.settled()
+	if got, _ := h.admin.held(nodeA); !got.Cordoned || got.Draining {
+		t.Fatalf("battery holds %+v, want node-a cordoned and not draining", got)
+	}
+	h.changeA(cordon)
+	h.settled()
+	if got, _ := h.admin.held(nodeA); !got.Cordoned || !got.Draining || got.CordonedReason != ReasonNodeCordoned {
+		t.Fatalf("battery holds %+v, want node-a draining as cordoned", got)
 	}
 }
 
@@ -266,12 +306,12 @@ func TestAFlappingHostReachesBatteryNotAtAll(t *testing.T) {
 //= docs/requirements/04-inventory.md#admission
 //= type=test
 //# When battery holds a Host whose Node does not exist or is being
-//# deleted, the Inventory Controller SHALL cordon the Host and remove it with
+//# deleted, the Inventory Controller SHALL drain the Host and remove it with
 //# `RemoveHost`, and SHALL try again while battery refuses because a Pool
 //# names the Host or a MicroVM is still on it.
 
 // TestRemovesTheHostOfADeletedNode checks that the Host of a deleted Node
-// is cordoned, then removed, and that battery's refusals, while a Pool
+// is drained, then removed, and that battery's refusals, while a Pool
 // names it and while a MicroVM is on it, are retried after the remove
 // retry without failing the reconcile.
 func TestRemovesTheHostOfADeletedNode(t *testing.T) {
@@ -285,15 +325,15 @@ func TestRemovesTheHostOfADeletedNode(t *testing.T) {
 	h.settled()
 
 	got, ok := h.admin.held(nodeA)
-	if !ok || !got.Cordoned || got.CordonedReason != "Node deleted" {
-		t.Fatalf("battery holds %+v (%v), want node-a cordoned as deleted", got, ok)
+	if !ok || !got.Cordoned || !got.Draining || got.CordonedReason != ReasonNodeDeleted {
+		t.Fatalf("battery holds %+v (%v), want node-a draining as deleted", got, ok)
 	}
 	if !h.published().Equal(Hosts{nodeB: addrB}) {
 		t.Errorf("published %v, want node-b alone", h.published())
 	}
 	ops := h.admin.ops()
-	if i, j := slices.Index(ops, opCordonHost+" "+nodeA), slices.Index(ops, opRemoveHost+" "+nodeA); i < 0 || j < i {
-		t.Errorf("calls %v, want CordonHost before RemoveHost", ops)
+	if i, j := slices.Index(ops, opDrainHost+" "+nodeA), slices.Index(ops, opRemoveHost+" "+nodeA); i < 0 || j < i {
+		t.Errorf("calls %v, want DrainHost before RemoveHost", ops)
 	}
 
 	// A Pool still names it.

@@ -131,6 +131,20 @@ runs unprivileged, and it is `flintlockd`, running on the Host, that opens
   complete when none remain or when the configured drain timeout elapses.
 - **EA-041** The Exec Agent SHALL hold a drain open only with a guard pod
   and a PodDisruptionBudget of its own, both bound to its own Host's Node.
+- **EA-042** While its Host's `flintlockd` reports any MicroVM, the Exec
+  Agent SHALL hold the drain of EA-040 open as for a Bound claim, and SHALL
+  let the drain complete when none remains or when the configured drain
+  timeout elapses.
+
+A drain of a Host's Node evicts pods, and a MicroVM is no pod: without the
+guard, the drain would complete under a running command (EA-040), or
+before the warm MicroVMs on the Host were deleted (EA-042). The Inventory
+Controller drains a cordoned Node's Host in battery (IN-021), which
+deletes the MicroVMs that are not leased; the guard holds the Node's drain
+until `flintlockd` reports none, so the machine goes only once the Host is
+empty, and battery can then remove the Host (IN-016). The drain timeout
+bounds both: a claim that never ends, or a `flintlockd` that cannot delete,
+holds a drain for at most that long.
 
 ## Identity {#identity}
 

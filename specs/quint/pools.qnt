@@ -93,11 +93,13 @@ module pools {
   // leased: a claim holds it; otherwise it is available.
   type PlacedVM = { id: int, pool: PoolName, host: HostName, leased: bool }
 
-  // A Host battery holds (BA-086): whether it is cordoned, whether it has
-  // the TLS settings of IN-004 (a Host from a battery v0.4.0 database has
-  // none, and battery cannot connect to it), and the client certificate
-  // battery read when it last connected to it (BA-081).
-  type BatteryHost = { cordoned: bool, tls: bool, cert: int }
+  // A Host battery holds (BA-086): whether it is cordoned, whether it is
+  // draining (BA-090: cordoned, and its unleased MicroVMs deleted on every
+  // sweep), whether it has the TLS settings of IN-004 (a Host from a
+  // battery v0.4.0 database has none, and battery cannot connect to it),
+  // and the client certificate battery read when it last connected to it
+  // (BA-081).
+  type BatteryHost = { cordoned: bool, draining: bool, tls: bool, cert: int }
 
   type BatteryState = {
     hosts: HostName -> BatteryHost,
@@ -149,6 +151,7 @@ module pools {
     tlsUpdates: int,
     uncordons: int,
     cordons: int,
+    drains: int,
     removals: int,
     // RemoveHost calls battery refused (BA-083)
     removeRefusals: int,
@@ -179,7 +182,12 @@ module pools {
 
   //@= docs/requirements/04-inventory.md#admission
   //@# The Inventory Controller SHALL treat a Node as a Host only while
-  //@# the Node's Node report says the Host is ready and the Node is schedulable.
+  //@# the Node's Node report says the Host is ready, the Node is schedulable,
+  //@# and the Node carries no `ToBeDeletedByClusterAutoscaler` taint.
+  //
+  // The model has no taints: a Node the cluster autoscaler has tainted is
+  // one that is not schedulable here, since the Inventory Controller
+  // treats the two alike (IN-001, IN-021).
   pure def nodeIsHost(ns: HostName -> Node, pr: Set[HostName], h: HostName): bool =
     pr.contains(h) and ns.get(h).schedulable and ns.get(h).report.ready
 
@@ -308,7 +316,7 @@ module pools {
     changedAt' = NAMES.mapBy(_ => 0),
     pools' = POOLS.mapBy(_ => PoolUnborn),
     battery' = {
-      hosts: (if (upgraded) NAMES else HOSTS).mapBy(_ => { cordoned: false, tls: not(upgraded), cert: 0 }),
+      hosts: (if (upgraded) NAMES else HOSTS).mapBy(_ => { cordoned: false, draining: false, tls: not(upgraded), cert: 0 }),
       pools: Map(),
       vms: Set(),
       nextVM: 1,
@@ -327,6 +335,7 @@ module pools {
       tlsUpdates: 0,
       uncordons: 0,
       cordons: 0,
+      drains: 0,
       removals: 0,
       removeRefusals: 0,
       placeholderRemoved: false,
@@ -581,8 +590,9 @@ module pools {
   // One reconcile: AddHost for a Host battery does not hold; for one it
   // holds (listed, or found by AddHost's ALREADY_EXISTS, which the model
   // does not tell apart), UpdateHost where it has no TLS settings and
-  // UncordonHost where it is cordoned. battery reads the certificate the
-  // Secret's volume holds when it connects. Then the Host is published.
+  // UncordonHost where it is cordoned, which ends a drain (BA-094).
+  // battery reads the certificate the Secret's volume holds when it
+  // connects. Then the Host is published.
   action invRegister(h: HostName): bool = all {
     canRegister(h),
     val added = not(held(h))
@@ -592,6 +602,7 @@ module pools {
     all {
       battery' = { ...battery, hosts: battery.hosts.put(h, {
         cordoned: false,
+        draining: false,
         tls: true,
         cert: if (connected) secret.mounted else bhost(h).cert,
       }) },
@@ -621,19 +632,22 @@ module pools {
     battery' = battery, hist' = hist,
   }
 
+  // The Host's Node exists and is schedulable, so what stopped it being a
+  // Host is its Node report: the Host is only cordoned.
   def canCordon(h: HostName): bool = and {
     active(h), not(desired(h)), not(inv.published.contains(h)),
+    present.contains(h), nodes.get(h).schedulable,
   }
 
   //@= docs/requirements/04-inventory.md#admission
-  //@# When a Node that is a Host is cordoned, or its Node report
-  //@# says the Host is not ready or gives no `flintlockd` address, the
-  //@# Inventory Controller SHALL cordon the Host in battery with `CordonHost`,
-  //@# and SHALL keep it in battery's Hosts.
+  //@# When a Node that is a Host has a Node report that says the
+  //@# Host is not ready or gives no `flintlockd` address, the Inventory
+  //@# Controller SHALL cordon the Host in battery with `CordonHost`, and SHALL
+  //@# keep it in battery's Hosts.
   //
   // The change has settled: battery places nothing new on the Host, and
-  // keeps it and every MicroVM on it. A Host whose Node is gone is
-  // cordoned too, before RemoveHost (IN-016).
+  // keeps it and every MicroVM on it, for when its flintlockd answers
+  // again.
   action invCordon(h: HostName): bool = all {
     canCordon(h),
     battery' = { ...battery, hosts: battery.hosts.set(h, { ...bhost(h), cordoned: true }) },
@@ -641,10 +655,72 @@ module pools {
     now' = now, secret' = secret, nodes' = nodes, present' = present, changedAt' = changedAt, pools' = pools, inv' = inv,
   }
 
+  // The Host's Node is cordoned (or tainted by the cluster autoscaler,
+  // which the model folds into schedulable) or gone: its machine may go,
+  // so the Host is drained. A Host already cordoned for its report is
+  // drained too once its Node is cordoned.
+  def canDrain(h: HostName): bool = and {
+    held(h), not(bhost(h).draining), not(desired(h)), not(inv.published.contains(h)),
+    not(present.contains(h)) or not(nodes.get(h).schedulable),
+  }
+
+  //@= docs/requirements/04-inventory.md#admission
+  //@# When a Node that is a Host is cordoned, or carries the
+  //@# `ToBeDeletedByClusterAutoscaler` taint, the Inventory Controller SHALL
+  //@# drain the Host in battery with `DrainHost`, and SHALL keep it in
+  //@# battery's Hosts.
+  //
+  //@= docs/requirements/04-inventory.md#admission
+  //@# When battery holds a Host whose Node does not exist or is being
+  //@# deleted, the Inventory Controller SHALL drain the Host and remove it with
+  //@# `RemoveHost`, and SHALL try again while battery refuses because a Pool
+  //@# names the Host or a MicroVM is still on it.
+  //
+  //@= docs/requirements/10-battery.md#hosts
+  //@# When `DrainHost` names a Host battery holds, battery SHALL
+  //@# cordon the Host, mark it draining, and set every MicroVM on the Host
+  //@# whose phase is not `LEASED`, `PRE_LEASE_HOOK_RUNNING` or `DELETING` to
+  //@# `DELETING`, all in one transaction, and SHALL then delete each of those
+  //@# MicroVMs through `flintlockd` before it answers, leaving one `flintlockd`
+  //@# does not confirm in `DELETING` for the sweep.
+  //
+  // DrainHost: battery cordons the Host, marks it draining, and deletes
+  // the MicroVMs on it that are not leased, in one step here, as the
+  // model has no DELETING phase. The leased ones stay until released
+  // (BA-092). A Host whose Node is gone is drained too, before RemoveHost
+  // (IN-016).
+  action invDrain(h: HostName): bool = all {
+    canDrain(h),
+    battery' = { ...battery,
+      hosts: battery.hosts.set(h, { ...bhost(h), cordoned: true, draining: true }),
+      vms: battery.vms.filter(v => not(v.host == h and not(v.leased))),
+    },
+    hist' = { ...hist, drains: hist.drains + 1 },
+    now' = now, secret' = secret, nodes' = nodes, present' = present, changedAt' = changedAt, pools' = pools, inv' = inv,
+  }
+
+  //@= docs/requirements/10-battery.md#hosts
+  //@# While a Host is draining, battery SHALL, in every sweep, set
+  //@# every MicroVM on the Host whose phase is not `LEASED`,
+  //@# `PRE_LEASE_HOOK_RUNNING` or `DELETING` to `DELETING` and delete it
+  //@# through `flintlockd`.
+  //
+  // battery's sweep deletes an unleased MicroVM that reached a draining
+  // Host after the drain: a placement reserved before it (batteryProvision
+  // on a Host whose change has not settled), or a lease that ended without
+  // a release. The model has only the first.
+  action batteryDrainSweep(h: HostName): bool = all {
+    held(h), bhost(h).draining,
+    battery.vms.exists(v => v.host == h and not(v.leased)),
+    battery' = { ...battery, vms: battery.vms.filter(v => not(v.host == h and not(v.leased))) },
+    now' = now, secret' = secret, nodes' = nodes, present' = present, changedAt' = changedAt, pools' = pools, inv' = inv,
+    hist' = hist,
+  }
+
   // The Inventory Controller would remove the Host: battery holds it
-  // cordoned, its Node is gone, and the Pool Controller no longer has it.
+  // drained, its Node is gone, and the Pool Controller no longer has it.
   def wantsRemoved(h: HostName): bool = and {
-    held(h), bhost(h).cordoned, not(present.contains(h)), not(desired(h)), not(inv.published.contains(h)),
+    held(h), bhost(h).draining, not(present.contains(h)), not(desired(h)), not(inv.published.contains(h)),
   }
 
   //@= docs/requirements/10-battery.md#hosts
@@ -659,7 +735,7 @@ module pools {
 
   //@= docs/requirements/04-inventory.md#admission
   //@# When battery holds a Host whose Node does not exist or is being
-  //@# deleted, the Inventory Controller SHALL cordon the Host and remove it with
+  //@# deleted, the Inventory Controller SHALL drain the Host and remove it with
   //@# `RemoveHost`, and SHALL try again while battery refuses because a Pool
   //@# names the Host or a MicroVM is still on it.
   action invRemove(h: HostName): bool = all {
@@ -742,6 +818,7 @@ module pools {
       canRegister(h),
       canUnpublish(h),
       canCordon(h),
+      canDrain(h),
       canSecure(h),
       wantsRemoved(h) and removable(h),
     }),
@@ -948,6 +1025,7 @@ module pools {
       batteryProvisionUnreachable(p, b),
       leaseVM(p, b),
       releaseVM(p, b),
+      batteryDrainSweep(b),
     }
   }
 
@@ -977,6 +1055,7 @@ module pools {
       invRegister(b),
       invUnpublish(b),
       invCordon(b),
+      invDrain(b),
       invRemove(b),
       invRemoveRefused(b),
       invSecure(b),
@@ -1147,6 +1226,8 @@ module pools {
   val witnessFlapAbsorbed: bool = hist.absorbedFlaps > 0
   // a Host was cordoned in battery while its Node exists
   val witnessCordoned: bool = NAMES.exists(h => present.contains(h) and held(h) and bhost(h).cordoned)
+  // a Host was drained in battery, and its unleased MicroVMs went with it
+  val witnessDrained: bool = hist.drains > 0 and NAMES.exists(h => held(h) and bhost(h).draining)
   // a cordoned Host was uncordoned
   val witnessUncordoned: bool = hist.uncordons > 0
   // a Host whose Node is gone was removed

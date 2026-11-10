@@ -231,7 +231,10 @@ func TestNodeReportChanged(t *testing.T) {
 		change func(*corev1.Node)
 		want   bool
 	}{
-		"cordoned":         {func(n *corev1.Node) { n.Spec.Unschedulable = true }, true},
+		"cordoned": {func(n *corev1.Node) { n.Spec.Unschedulable = true }, true},
+		"tainted": {func(n *corev1.Node) {
+			n.Spec.Taints = []corev1.Taint{{Key: inventory.TaintToBeDeletedByClusterAutoscaler, Effect: corev1.TaintEffectNoSchedule}}
+		}, true},
 		"not ready":        {func(n *corev1.Node) { n.Annotations[inventory.AnnotationReady] = "false" }, true},
 		"address moved":    {func(n *corev1.Node) { n.Annotations[inventory.AnnotationFlintlockdAddress] = "x:1" }, true},
 		"deleting":         {func(n *corev1.Node) { n.DeletionTimestamp = &metav1.Time{Time: time.Now()} }, true},
