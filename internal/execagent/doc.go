@@ -53,7 +53,7 @@ limitations under the License.
 //     prerequisites in internal/hostcheck (EA-030 to EA-032) and the Host
 //     Image's not ready reasons (EA-033), and the Node report (EA-034,
 //     EA-035).
-//   - drain.go: the drain guard (EA-040).
+//   - drain.go: the drain guard (EA-040, EA-042).
 //   - identity.go: the check, at start, that the agent's identity names its
 //     Host (EA-050), which config/exec-agent/admission-policy.yaml relies on
 //     (EA-051).

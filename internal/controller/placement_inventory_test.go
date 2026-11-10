@@ -70,7 +70,7 @@ func knownHosts(ctx context.Context, t *testing.T, bc battery.Client, admin batt
 //= docs/requirements/04-inventory.md#admission
 //= type=test
 //# When battery holds a Host whose Node does not exist or is being
-//# deleted, the Inventory Controller SHALL cordon the Host and remove it with
+//# deleted, the Inventory Controller SHALL drain the Host and remove it with
 //# `RemoveHost`, and SHALL try again while battery refuses because a Pool
 //# names the Host or a MicroVM is still on it.
 

@@ -17,6 +17,7 @@ limitations under the License.
 package execagent
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"time"
@@ -97,3 +98,14 @@ func DialFlintlockd(endpoint string, certs *Certificates, hostAddrs []net.IP) (*
 
 // Close closes the connection; streams still open on it fail.
 func (f *Flintlockd) Close() error { return f.conn.Close() }
+
+// CountMicroVMs implements MicroVMCounter: the MicroVMs flintlockd holds in
+// every namespace, for the drain guard (EA-042). flintlock lists them all
+// when the request names no namespace.
+func (f *Flintlockd) CountMicroVMs(ctx context.Context) (int, error) {
+	resp, err := f.vms.ListMicroVMs(ctx, &mvmv1.ListMicroVMsRequest{})
+	if err != nil {
+		return 0, err
+	}
+	return len(resp.GetMicrovm()), nil
+}

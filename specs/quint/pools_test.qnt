@@ -199,10 +199,10 @@ module pools_test {
         safety,
       })
 
-  // IN-011, IN-015, IN-018: a cordoned Node's Host stays uncordoned in
+  // IN-011, IN-021, IN-018: a cordoned Node's Host stays uncordoned in
   // battery until its change has settled; then time does not pass until
   // the Inventory Controller has taken it from the Pool Controller and
-  // cordoned it, and battery keeps it.
+  // drained it, and battery keeps it.
   run cordonedNode: bool =
     fresh
       .then(cordon("h1"))
@@ -210,18 +210,56 @@ module pools_test {
 
   run settledCordonActsAtOnceTest =
     cordonedNode
-      .expect(and { active("h1"), canUnpublish("h1"), not(canCordon("h1")) })
+      .expect(and { active("h1"), canUnpublish("h1"), not(canDrain("h1")), not(canCordon("h1")) })
       .then(tick)
       .fail()
 
-  run cordonTest =
-    cordonedNode
+  // IN-021, BA-090, BA-092: the drain cordons the Host and deletes the
+  // MicroVM on it that is not leased; the leased one stays, and so does
+  // the MicroVM on the other Host.
+  run drainTest =
+    fresh
+      .then(declare("p1", Set(ZONE_A), 3))
+      .then(batteryProvision("p1", "h1"))
+      .then(batteryProvision("p1", "h2"))
+      .then(batteryProvision("p1", "h1"))
+      .then(leaseVM("p1", "h1"))
+      .then(cordon("h1"))
+      .then(ticks(SETTLE))
       .then(invUnpublish("h1"))
-      .expect(canCordon("h1"))
+      .expect(and { canDrain("h1"), not(canCordon("h1")) })
+      .then(invDrain("h1"))
+      .expect(and {
+        held("h1"),
+        bhost("h1").cordoned,
+        bhost("h1").draining,
+        vmCount("p1", "h1") == 1,
+        vmCount("p1", "h2") == 1,
+        battery.vms.forall(v => v.host != "h1" or v.leased),
+        not(inv.published.contains("h1")),
+        witnessCordoned,
+        witnessDrained,
+        safety,
+      })
+      .then(tick)
+      .expect(safety)
+
+  // IN-015: a Node whose report says not ready has its Host cordoned,
+  // not drained: its MicroVMs stay for when flintlockd answers again.
+  run cordonTest =
+    fresh
+      .then(declare("p1", Set(ZONE_A), 1))
+      .then(batteryProvision("p1", "h1"))
+      .then(flipReport("h1"))
+      .then(ticks(SETTLE))
+      .then(invUnpublish("h1"))
+      .expect(and { canCordon("h1"), not(canDrain("h1")) })
       .then(invCordon("h1"))
       .expect(and {
         held("h1"),
         bhost("h1").cordoned,
+        not(bhost("h1").draining),
+        vmCount("p1", "h1") == 1,
         not(inv.published.contains("h1")),
         witnessCordoned,
         safety,
@@ -229,18 +267,20 @@ module pools_test {
       .then(tick)
       .expect(safety)
 
-  // IN-017: the Node is uncordoned; once that has settled, the Host is
-  // uncordoned in battery and given back to the Pool Controller.
+  // IN-017, BA-094: the Node is uncordoned; once that has settled, the
+  // Host is uncordoned in battery, which ends its drain, and given back
+  // to the Pool Controller.
   run uncordonTest =
     cordonedNode
       .then(invUnpublish("h1"))
-      .then(invCordon("h1"))
+      .then(invDrain("h1"))
       .then(uncordon("h1"))
       .then(ticks(SETTLE))
       .expect(canRegister("h1"))
       .then(invRegister("h1"))
       .expect(and {
         active("h1"),
+        not(bhost("h1").draining),
         inv.published.contains("h1"),
         hist.uncordons == 1,
         hist.adds == 0,
@@ -265,7 +305,7 @@ module pools_test {
       .then(cordon("h2"))
       .then(ticks(SETTLE))
       .then(invUnpublish("h2"))
-      .then(invCordon("h2"))
+      .then(invDrain("h2"))
       .expect(and { battery.pools.get("p1").flintlockHosts.contains("h2"), eligible("p1") == Set("h1") })
       .then(batteryProvision("p1", "h2"))
       .fail()
@@ -283,7 +323,7 @@ module pools_test {
       .then(deleteNode("h2"))
       .then(ticks(SETTLE))
       .then(invUnpublish("h2"))
-      .then(invCordon("h2"))
+      .then(invDrain("h2"))
 
   run removalRefusedTest =
     deletedNodeWithVM
@@ -319,7 +359,7 @@ module pools_test {
       .then(ticks(SETTLE))
       .then(invUnpublish("h2"))
       .then(ctlUpdatePool("p1"))
-      .then(invCordon("h2"))
+      .then(invDrain("h2"))
       .then(invRemove("h2"))
       .then(createNode("h2", Set(ZONE_A), true))
       .then(ticks(SETTLE))
@@ -348,8 +388,8 @@ module pools_test {
       .then(invRefresh)
       .expect(and { heldHosts.forall(h => bhost(h).tls), hist.tlsUpdates == 4, safety })
       .then(ticks(SETTLE))
-      .expect(and { canCordon(PLACEHOLDER), not(inv.published.contains(PLACEHOLDER)) })
-      .then(invCordon(PLACEHOLDER))
+      .expect(and { canDrain(PLACEHOLDER), not(inv.published.contains(PLACEHOLDER)) })
+      .then(invDrain(PLACEHOLDER))
       .then(invRemove(PLACEHOLDER))
       .expect(and { not(held(PLACEHOLDER)), witnessPlaceholderRemoved, witnessUpgradedHost, safety })
 

@@ -51,6 +51,15 @@ Operator uses the new API, and what of the old mechanism goes.
    Node is deleted is cordoned and then removed with `RemoveHost`, retried
    until battery agrees (IN-016). The reasons are in
    [04-inventory.md](../requirements/04-inventory.md#admission).
+
+   > **Update, 2026-11-10 (#238):** battery v0.6.0's `DrainHost` splits
+   > the first case. A cordoned Node, or one the cluster autoscaler has
+   > tainted for deletion, has its Host drained (IN-021): battery deletes
+   > the MicroVMs on it that are not leased, now and on every sweep, so
+   > the Host is empty before its machine goes, and the Exec Agent holds
+   > the Node's drain open until it is (EA-042). A Host whose Node report
+   > says not ready is still only cordoned. A deleted Node's Host is
+   > drained, not cordoned, before `RemoveHost` (IN-016).
 3. **The Pool Controller sees a Host only while battery holds it
    uncordoned** (IN-018). A joining Host reaches the Pools after `AddHost`;
    a leaving Host leaves the Pools before it is cordoned or removed. This
@@ -103,3 +112,9 @@ This record replaces its consequence 1, and the restart in its decision 7.
    "Let RemoveHost force-remove a host"). A Node deleted with its machine
    leaves such a Host for good. Whether the Operator should ask battery
    for a forced removal, if battery ever offers one, is open.
+
+   > **Update, 2026-11-10 (#238):** the drain (IN-021, EA-042) keeps the
+   > case to machines that go without a Node drain: a cordoned or
+   > autoscaled Node's Host is empty before its machine is deleted. A
+   > machine that fails outright still leaves its Host in battery, and
+   > the question of a forced removal stays open for that.

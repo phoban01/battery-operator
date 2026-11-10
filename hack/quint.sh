@@ -78,7 +78,7 @@ check specs/quint/certificates.qnt safety \
   witnessKubeletLieRefused witnessRepinned
 
 check specs/quint/pools.qnt safety \
-  witnessFlapAbsorbed witnessCordoned witnessUncordoned \
+  witnessFlapAbsorbed witnessCordoned witnessDrained witnessUncordoned \
   witnessRemoved witnessRemovalRefused witnessUpgradedHost witnessPlaceholderRemoved \
   witnessRenewalRefreshed \
   witnessVMOnFormerHost witnessPlacementUpdated witnessNoEligibleHost \

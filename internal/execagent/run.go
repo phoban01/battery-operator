@@ -198,8 +198,12 @@ func Run(ctx context.Context, opts Options) error {
 func keepReporting(ctx context.Context, opts Options, clk clock.Clock, agentAddress string, served <-chan error) error {
 	cfg, log := opts.Config, logr.FromContextOrDiscard(ctx)
 	notes := &annotator{kube: opts.Kube, hostNode: cfg.HostNode, resync: annotationResync}
+	var vms MicroVMCounter
+	if opts.Flintlockd != nil {
+		vms = opts.Flintlockd
+	}
 	guard := &drainGuard{
-		cfg: cfg, log: log, clk: clk, kube: opts.Kube, claims: opts.Claims,
+		cfg: cfg, log: log, clk: clk, kube: opts.Kube, claims: opts.Claims, vms: vms,
 		hostNode: cfg.HostNode, resync: guardResync,
 	}
 	var lastReady *readiness

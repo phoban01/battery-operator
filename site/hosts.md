@@ -535,6 +535,10 @@ Then delete the Host pool from the management cluster:
 kustomize build config/capi | kubectl delete -f -
 ```
 
-Cluster API drains each Host before it deletes the Machine. The Exec Agent
-holds the drain open while claims are Bound on the Host, for up to an hour
-by default.
+Cluster API drains each Host before it deletes the Machine. Once the Node
+is cordoned, the Operator drains the Host in battery: battery deletes the
+warm MicroVMs on it, and the Pools refill on the other Hosts. The Exec
+Agent holds the Node's drain open while claims are Bound on the Host or
+any MicroVM is still on it, for up to an hour by default. The same happens
+when the cluster autoscaler takes a Host away: it taints the Node first,
+and the Operator drains the Host on the taint.
