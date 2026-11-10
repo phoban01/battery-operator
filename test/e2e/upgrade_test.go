@@ -106,10 +106,14 @@ func upgradeFeature(ns string) features.Feature {
 			ctx = context.WithValue(ctx, upgradeKey{}, upgraded{image: current, db: db})
 			setBatteryConfig(ctx, t, c, v04Config(t, hosts))
 			setBattery(ctx, t, c, previousPoolmgrdImage, upgradeDB)
-			// battery v0.4.0 has no AddHost or UpdateHost, so the Inventory
-			// Controller fails to bring its Hosts in step, but publishes the
-			// ones battery places on, and cordons the placeholder.
-			waitForBatteryHosts(ctx, t, cfg, hosts)
+			// battery v0.4.0 has no AddHost, UpdateHost or DrainHost, so
+			// the Inventory Controller fails to bring its Hosts in step and
+			// cannot drain the placeholder, which has no Node (IN-016); it
+			// publishes the Hosts battery places on, and the placeholder
+			// waits, uncordoned, for the upgrade.
+			withPlaceholder := maps.Clone(hosts)
+			withPlaceholder[placeholderHost] = "no-hosts.invalid:9090"
+			waitForBatteryHosts(ctx, t, cfg, withPlaceholder)
 			return ctx
 		}).
 		Assess("a Pool fills and a claim binds on battery v0.4.0", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
