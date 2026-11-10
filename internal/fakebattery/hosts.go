@@ -67,7 +67,12 @@ type host struct {
 	cordoned       bool
 	cordonedReason string
 	cordonedAt     time.Time
-	updatedAt      time.Time
+	// draining is set by DrainHost and cleared by UncordonHost; a draining
+	// Host is cordoned, and the fake deletes its unleased MicroVMs on every
+	// tick (BA-090, BA-091, BA-094).
+	draining   bool
+	drainingAt time.Time
+	updatedAt  time.Time
 	// vm and exec are nil when the Host has no connection: one added with
 	// skip_validation that the fake's Dial could not reach.
 	vm   mvmv1.MicroVMClient
@@ -75,6 +80,20 @@ type host struct {
 	// dials counts the connections the fake has made to the Host through
 	// its Dial, in AddHost and UpdateHost.
 	dials int
+}
+
+// draining lists the Hosts that are draining, sorted, for the tick.
+func (h *Hosts) draining() []string {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	var names []string
+	for n, e := range h.entries {
+		if e.draining {
+			names = append(names, n)
+		}
+	}
+	slices.Sort(names)
+	return names
 }
 
 // NewHosts returns an empty Hosts.
@@ -118,8 +137,9 @@ func (h *Hosts) Names() []string {
 }
 
 // SetCordoned cordons or uncordons the Host called name, as CordonHost and
-// UncordonHost do, for a test that sets up Hosts before the fake runs. It
-// reports whether the fake holds the Host.
+// UncordonHost do, for a test that sets up Hosts before the fake runs.
+// Uncordoning ends a drain, as UncordonHost does. It reports whether the
+// fake holds the Host.
 func (h *Hosts) SetCordoned(name string, cordoned bool, reason string) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -133,6 +153,9 @@ func (h *Hosts) SetCordoned(name string, cordoned bool, reason string) bool {
 	if cordoned {
 		e.cordonedReason = reason
 		e.cordonedAt = time.Now()
+	} else {
+		e.draining = false
+		e.drainingAt = time.Time{}
 	}
 	return true
 }
@@ -221,6 +244,10 @@ func (e *host) proto() *poolmgrv1.Host {
 	}
 	if !e.cordonedAt.IsZero() {
 		out.CordonedAt = timestampOf(e.cordonedAt)
+	}
+	out.Draining = e.draining
+	if !e.drainingAt.IsZero() {
+		out.DrainingAt = timestampOf(e.drainingAt)
 	}
 	if !e.updatedAt.IsZero() {
 		out.UpdatedAt = timestampOf(e.updatedAt)

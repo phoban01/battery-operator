@@ -201,11 +201,18 @@ func (b *Battery) poolLocked(ref PoolRef) (*poolState, error) {
 	return ps, nil
 }
 
-// aliveLocked reports whether vm is still tracked and its Pool still exists.
-// Provisioning re-checks it after every Host call, because the Pool may have
-// been deleted or the fake stopped in the meantime.
+// aliveLocked reports whether vm is still tracked, not DELETING, and its
+// Pool still exists. Provisioning re-checks it after every Host call,
+// because the Pool may have been deleted, the fake stopped, or a drain of
+// the Host may have marked the MicroVM DELETING in the meantime (BA-090);
+// as battery's store refuses to move a DELETING MicroVM to any other
+// phase, the provisioning then deletes what it created and applies no hook
+// failure policy.
 func (b *Battery) aliveLocked(vm *vmState) bool {
 	if _, ok := b.vms[vm.id]; !ok {
+		return false
+	}
+	if vm.phase == poolmgrv1.VMPhase_DELETING {
 		return false
 	}
 	_, ok := b.pools[vm.pool]

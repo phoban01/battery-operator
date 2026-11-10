@@ -155,6 +155,7 @@ func TestEveryEventTypeIsEmittedAtItsTransition(t *testing.T) {
 		t.Fatalf("POOL_SIZE_BELOW_TARGET payload = %v, want target 1 and nothing available", p)
 	}
 
+	assertHostDrainEvent(t, h, host, collect)
 	assertPoolDeleteEvent(t, h, collect)
 	assertEveryEventTypeSeen(t, h)
 	assertMonotonic(t, all)
@@ -163,6 +164,26 @@ func TestEveryEventTypeIsEmittedAtItsTransition(t *testing.T) {
 // assertPoolDeleteEvent ends TestEveryEventTypeIsEmittedAtItsTransition:
 // once the Pool's last Lease has gone, DeletePool deletes the Pool with
 // the MicroVM the last tick provisioned, and records it.
+// assertHostDrainEvent drains host-a once the Pool has refilled on it: its
+// available MicroVM is deleted with VM_DELETED_ON_HOST_DRAIN. Uncordoned
+// again, the Pool refills on it for assertPoolDeleteEvent.
+func assertHostDrainEvent(t *testing.T, h *harness, host *testHost, collect func(poolmgrv1.EventType) []*event) {
+	t.Helper()
+	refilled := eventOfType(t, collect(poolmgrv1.EventType_VM_AVAILABLE), poolmgrv1.EventType_VM_AVAILABLE)
+	if _, err := h.hostAdmin().DrainHost(h.ctx, &poolmgrv1.DrainHostRequest{Name: hostA, Reason: "events"}); err != nil {
+		t.Fatalf("DrainHost: %v", err)
+	}
+	drained := eventOfType(t, collect(poolmgrv1.EventType_VM_DELETED_ON_HOST_DRAIN), poolmgrv1.EventType_VM_DELETED_ON_HOST_DRAIN)
+	if drained.VMUID != refilled.VMUID || payloadOf(t, drained)["host"] != hostA {
+		t.Fatalf("VM_DELETED_ON_HOST_DRAIN names %q on %v, want the available microvm %q on host-a",
+			drained.VMUID, payloadOf(t, drained)["host"], refilled.VMUID)
+	}
+	h.waitDeletion(host, drained.VMUID)
+	if _, err := h.hostAdmin().UncordonHost(h.ctx, &poolmgrv1.UncordonHostRequest{Name: hostA}); err != nil {
+		t.Fatalf("UncordonHost: %v", err)
+	}
+}
+
 func assertPoolDeleteEvent(t *testing.T, h *harness, collect func(poolmgrv1.EventType) []*event) {
 	t.Helper()
 	refill := eventOfType(t, collect(poolmgrv1.EventType_VM_AVAILABLE), poolmgrv1.EventType_VM_AVAILABLE)

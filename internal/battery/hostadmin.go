@@ -18,6 +18,7 @@ package battery
 
 import (
 	"context"
+	"time"
 
 	poolmgrv1 "github.com/liquidmetal-dev/battery/api/proto/poolmgr/v1alpha1"
 )
@@ -45,8 +46,15 @@ type Host struct {
 	// Cordoned is true while battery places no new MicroVM on the Host.
 	// AddHost and UpdateHost ignore it; CordonHost and UncordonHost set it.
 	Cordoned bool
-	// CordonedReason is the note the last CordonHost gave.
+	// CordonedReason is the note the last CordonHost or DrainHost gave.
 	CordonedReason string
+	// Draining is true from DrainHost until UncordonHost. A draining Host
+	// is cordoned, and battery deletes every MicroVM on it that is not
+	// leased, on every sweep (BA-090, BA-091). AddHost and UpdateHost
+	// ignore it.
+	Draining bool
+	// DrainingAt is when the drain began; zero unless Draining.
+	DrainingAt time.Time
 }
 
 // HostStatus is the proto HostStatus: a Host with what is still counted
@@ -87,9 +95,17 @@ type HostAdmin interface {
 	// a cordoned Host updates the reason. It returns
 	// ErrFailedPrecondition for a Host battery does not hold.
 	CordonHost(ctx context.Context, name, reason string) (*Host, error)
-	// UncordonHost lets battery place on the Host again. It returns
-	// ErrFailedPrecondition for a Host battery does not hold.
+	// UncordonHost lets battery place on the Host again, and ends its
+	// drain. It returns ErrFailedPrecondition for a Host battery does not
+	// hold.
 	UncordonHost(ctx context.Context, name string) (*Host, error)
+	// DrainHost cordons the Host, marks it draining and deletes every
+	// MicroVM on it that is not leased, now and on every later sweep
+	// until UncordonHost; leased MicroVMs end by release or expiry
+	// (BA-090 to BA-092). It is idempotent, a non-empty reason replaces
+	// the Host's cordon reason, and it returns ErrNotFound for a Host
+	// battery does not hold (BA-095, BA-096).
+	DrainHost(ctx context.Context, name, reason string) (*Host, error)
 }
 
 var _ HostAdmin = (*Connection)(nil)
@@ -162,8 +178,18 @@ func (c *Connection) UncordonHost(ctx context.Context, name string) (*Host, erro
 	return &h, nil
 }
 
+// DrainHost implements HostAdmin.
+func (c *Connection) DrainHost(ctx context.Context, name, reason string) (*Host, error) {
+	resp, err := c.hosts.DrainHost(ctx, &poolmgrv1.DrainHostRequest{Name: name, Reason: reason})
+	if err != nil {
+		return nil, mapErr(ctx, err)
+	}
+	h := hostFromProto(resp)
+	return &h, nil
+}
+
 // hostToProto renders the fields AddHost and UpdateHost read: the cordon
-// fields are battery's to set.
+// and drain fields are battery's to set.
 func hostToProto(h Host) *poolmgrv1.Host {
 	return &poolmgrv1.Host{
 		Name:    h.Name,
@@ -190,6 +216,8 @@ func hostFromProto(h *poolmgrv1.Host) Host {
 		},
 		Cordoned:       h.GetCordoned(),
 		CordonedReason: h.GetCordonedReason(),
+		Draining:       h.GetDraining(),
+		DrainingAt:     h.GetDrainingAt().AsTime(),
 	}
 }
 
