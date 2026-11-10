@@ -5,7 +5,7 @@ go 1.26.5
 require (
 	github.com/go-logr/logr v1.4.4
 	github.com/google/go-cmp v0.7.0
-	github.com/liquidmetal-dev/battery v0.5.0
+	github.com/liquidmetal-dev/battery v0.6.0
 	github.com/liquidmetal-dev/flintlock/api v0.0.0-20260922072746-f69bffbac45c
 	google.golang.org/grpc v1.84.0
 	google.golang.org/protobuf v1.36.12

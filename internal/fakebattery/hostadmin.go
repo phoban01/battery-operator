@@ -36,7 +36,8 @@ import (
 //# The fake battery SHALL serve battery's `HostAdmin` service,
 //# and SHALL hold its Hosts as battery does, so that a Pool names only Hosts
 //# the fake holds, a Host is removed only once no Pool names it and nothing
-//# is on it, and no MicroVM is placed on a cordoned Host.
+//# is on it, no MicroVM is placed on a cordoned Host, and the MicroVMs on a
+//# draining Host that are not leased are deleted.
 
 //= docs/requirements/10-battery.md#hosts
 //= type=exception
@@ -53,7 +54,7 @@ import (
 
 // hostAdminServer implements poolmgrv1.HostAdminServer over the fake's
 // Hosts, with battery's semantics (internal/api/hostadmin.go in battery
-// v0.5.0).
+// v0.6.0). DrainHost is in hostdrain.go.
 type hostAdminServer struct {
 	poolmgrv1.UnimplementedHostAdminServer
 	b *Battery
@@ -309,12 +310,22 @@ func (b *Battery) setCordoned(name string, cordoned bool, reason string) (*poolm
 	now := b.cfg.Clock.Now()
 	e.cordoned = cordoned
 	e.updatedAt = now
+
+	//= docs/requirements/10-battery.md#hosts
+	//# battery SHALL end a Host's drain only in `UncordonHost`, which
+	//# SHALL also uncordon the Host; `CordonHost` SHALL keep a draining Host
+	//# draining, and `UpdateHost` SHALL keep a Host's drain state.
+	//
+	// CordonHost leaves e.draining as it is, and updateHost touches neither
+	// field.
 	if cordoned {
 		e.cordonedReason = reason
 		e.cordonedAt = now
 	} else {
 		e.cordonedReason = ""
 		e.cordonedAt = time.Time{}
+		e.draining = false
+		e.drainingAt = time.Time{}
 		b.kickReconcile()
 	}
 	return e.proto(), nil

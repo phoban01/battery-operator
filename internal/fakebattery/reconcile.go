@@ -164,6 +164,18 @@ func (b *Battery) tick(ctx context.Context) {
 				map[string]any{payloadLeaseID: id, "expires_at": ls.rec.ExpiresAt.UTC().Format(time.RFC3339Nano)})
 		}
 	}
+	//= docs/requirements/10-battery.md#hosts
+	//# While a Host is draining, battery SHALL, in every sweep, set
+	//# every MicroVM on the Host whose phase is not `LEASED`,
+	//# `PRE_LEASE_HOOK_RUNNING` or `DELETING` to `DELETING` and delete it
+	//# through `flintlockd`.
+	//
+	// The drain pass comes before the scan for pending deletions, which
+	// then picks up what it marked, as battery's Sweeper runs drainHosts
+	// before retryPendingDeletions.
+	for _, name := range b.cfg.Hosts.draining() {
+		b.markDrainedLocked(name)
+	}
 	for _, vm := range b.vms {
 		if vm.phase == poolmgrv1.VMPhase_DELETING && vm.uid != "" && !vm.deleteInFlight {
 			pending = append(pending, vm)

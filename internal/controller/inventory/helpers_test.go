@@ -67,6 +67,7 @@ const (
 	opUpdateHost   = "UpdateHost"
 	opCordonHost   = "CordonHost"
 	opUncordonHost = "UncordonHost"
+	opDrainHost    = "DrainHost"
 	opRemoveHost   = "RemoveHost"
 	opGetHost      = "GetHost"
 )
@@ -231,6 +232,31 @@ func (f *fakeAdmin) UncordonHost(_ context.Context, name string) (*battery.Host,
 		return nil, fmt.Errorf("%w: host %s is not registered", battery.ErrFailedPrecondition, name)
 	}
 	h.Cordoned, h.CordonedReason = false, ""
+	h.Draining, h.DrainingAt = false, time.Time{}
+	f.hosts[name] = h
+	return &h, nil
+}
+
+// DrainHost cordons the Host and marks it draining, as battery's does
+// (BA-090, BA-095, BA-096). The MicroVMs on it, vms, stay as the test set
+// them: the test decides when the drain has emptied the Host.
+func (f *fakeAdmin) DrainHost(_ context.Context, name, reason string) (*battery.Host, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.record(opDrainHost, name, false); err != nil {
+		return nil, err
+	}
+	h, ok := f.hosts[name]
+	if !ok {
+		return nil, fmt.Errorf("%w: host %s not found", battery.ErrNotFound, name)
+	}
+	h.Cordoned = true
+	if reason != "" {
+		h.CordonedReason = reason
+	}
+	if !h.Draining {
+		h.Draining, h.DrainingAt = true, time.Now()
+	}
 	f.hosts[name] = h
 	return &h, nil
 }

@@ -67,7 +67,8 @@ func hostRequest(name string) *poolmgrv1.Host {
 //# The fake battery SHALL serve battery's `HostAdmin` service,
 //# and SHALL hold its Hosts as battery does, so that a Pool names only Hosts
 //# the fake holds, a Host is removed only once no Pool names it and nothing
-//# is on it, and no MicroVM is placed on a cordoned Host.
+//# is on it, no MicroVM is placed on a cordoned Host, and the MicroVMs on a
+//# draining Host that are not leased are deleted.
 
 // TestHostAdminIsServed: the Hosts a test gives the fake are held from the
 // start, uncordoned, and HostAdmin lists them; a Host added through it is
