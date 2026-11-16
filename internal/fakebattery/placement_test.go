@@ -28,7 +28,7 @@ import (
 // Hosts and checks where each MicroVM landed, on the fake's own record and
 // on the Hosts themselves. Placement is over the Pool's flintlock_hosts, so
 // a Host the fake knows but the Pool does not name gets nothing, and ties
-// are broken by the order of flintlock_hosts as battery's PickHost does.
+// are broken by the order of flintlock_hosts as battery's PlaceVM does.
 func TestPlacementByLeastVMCount(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -183,5 +183,41 @@ func TestMicroVMIDs(t *testing.T) {
 	}
 	if len(seen) != 3 {
 		t.Fatalf("%d microvms on the Host, want 3", len(seen))
+	}
+}
+
+//= docs/requirements/10-battery.md#hosts
+//= type=test
+//# battery SHALL place each new MicroVM of a Pool on the Host, of
+//# those in the Pool's `flintlock_hosts` that it holds and has not cordoned,
+//# with the fewest of the Pool's MicroVMs that are not `DELETING` or
+//# `FAILED`, counting each MicroVM whose placement it has reserved, and
+//# SHALL give a tie to the Host that comes first in `flintlock_hosts`.
+
+// TestBatchSpreadsOverHosts: a Pool of 8 on two empty Hosts is provisioned
+// in one batch, and the batch is split 4 and 4. Grown to 10 with a third,
+// empty Host, the 2 new MicroVMs both go to it. A tie goes to the Host
+// listed first.
+func TestBatchSpreadsOverHosts(t *testing.T) {
+	h := newHarness(t, Config{}, hostA, hostB, hostC)
+	h.createPool(h.spec("pool", 8, hostA, hostB))
+	if got, want := h.vmHosts(), map[string]int{hostA: 4, hostB: 4}; !sameCounts(got, want) {
+		t.Fatalf("placement of a batch of 8 = %v, want %v", got, want)
+	}
+
+	if _, err := h.client.UpdatePool(h.ctx, h.spec("pool", 10, hostA, hostB, hostC)); err != nil {
+		t.Fatalf("UpdatePool: %v", err)
+	}
+	h.waitEvent(poolmgrv1.EventType_VM_AVAILABLE)
+	h.waitEvent(poolmgrv1.EventType_VM_AVAILABLE)
+	if got, want := h.vmHosts(), map[string]int{hostA: 4, hostB: 4, hostC: 2}; !sameCounts(got, want) {
+		t.Fatalf("placement after growing onto host-c = %v, want %v", got, want)
+	}
+
+	h.createPool(h.spec("other", 1, hostC, hostA))
+	for _, r := range h.b.VMs() {
+		if r.Pool.Name == "other" && r.Host != hostC {
+			t.Fatalf("other's microvm on %s, want host-c: first in flintlock_hosts, and other's own count is a tie", r.Host)
+		}
 	}
 }

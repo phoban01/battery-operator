@@ -15,7 +15,7 @@ code. They do not replace Go tests. How they cite requirements is in
 | `claims_picks.qnt` | `claims.qnt`'s steps that take arguments, each recording them as the replay's picks, for the scenario tests the replay replays as fixed traces (#149) |
 | `certificates.qnt` | Certificate approval and signing, and the address pins (CT-001 to CT-020; EA-061, EA-062, EA-068; ADR 0003 and ADR 0004) |
 | `certificates_test.qnt` | Scenario tests for `certificates.qnt` |
-| `pools.qnt` | Pools, placement and inventory: the Pool Controller and the Inventory Controller against battery (PO-001 to PO-004, PO-010 to PO-012, PO-042, PO-044, IN-001, IN-011, IN-015 to IN-020, DP-035, BA-070, BA-072, BA-080 to BA-084, BA-086, BA-089, CL-063; ADR 0008) |
+| `pools.qnt` | Pools, placement and inventory: the Pool Controller and the Inventory Controller against battery (PO-001 to PO-004, PO-010 to PO-012, PO-042, PO-044, IN-001, IN-011, IN-015 to IN-020, DP-035, BA-070, BA-072, BA-080 to BA-084, BA-086, BA-089, BA-097, CL-063; ADR 0008) |
 | `pools_test.qnt` | Scenario tests for `pools.qnt` |
 
 ## Running them
@@ -613,7 +613,7 @@ battery. The steps are:
   published whose Nodes exist.
 - **battery:** replenishes each Pool up to its size on the least loaded
   Host in its `flintlock_hosts` that it holds uncordoned, as its
-  `PickHost` does, so a Pool of size 0 gets none (BA-072) and a cordoned
+  `PlaceVM` does, so a Pool of size 0 gets none (BA-072) and a cordoned
   Host gets none (BA-084); provisioning on a Host without TLS settings
   fails. It refuses a Pool that names a Host it does not hold (BA-082),
   refuses to remove a Host that a Pool names or a MicroVM is on (BA-083),

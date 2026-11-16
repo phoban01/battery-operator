@@ -264,14 +264,23 @@ module pools {
   //@# battery SHALL place no new MicroVM on a cordoned Host, and
   //@# SHALL leave the MicroVMs already on it as they are.
   //
-  // battery's ineligibleHosts: a Host in flintlock_hosts that battery does
+  // battery's PlaceVM: a Host in flintlock_hosts that battery does
   // not hold, or holds cordoned, is skipped.
   def eligible(p: PoolName): Set[HostName] =
     battery.pools.get(p).flintlockHosts.filter(h => active(h))
 
-  // battery's PickHost: the eligible Host with the fewest of the Pool's
-  // MicroVMs. Ties go by the order of flintlock_hosts, which the model
-  // does not keep, so any of the least loaded.
+  //@= docs/requirements/10-battery.md#hosts
+  //@# battery SHALL place each new MicroVM of a Pool on the Host, of
+  //@# those in the Pool's `flintlock_hosts` that it holds and has not cordoned,
+  //@# with the fewest of the Pool's MicroVMs that are not `DELETING` or
+  //@# `FAILED`, counting each MicroVM whose placement it has reserved, and
+  //@# SHALL give a tie to the Host that comes first in `flintlock_hosts`.
+  //
+  // battery's PlaceVM: the eligible Host with the fewest of the Pool's
+  // MicroVMs. A provision is one step here, so each counts the ones before
+  // it, as PlaceVM's one transaction does. Ties go by the order of
+  // flintlock_hosts, which the model does not keep, so any of the least
+  // loaded.
   def leastLoaded(p: PoolName): Set[HostName] =
     val el = eligible(p)
     el.filter(h => el.forall(h2 => vmCount(p, h) <= vmCount(p, h2)))
@@ -504,7 +513,7 @@ module pools {
     now' = now, secret' = secret, nodes' = nodes, present' = present, changedAt' = changedAt, pools' = pools, inv' = inv,
   }
 
-  // PickHost chose a Host battery holds without TLS settings, as a battery
+  // PlaceVM chose a Host battery holds without TLS settings, as a battery
   // v0.4.0 database left it: battery skipped it when it started, and
   // Provision fails with nothing created (BA-086).
   action batteryProvisionUnreachable(p: PoolName, h: HostName): bool = all {

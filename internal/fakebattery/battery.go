@@ -63,7 +63,7 @@ var ErrStopped = errors.New("fake battery: shut down")
 type Placement string
 
 // Placement strategies. PlacementLeastVMs is the default and is battery's
-// PickHost; PlacementRoundRobin cycles through the Hosts.
+// PlaceVM; PlacementRoundRobin cycles through the Hosts.
 const (
 	PlacementLeastVMs   Placement = "least_vms"
 	PlacementRoundRobin Placement = "round_robin"
