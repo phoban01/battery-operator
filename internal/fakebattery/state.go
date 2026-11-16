@@ -234,12 +234,21 @@ func (b *Battery) oldestAvailableLocked(key poolKey) *vmState {
 	return best
 }
 
+//= docs/requirements/10-battery.md#hosts
+//# battery SHALL place each new MicroVM of a Pool on the Host, of
+//# those in the Pool's `flintlock_hosts` that it holds and has not cordoned,
+//# with the fewest of the Pool's MicroVMs that are not `DELETING` or
+//# `FAILED`, counting each MicroVM whose placement it has reserved, and
+//# SHALL give a tie to the Host that comes first in `flintlock_hosts`.
+
 // pickHostLocked chooses the Host for a new MicroVM in ps. Only the Hosts
-// the fake holds and has not cordoned are candidates, as battery's
-// ineligibleHosts decides. PlacementLeastVMs picks the candidate with the
-// fewest MicroVMs of this Pool that are not DELETING or FAILED, ties broken
-// by the order of flintlock_hosts, which is battery's PickHost;
-// PlacementRoundRobin cycles through the candidates.
+// the fake holds and has not cordoned are candidates. PlacementLeastVMs
+// picks the candidate with the fewest MicroVMs of this Pool that are not
+// DELETING or FAILED, ties broken by the order of flintlock_hosts, which is
+// battery v0.6.1's PlaceVM. provisionNLocked records each MicroVM, as
+// PROVISIONING, before it picks the next Host, so the MicroVMs of one batch
+// count as battery's reserved placements do. PlacementRoundRobin cycles
+// through the candidates.
 func (b *Battery) pickHostLocked(ps *poolState) (string, error) {
 	//= docs/requirements/10-battery.md#hosts
 	//# battery SHALL place no new MicroVM on a cordoned Host, and

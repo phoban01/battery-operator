@@ -209,6 +209,7 @@ of date. `make duvet-models-write` rewrites it. `type=test` and
 | BA-089 | `specs/quint/pools.qnt` |
 | BA-090 | `specs/quint/pools.qnt` |
 | BA-091 | `specs/quint/pools.qnt` |
+| BA-097 | `specs/quint/pools.qnt` |
 | CL-001 | `specs/quint/claims.qnt` |
 | CL-002 | `specs/quint/claims.qnt` |
 | CL-003 | `specs/quint/claims.qnt` |

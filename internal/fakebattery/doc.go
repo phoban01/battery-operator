@@ -41,7 +41,7 @@ limitations under the License.
 // refusing a Pool with a leased MicroVM and otherwise deleting it with
 // every MicroVM it owns, and a draining Host whose unleased MicroVMs the
 // fake deletes on every tick (DrainHost). Its HostAdmin follows the Host calls of
-// battery v0.6.0 (TD-028): a Pool may name only a
+// battery v0.6.1 (TD-028): a Pool may name only a
 // Host the fake holds, RemoveHost refuses while a Pool names the Host or
 // any MicroVM is on it, and no new MicroVM is placed on a cordoned Host.
 //
