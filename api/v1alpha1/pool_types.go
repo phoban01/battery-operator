@@ -364,8 +364,9 @@ type Volume struct {
 	// +optional
 	PartitionID *string `json:"partitionId,omitempty"`
 
-	// sizeInMb is flintlock's size_in_mb. flintlock v0.16.0 accepts it and
-	// does nothing with it: a volume from a container image is as big as the
+	// sizeInMb is flintlock's size_in_mb. flintlock v0.16.0 and v0.17.0 accept it and
+	// do nothing with it for a FULL volume, the only mode the Operator sends: a
+	// volume from a container image is as big as the
 	// Host's MICROVM_BASE_IMAGE_SIZE (hostimage/README.md, HI-087).
 	// +optional
 	// +kubebuilder:validation:Minimum=1

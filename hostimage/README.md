@@ -265,7 +265,10 @@ pin, not tried on a Host.
   sends it in `CreateMicroVM`. It sets only `id`, `namespace` and
   `allow_guest_agent`. The Operator copies `sizeInMb` into the template
   (`internal/controller/pool_convert.go`).
-- flintlock v0.16.0 drops it. `api/types/microvm.proto` documents
+- flintlock v0.16.0 drops it, and so does v0.17.0 for a `FULL` volume,
+  the only mode the Operator sends; v0.17.0 reads it only for the writable
+  disk of an `OVERLAY` root (`core/steps/runtime/overlay_volume_mount.go`).
+  In v0.16.0, `api/types/microvm.proto` documents
   `Volume.size_in_mb` as "the size to resize this volume to", and
   `infrastructure/grpc/convert.go` copies it into `models.Volume.Size`
   (`core/models/volumes.go`). No other code reads that field.

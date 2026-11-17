@@ -166,8 +166,10 @@ bug flintlock-runner fixed: a disk that carries the pool's own LVM
 structures looks in use, and must not be refused for it.
 
 HI-087 exists because the base image size is the size of every MicroVM
-volume that comes from a container image. flintlock v0.16.0 accepts a
-volume's `size_in_mb` and does nothing with it, and containerd's
+volume that comes from a container image. flintlock v0.16.0 and v0.17.0 accept a
+volume's `size_in_mb` and do nothing with it for a volume in `FULL` mode,
+the only mode the Operator sends (v0.17.0 uses it only for the writable
+disk of an `OVERLAY` root), and containerd's
 devicemapper snapshotter makes every device at its one configured size.
 `hostimage/README.md` gives the evidence. A Host that runs MicroVMs with
 large disks therefore needs a larger base image size, and the size is a
@@ -421,9 +423,9 @@ renews the serving certificate, and a restart must not end the MicroVMs on
 the Host. The trial on a real Host (`hack/real-hosts`) saw a MicroVM keep
 running through a restart of `flintlockd` with `KillMode=process`.
 
-A restart leaves the MicroVMs running. In flintlock v0.16.0, the version the
-Host Image pins, Firecracker and Cloud Hypervisor are started detached by
-default (`pkg/defaults/defaults.go:32` and `:42`), in a session of their own
+A restart leaves the MicroVMs running. In flintlock v0.16.0, as in v0.17.0,
+which the Host Image pins, Firecracker and Cloud Hypervisor are started detached by
+default (`pkg/defaults/defaults.go:32` and `:42` of v0.16.0), in a session of their own
 (`pkg/process/process.go:16-24`, called from
 `infrastructure/microvm/firecracker/create.go:97` and
 `infrastructure/microvm/cloudhypervisor/create.go:116`), with nothing tying
