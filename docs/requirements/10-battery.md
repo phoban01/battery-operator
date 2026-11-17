@@ -25,9 +25,10 @@ Links point at the tag, so line numbers stay valid. Where battery v0.4.0
 changed an assumption that held for v0.3.3, the section says so; see also
 [Changes since v0.3.3](#since-v033). The one exception is
 [Hosts](#hosts): battery's `HostAdmin` API for adding and removing Hosts
-came in v0.5.0, its `DrainHost` in v0.6.0, and its spread of a batch over
-the Hosts in v0.6.1, which the Operator now pins; its links point at that
-tag.
+came in v0.5.0, its `DrainHost` in v0.6.0, its spread of a batch over
+the Hosts in v0.6.1, and its placement by memory in v0.7.0, which the
+Operator now pins; its links, and those of [Balloon](#balloon), point at
+that tag.
 
 ## Claiming {#claiming}
 
@@ -490,40 +491,48 @@ hold two.
   the Host and no error.
 - **BA-096** If `DrainHost` names a Host battery does not hold, then battery
   SHALL answer `NOT_FOUND`.
-- **BA-097** battery SHALL place each new MicroVM of a Pool on the Host, of
+- **BA-097** (withdrawn): battery v0.6.1 placed by the count of the Pool's
+  own MicroVMs on each Host; v0.7.0 places by memory, across all Pools
+  (BA-098).
+- **BA-098** battery SHALL place each new MicroVM of a Pool on the Host, of
   those in the Pool's `flintlock_hosts` that it holds and has not cordoned,
-  with the fewest of the Pool's MicroVMs that are not `DELETING` or
-  `FAILED`, counting each MicroVM whose placement it has reserved, and
-  SHALL give a tie to the Host that comes first in `flintlock_hosts`.
+  with the least memory reserved, summing the template `memory_in_mb` of
+  every Pool's MicroVMs on the Host that are not `DELETING` or `FAILED` and
+  of every placement it has reserved there, and SHALL give a tie to the Host
+  with the fewest of the Pool's own MicroVMs and then to the Host that comes
+  first in `flintlock_hosts`.
 
-| ID | Source at v0.6.1 |
+| ID | Source at v0.7.0 |
 |----|------------------|
-| BA-080 | [`internal/api/hostadmin.go`, `AddHost`, L215-L270, `dialHost`, L400-L421](https://github.com/liquidmetal-dev/battery/blob/v0.6.1/internal/api/hostadmin.go#L215-L421) |
-| BA-081 | [`internal/flintlockclient/pool.go`, `Dial`, L58, `dialCredentials`, L287-L315](https://github.com/liquidmetal-dev/battery/blob/v0.6.1/internal/flintlockclient/pool.go#L58-L315); [`cmd/poolmgrd/main.go`, `buildFlintlockPool`, L202](https://github.com/liquidmetal-dev/battery/blob/v0.6.1/cmd/poolmgrd/main.go#L202) |
-| BA-082 | [`internal/api/pooladmin.go`, `checkFlintlockHosts`, L146, `CreatePool`, L211, `UpdatePool`, L300](https://github.com/liquidmetal-dev/battery/blob/v0.6.1/internal/api/pooladmin.go#L146-L300) |
-| BA-083 | [`internal/api/hostadmin.go`, `RemoveHost`, L342-L381](https://github.com/liquidmetal-dev/battery/blob/v0.6.1/internal/api/hostadmin.go#L342-L381); [`internal/store/sqlite.go`, `DeleteHost`, L875](https://github.com/liquidmetal-dev/battery/blob/v0.6.1/internal/store/sqlite.go#L875) |
-| BA-084 | [`internal/store/sqlite.go`, `PlaceVM`, L1156-L1251](https://github.com/liquidmetal-dev/battery/blob/v0.6.1/internal/store/sqlite.go#L1156-L1251); [`internal/reconciler/provision.go`, `Provision`, L157](https://github.com/liquidmetal-dev/battery/blob/v0.6.1/internal/reconciler/provision.go#L157) |
-| BA-085 | [`internal/api/hostadmin.go`, `AddHost`, L234-L245](https://github.com/liquidmetal-dev/battery/blob/v0.6.1/internal/api/hostadmin.go#L234-L245) |
-| BA-086 | [`internal/store/sqlite.go`, `migrations`, L64-L81](https://github.com/liquidmetal-dev/battery/blob/v0.6.1/internal/store/sqlite.go#L64-L81); [`cmd/poolmgrd/main.go`, L106-L112](https://github.com/liquidmetal-dev/battery/blob/v0.6.1/cmd/poolmgrd/main.go#L106-L112) |
-| BA-087 | [`internal/config/config.go`, `Load`, L47-L60](https://github.com/liquidmetal-dev/battery/blob/v0.6.1/internal/config/config.go#L47-L60) |
-| BA-088 | [`internal/api/hostadmin.go`, `GetHost`, L183, `UpdateHost`, L276, `RemoveHost`, L342](https://github.com/liquidmetal-dev/battery/blob/v0.6.1/internal/api/hostadmin.go#L183-L381) |
-| BA-089 | [`internal/api/hostadmin.go`, `CordonHost`, L83, `UncordonHost`, L101, `UpdateHost`, L276](https://github.com/liquidmetal-dev/battery/blob/v0.6.1/internal/api/hostadmin.go#L83-L327) |
-| BA-090 | [`internal/api/hostadmin.go`, `DrainHost`, L130-L157](https://github.com/liquidmetal-dev/battery/blob/v0.6.1/internal/api/hostadmin.go#L130-L157); [`internal/store/sqlite.go`, `DrainHost`, L1005-L1053](https://github.com/liquidmetal-dev/battery/blob/v0.6.1/internal/store/sqlite.go#L1005-L1053); [`internal/reconciler/drain.go`, `DeleteDrainedVMs`, L36-L77](https://github.com/liquidmetal-dev/battery/blob/v0.6.1/internal/reconciler/drain.go#L36-L77) |
-| BA-091 | [`internal/reconciler/sweeper.go`, `drainHosts`, L196-L202](https://github.com/liquidmetal-dev/battery/blob/v0.6.1/internal/reconciler/sweeper.go#L196-L202); [`internal/store/sqlite.go`, `MarkDrainingHostsVMsDeleting`, L1055-L1070](https://github.com/liquidmetal-dev/battery/blob/v0.6.1/internal/store/sqlite.go#L1055-L1070) |
-| BA-092 | [`internal/store/sqlite.go`, `DrainHost`, L1005-L1053, `MarkDrainingHostsVMsDeleting`, L1055-L1070](https://github.com/liquidmetal-dev/battery/blob/v0.6.1/internal/store/sqlite.go#L1005-L1070) |
-| BA-093 | [`internal/reconciler/drain.go`, `DeleteDrainedVMs`, L36-L77](https://github.com/liquidmetal-dev/battery/blob/v0.6.1/internal/reconciler/drain.go#L36-L77); [`internal/reconciler/sweeper.go`, `retryPendingDeletions`, L157-L188](https://github.com/liquidmetal-dev/battery/blob/v0.6.1/internal/reconciler/sweeper.go#L157-L188) |
-| BA-094 | [`internal/api/hostadmin.go`, `CordonHost`, L83, `UncordonHost`, L101-L114](https://github.com/liquidmetal-dev/battery/blob/v0.6.1/internal/api/hostadmin.go#L83-L114); [`internal/store/sqlite.go`, `SetHostCordoned`, L974-L1003](https://github.com/liquidmetal-dev/battery/blob/v0.6.1/internal/store/sqlite.go#L974-L1003) |
-| BA-095 | [`internal/store/sqlite.go`, `DrainHost`, L1005-L1053](https://github.com/liquidmetal-dev/battery/blob/v0.6.1/internal/store/sqlite.go#L1005-L1053) |
-| BA-096 | [`internal/api/hostadmin.go`, `DrainHost`, L140-L144](https://github.com/liquidmetal-dev/battery/blob/v0.6.1/internal/api/hostadmin.go#L140-L144) |
-| BA-097 | [`internal/store/sqlite.go`, `PlaceVM`, L1156-L1251](https://github.com/liquidmetal-dev/battery/blob/v0.6.1/internal/store/sqlite.go#L1156-L1251); [`internal/reconciler/reconciler.go`, `provisionN`, L231-L262](https://github.com/liquidmetal-dev/battery/blob/v0.6.1/internal/reconciler/reconciler.go#L231-L262) |
+| BA-080 | [`internal/api/hostadmin.go`, `AddHost`, L215-L270, `dialHost`, L400-L421](https://github.com/liquidmetal-dev/battery/blob/v0.7.0/internal/api/hostadmin.go#L215-L421) |
+| BA-081 | [`internal/flintlockclient/pool.go`, `Dial`, L62, `dialCredentials`, L291-L319](https://github.com/liquidmetal-dev/battery/blob/v0.7.0/internal/flintlockclient/pool.go#L62-L319); [`cmd/poolmgrd/main.go`, `buildFlintlockPool`, L202](https://github.com/liquidmetal-dev/battery/blob/v0.7.0/cmd/poolmgrd/main.go#L202) |
+| BA-082 | [`internal/api/pooladmin.go`, `checkFlintlockHosts`, L146, `CreatePool`, L211, `UpdatePool`, L300](https://github.com/liquidmetal-dev/battery/blob/v0.7.0/internal/api/pooladmin.go#L146-L300) |
+| BA-083 | [`internal/api/hostadmin.go`, `RemoveHost`, L342-L381](https://github.com/liquidmetal-dev/battery/blob/v0.7.0/internal/api/hostadmin.go#L342-L381); [`internal/store/sqlite.go`, `DeleteHost`, L875](https://github.com/liquidmetal-dev/battery/blob/v0.7.0/internal/store/sqlite.go#L875) |
+| BA-084 | [`internal/store/sqlite.go`, `PlaceVM`, L1156-L1267](https://github.com/liquidmetal-dev/battery/blob/v0.7.0/internal/store/sqlite.go#L1156-L1267); [`internal/reconciler/provision.go`, `Provision`, L157](https://github.com/liquidmetal-dev/battery/blob/v0.7.0/internal/reconciler/provision.go#L157) |
+| BA-085 | [`internal/api/hostadmin.go`, `AddHost`, L234-L245](https://github.com/liquidmetal-dev/battery/blob/v0.7.0/internal/api/hostadmin.go#L234-L245) |
+| BA-086 | [`internal/store/sqlite.go`, `migrations`, L64-L81](https://github.com/liquidmetal-dev/battery/blob/v0.7.0/internal/store/sqlite.go#L64-L81); [`cmd/poolmgrd/main.go`, L106-L112](https://github.com/liquidmetal-dev/battery/blob/v0.7.0/cmd/poolmgrd/main.go#L106-L112) |
+| BA-087 | [`internal/config/config.go`, `Load`, L47-L60](https://github.com/liquidmetal-dev/battery/blob/v0.7.0/internal/config/config.go#L47-L60) |
+| BA-088 | [`internal/api/hostadmin.go`, `GetHost`, L183, `UpdateHost`, L276, `RemoveHost`, L342](https://github.com/liquidmetal-dev/battery/blob/v0.7.0/internal/api/hostadmin.go#L183-L381) |
+| BA-089 | [`internal/api/hostadmin.go`, `CordonHost`, L83, `UncordonHost`, L101, `UpdateHost`, L276](https://github.com/liquidmetal-dev/battery/blob/v0.7.0/internal/api/hostadmin.go#L83-L327) |
+| BA-090 | [`internal/api/hostadmin.go`, `DrainHost`, L130-L157](https://github.com/liquidmetal-dev/battery/blob/v0.7.0/internal/api/hostadmin.go#L130-L157); [`internal/store/sqlite.go`, `DrainHost`, L1005-L1053](https://github.com/liquidmetal-dev/battery/blob/v0.7.0/internal/store/sqlite.go#L1005-L1053); [`internal/reconciler/drain.go`, `DeleteDrainedVMs`, L36-L77](https://github.com/liquidmetal-dev/battery/blob/v0.7.0/internal/reconciler/drain.go#L36-L77) |
+| BA-091 | [`internal/reconciler/sweeper.go`, `drainHosts`, L196-L202](https://github.com/liquidmetal-dev/battery/blob/v0.7.0/internal/reconciler/sweeper.go#L196-L202); [`internal/store/sqlite.go`, `MarkDrainingHostsVMsDeleting`, L1055-L1070](https://github.com/liquidmetal-dev/battery/blob/v0.7.0/internal/store/sqlite.go#L1055-L1070) |
+| BA-092 | [`internal/store/sqlite.go`, `DrainHost`, L1005-L1053, `MarkDrainingHostsVMsDeleting`, L1055-L1070](https://github.com/liquidmetal-dev/battery/blob/v0.7.0/internal/store/sqlite.go#L1005-L1070) |
+| BA-093 | [`internal/reconciler/drain.go`, `DeleteDrainedVMs`, L36-L77](https://github.com/liquidmetal-dev/battery/blob/v0.7.0/internal/reconciler/drain.go#L36-L77); [`internal/reconciler/sweeper.go`, `retryPendingDeletions`, L157-L188](https://github.com/liquidmetal-dev/battery/blob/v0.7.0/internal/reconciler/sweeper.go#L157-L188) |
+| BA-094 | [`internal/api/hostadmin.go`, `CordonHost`, L83, `UncordonHost`, L101-L114](https://github.com/liquidmetal-dev/battery/blob/v0.7.0/internal/api/hostadmin.go#L83-L114); [`internal/store/sqlite.go`, `SetHostCordoned`, L974-L1003](https://github.com/liquidmetal-dev/battery/blob/v0.7.0/internal/store/sqlite.go#L974-L1003) |
+| BA-095 | [`internal/store/sqlite.go`, `DrainHost`, L1005-L1053](https://github.com/liquidmetal-dev/battery/blob/v0.7.0/internal/store/sqlite.go#L1005-L1053) |
+| BA-096 | [`internal/api/hostadmin.go`, `DrainHost`, L140-L144](https://github.com/liquidmetal-dev/battery/blob/v0.7.0/internal/api/hostadmin.go#L140-L144) |
+| BA-097 | Withdrawn. At v0.6.1: [`internal/store/sqlite.go`, `PlaceVM`, L1156-L1251](https://github.com/liquidmetal-dev/battery/blob/v0.6.1/internal/store/sqlite.go#L1156-L1251) |
+| BA-098 | [`internal/store/sqlite.go`, `PlaceVM`, L1156-L1267](https://github.com/liquidmetal-dev/battery/blob/v0.7.0/internal/store/sqlite.go#L1156-L1267); [`internal/reconciler/reconciler.go`, `provisionN`, L231-L262](https://github.com/liquidmetal-dev/battery/blob/v0.7.0/internal/reconciler/reconciler.go#L231-L262) |
 
 battery's
-[ADR `2026-09-24-host-api.md`](https://github.com/liquidmetal-dev/battery/blob/v0.6.1/docs/adr/2026-09-24-host-api.md)
+[ADR `2026-09-24-host-api.md`](https://github.com/liquidmetal-dev/battery/blob/v0.7.0/docs/adr/2026-09-24-host-api.md)
 gives the design,
-[ADR `2026-10-21-drain-host.md`](https://github.com/liquidmetal-dev/battery/blob/v0.6.1/docs/adr/2026-10-21-drain-host.md)
-the drain, and
-[ADR `2026-11-16-place-vm.md`](https://github.com/liquidmetal-dev/battery/blob/v0.6.1/docs/adr/2026-11-16-place-vm.md)
-the placement.
+[ADR `2026-10-21-drain-host.md`](https://github.com/liquidmetal-dev/battery/blob/v0.7.0/docs/adr/2026-10-21-drain-host.md)
+the drain,
+[ADR `2026-11-16-place-vm.md`](https://github.com/liquidmetal-dev/battery/blob/v0.7.0/docs/adr/2026-11-16-place-vm.md)
+the one transaction for a placement, and
+[ADR `2026-11-17-place-vm-by-memory.md`](https://github.com/liquidmetal-dev/battery/blob/v0.7.0/docs/adr/2026-11-17-place-vm-by-memory.md)
+the placement by memory.
 
 battery keeps its Hosts in its database (BA-086), with each Host's address,
 TLS settings and cordon state. The TLS settings are file paths, read in
@@ -556,8 +565,13 @@ placement, so a whole batch went to one Host: with equal counts, the first
 in `flintlock_hosts`
 (liquidmetal-dev/battery#137). v0.6.1 picks the Host and reserves the
 placement in one transaction, so each provision counts the ones before it
-and a batch spreads over the Hosts (BA-097). The spread is by the Pool's
-own MicroVMs: another Pool's MicroVMs on a Host do not count.
+and a batch spreads over the Hosts. v0.7.0 ranks the Hosts by the memory
+reserved on each, across all Pools, at each MicroVM's template
+`memory_in_mb` (BA-098). With one Pool, or Pools of one size, a batch
+spreads as before; Pools that share Hosts now spread over them together,
+and a large MicroVM counts for more than a small one. A MicroVM counts at
+its Pool's current template, so after `UpdatePool` changes `memory_in_mb`
+the Pool's older MicroVMs count at the new size until they are replaced.
 
 A database from battery v0.4.0 holds the Hosts that v0.4.0 copied from its
 configuration file when it started, without TLS settings, and migration 2
@@ -568,6 +582,36 @@ in the database too: v0.4.0 never removed a Host from it. battery v0.6.0
 adds migration 3, the drain columns: a Host from an older database is not
 draining. The e2e suite upgrades the sidecar from v0.4.0, which runs both
 migrations.
+
+## Balloon {#balloon}
+
+- **BA-099** battery SHALL send each MicroVM of a Pool to `flintlockd` with
+  the `balloon` of the Pool's `microvm_template`, as the template sets it.
+- **BA-100** If `flintlockd` answers a `CreateMicroVM` whose spec has a
+  `balloon` with a spec that has none, then battery SHALL delete that
+  MicroVM and fail its provision.
+
+| ID | Source at v0.7.0 |
+|----|------------------|
+| BA-099 | [`internal/reconciler/provision.go`, `Provision`, L190-L198, L211](https://github.com/liquidmetal-dev/battery/blob/v0.7.0/internal/reconciler/provision.go#L190-L211); [`internal/store/convert.go`](https://github.com/liquidmetal-dev/battery/blob/v0.7.0/internal/store/convert.go) |
+| BA-100 | [`internal/reconciler/provision.go`, `Provision`, L203-L208, L236-L244](https://github.com/liquidmetal-dev/battery/blob/v0.7.0/internal/reconciler/provision.go#L203-L244); [`internal/flintlockclient/balloon.go`](https://github.com/liquidmetal-dev/battery/blob/v0.7.0/internal/flintlockclient/balloon.go) |
+
+flintlock#1415 added `balloon` to `MicroVMSpec`: a balloon that starts
+empty and deflates when the guest runs out of memory, and with
+`free_page_reporting` returns the memory the guest frees to the Host.
+battery stores a Pool's template as protojson, so it keeps `balloon` only
+from v0.7.0, whose flintlock API module knows the field (BA-099).
+
+A `flintlockd` from before flintlock#1415 accepts a spec with a `balloon`,
+drops the field, and boots the MicroVM without one. It returns the spec it
+stored, so battery sees the balloon is gone and deletes the MicroVM
+(BA-100). battery then remembers the Host's flintlock version, and fails
+each later provision with a balloon on that Host before `CreateMicroVM`
+until the Host reports another version. No flintlock release has the
+balloon yet, and a build of its main reports a v0.16.0 version, so battery
+cannot use the version alone (liquidmetal-dev/battery#162). A Pool with a
+balloon on such Hosts never fills, and its MicroVMs fail as they would for
+any other provision error.
 
 ## Where the stand-ins differ {#stand-ins}
 

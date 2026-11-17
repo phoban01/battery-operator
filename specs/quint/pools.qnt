@@ -269,21 +269,34 @@ module pools {
   def eligible(p: PoolName): Set[HostName] =
     battery.pools.get(p).flintlockHosts.filter(h => active(h))
 
+  // The template memory_in_mb of each Pool's MicroVMs. The Pools differ, so
+  // that placement by memory and by count can disagree.
+  pure val POOL_MEMORY: PoolName -> int = Map("p1" -> 1, "p2" -> 2)
+
+  // The memory reserved on Host h: every Pool's MicroVMs on it, each at its
+  // Pool's template memory. The model's MicroVMs are all live: a deleted one
+  // leaves battery.vms.
+  def memReserved(h: HostName): int =
+    battery.vms.filter(v => v.host == h).fold(0, (acc, v) => acc + POOL_MEMORY.get(v.pool))
+
   //@= docs/requirements/10-battery.md#hosts
   //@# battery SHALL place each new MicroVM of a Pool on the Host, of
   //@# those in the Pool's `flintlock_hosts` that it holds and has not cordoned,
-  //@# with the fewest of the Pool's MicroVMs that are not `DELETING` or
-  //@# `FAILED`, counting each MicroVM whose placement it has reserved, and
-  //@# SHALL give a tie to the Host that comes first in `flintlock_hosts`.
+  //@# with the least memory reserved, summing the template `memory_in_mb` of
+  //@# every Pool's MicroVMs on the Host that are not `DELETING` or `FAILED` and
+  //@# of every placement it has reserved there, and SHALL give a tie to the Host
+  //@# with the fewest of the Pool's own MicroVMs and then to the Host that comes
+  //@# first in `flintlock_hosts`.
   //
-  // battery's PlaceVM: the eligible Host with the fewest of the Pool's
-  // MicroVMs. A provision is one step here, so each counts the ones before
-  // it, as PlaceVM's one transaction does. Ties go by the order of
-  // flintlock_hosts, which the model does not keep, so any of the least
-  // loaded.
+  // battery's PlaceVM: the eligible Host with the least memory reserved,
+  // then the fewest of the Pool's MicroVMs. A provision is one step here, so
+  // each counts the ones before it, as PlaceVM's one transaction does. The
+  // last tie goes by the order of flintlock_hosts, which the model does not
+  // keep, so any of those left.
   def leastLoaded(p: PoolName): Set[HostName] =
     val el = eligible(p)
-    el.filter(h => el.forall(h2 => vmCount(p, h) <= vmCount(p, h2)))
+    val byMemory = el.filter(h => el.forall(h2 => memReserved(h) <= memReserved(h2)))
+    byMemory.filter(h => byMemory.forall(h2 => vmCount(p, h) <= vmCount(p, h2)))
 
   //@= docs/requirements/10-battery.md#delete-pool
   //@# While a Pool's replenishment strategy is `MIN_SIZE_THRESHOLD`

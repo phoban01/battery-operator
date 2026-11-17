@@ -237,18 +237,22 @@ func (b *Battery) oldestAvailableLocked(key poolKey) *vmState {
 //= docs/requirements/10-battery.md#hosts
 //# battery SHALL place each new MicroVM of a Pool on the Host, of
 //# those in the Pool's `flintlock_hosts` that it holds and has not cordoned,
-//# with the fewest of the Pool's MicroVMs that are not `DELETING` or
-//# `FAILED`, counting each MicroVM whose placement it has reserved, and
-//# SHALL give a tie to the Host that comes first in `flintlock_hosts`.
+//# with the least memory reserved, summing the template `memory_in_mb` of
+//# every Pool's MicroVMs on the Host that are not `DELETING` or `FAILED` and
+//# of every placement it has reserved there, and SHALL give a tie to the Host
+//# with the fewest of the Pool's own MicroVMs and then to the Host that comes
+//# first in `flintlock_hosts`.
 
 // pickHostLocked chooses the Host for a new MicroVM in ps. Only the Hosts
 // the fake holds and has not cordoned are candidates. PlacementLeastVMs
-// picks the candidate with the fewest MicroVMs of this Pool that are not
-// DELETING or FAILED, ties broken by the order of flintlock_hosts, which is
-// battery v0.6.1's PlaceVM. provisionNLocked records each MicroVM, as
-// PROVISIONING, before it picks the next Host, so the MicroVMs of one batch
-// count as battery's reserved placements do. PlacementRoundRobin cycles
-// through the candidates.
+// picks the candidate with the least memory reserved, summing each Pool's
+// template memory_in_mb over its MicroVMs that are not DELETING or FAILED,
+// then the fewest MicroVMs of this Pool, then the order of flintlock_hosts,
+// which is battery v0.7.0's PlaceVM. A MicroVM counts at its Pool's current
+// template, and at 0 if its Pool is gone. provisionNLocked records each
+// MicroVM, as PROVISIONING, before it picks the next Host, so the MicroVMs
+// of one batch count as battery's reserved placements do.
+// PlacementRoundRobin cycles through the candidates.
 func (b *Battery) pickHostLocked(ps *poolState) (string, error) {
 	//= docs/requirements/10-battery.md#hosts
 	//# battery SHALL place no new MicroVM on a cordoned Host, and
@@ -267,21 +271,26 @@ func (b *Battery) pickHostLocked(ps *poolState) (string, error) {
 		ps.rr++
 		return host, nil
 	}
-	perHost := make(map[string]int, len(candidates))
+	type load struct{ memory, own int64 }
+	loads := make(map[string]load, len(candidates))
 	for _, vm := range b.vms {
-		if vm.pool != ps.key {
-			continue
-		}
 		switch vm.phase {
 		case poolmgrv1.VMPhase_DELETING, poolmgrv1.VMPhase_FAILED:
 			continue
-		default:
-			perHost[vm.host]++
 		}
+		l := loads[vm.host]
+		if owner, ok := b.pools[vm.pool]; ok {
+			l.memory += int64(owner.spec.Template.GetMemoryInMb())
+		}
+		if vm.pool == ps.key {
+			l.own++
+		}
+		loads[vm.host] = l
 	}
 	best := candidates[0]
 	for _, h := range candidates[1:] {
-		if perHost[h] < perHost[best] {
+		l, lb := loads[h], loads[best]
+		if l.memory < lb.memory || (l.memory == lb.memory && l.own < lb.own) {
 			best = h
 		}
 	}

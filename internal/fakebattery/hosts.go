@@ -34,6 +34,10 @@ import (
 // fake holds, or one it holds with no connection.
 var errUnknownHost = errors.New("unknown host")
 
+// errBalloonDropped is why a provision fails when the Host's flintlockd
+// drops the template's balloon, as one from before flintlock#1415 does.
+var errBalloonDropped = errors.New("flintlockd dropped the balloon")
+
 //= docs/requirements/10-battery.md#hosts
 //= type=exception
 //= reason=The fake reaches each Host over the connection a test, or its Dial, gives it, and reads no certificate, so there is none for it to read again.
