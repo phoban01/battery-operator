@@ -89,6 +89,28 @@ func TestPoolSpecToBattery(t *testing.T) {
 	}
 }
 
+//= docs/requirements/01-resources.md#pool
+//= type=test
+//# The `Pool` resource SHALL carry an optional `spec.template.balloon`
+//# with the field `freePageReporting`, and the Pool Controller SHALL send
+//# it to battery as the template's `balloon`.
+
+// TestPoolTemplateBalloon: a Pool with a balloon sends battery a template
+// with one, and a Pool without one sends none.
+func TestPoolTemplateBalloon(t *testing.T) {
+	pool := testPool()
+	pool.Spec.Template.Balloon = &batteryv1alpha1.Balloon{FreePageReporting: true}
+	got := poolSpecToBattery(pool, nil).Template.GetBalloon()
+	if diff := cmp.Diff(&types.Balloon{FreePageReporting: true}, got, protocmp.Transform()); diff != "" {
+		t.Errorf("template balloon (-want +got):\n%s", diff)
+	}
+
+	pool.Spec.Template.Balloon = nil
+	if got := poolSpecToBattery(pool, nil).Template.Balloon; got != nil {
+		t.Errorf("template balloon = %v, want none for a Pool without one", got)
+	}
+}
+
 // TestPoolEnumsWithoutCounterpartAreUnspecified: a value the CRD does not
 // define becomes battery's UNSPECIFIED, which battery refuses.
 func TestPoolEnumsWithoutCounterpartAreUnspecified(t *testing.T) {

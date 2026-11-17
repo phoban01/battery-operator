@@ -89,6 +89,9 @@ type testHost struct {
 	// MicroVM either way: a caller that gave up gets its context's error
 	// and no uid.
 	createGate chan struct{}
+	// dropBalloon takes the balloon out of every CreateMicroVM reply, as a
+	// flintlockd from before flintlock#1415 drops it.
+	dropBalloon bool
 	// execErr fails the opening of every exec stream.
 	execErr error
 }
@@ -147,7 +150,7 @@ func (h *testHost) stream(ctx context.Context, desc *grpc.StreamDesc, cc *grpc.C
 
 func (h *testHost) create(ctx context.Context, invoke func(context.Context) error, reply any) error {
 	h.mu.Lock()
-	gate, createErr := h.createGate, h.createErr
+	gate, createErr, dropBalloon := h.createGate, h.createErr, h.dropBalloon
 	h.mu.Unlock()
 	if createErr != nil {
 		return createErr
@@ -155,6 +158,9 @@ func (h *testHost) create(ctx context.Context, invoke func(context.Context) erro
 	record := func(err error) {
 		if err != nil {
 			return
+		}
+		if dropBalloon {
+			reply.(*mvmv1.CreateMicroVMResponse).GetMicrovm().GetSpec().Balloon = nil
 		}
 		uid := reply.(*mvmv1.CreateMicroVMResponse).GetMicrovm().GetSpec().GetUid()
 		h.mu.Lock()

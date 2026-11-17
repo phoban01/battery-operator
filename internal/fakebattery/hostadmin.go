@@ -54,7 +54,7 @@ import (
 
 // hostAdminServer implements poolmgrv1.HostAdminServer over the fake's
 // Hosts, with battery's semantics (internal/api/hostadmin.go in battery
-// v0.6.1). DrainHost is in hostdrain.go.
+// v0.7.0). DrainHost is in hostdrain.go.
 type hostAdminServer struct {
 	poolmgrv1.UnimplementedHostAdminServer
 	b *Battery

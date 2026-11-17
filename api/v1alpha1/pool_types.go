@@ -300,6 +300,17 @@ type MicroVMTemplate struct {
 	// cpuConfig sets the CPU features presented to the guest.
 	// +optional
 	CPUConfig *CPUConfig `json:"cpuConfig,omitempty"`
+
+	//= docs/requirements/01-resources.md#pool
+	//# The `Pool` resource SHALL carry an optional `spec.template.balloon`
+	//# with the field `freePageReporting`, and the Pool Controller SHALL send
+	//# it to battery as the template's `balloon`.
+
+	// balloon attaches a memory balloon to each MicroVM. With
+	// freePageReporting, the guest returns the memory it frees to the Host.
+	// It needs battery v0.7.0 and a flintlockd with flintlock#1415.
+	// +optional
+	Balloon *Balloon `json:"balloon,omitempty"`
 }
 
 // Kernel is flintlock's Kernel.
@@ -444,6 +455,16 @@ type CPUConfig struct {
 	// +optional
 	// +listType=atomic
 	KVMCapabilitiesToDisable []string `json:"kvmCapabilitiesToDisable,omitempty"`
+}
+
+// Balloon is flintlock's Balloon. flintlock gives the VMM a balloon that
+// starts empty and deflates when the guest runs out of memory.
+type Balloon struct {
+	// freePageReporting makes the guest report the memory it frees, and the
+	// VMM return it to the Host. The guest kernel needs
+	// CONFIG_VIRTIO_BALLOON and CONFIG_PAGE_REPORTING.
+	// +optional
+	FreePageReporting bool `json:"freePageReporting,omitempty"`
 }
 
 // The condition types of a Pool.

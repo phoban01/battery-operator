@@ -22,6 +22,7 @@ import (
 	"testing"
 
 	poolmgrv1 "github.com/liquidmetal-dev/battery/api/proto/poolmgr/v1alpha1"
+	"github.com/liquidmetal-dev/flintlock/api/types"
 )
 
 // TestPlacementByLeastVMCount fills Pools of several sizes over several
@@ -190,9 +191,11 @@ func TestMicroVMIDs(t *testing.T) {
 //= type=test
 //# battery SHALL place each new MicroVM of a Pool on the Host, of
 //# those in the Pool's `flintlock_hosts` that it holds and has not cordoned,
-//# with the fewest of the Pool's MicroVMs that are not `DELETING` or
-//# `FAILED`, counting each MicroVM whose placement it has reserved, and
-//# SHALL give a tie to the Host that comes first in `flintlock_hosts`.
+//# with the least memory reserved, summing the template `memory_in_mb` of
+//# every Pool's MicroVMs on the Host that are not `DELETING` or `FAILED` and
+//# of every placement it has reserved there, and SHALL give a tie to the Host
+//# with the fewest of the Pool's own MicroVMs and then to the Host that comes
+//# first in `flintlock_hosts`.
 
 // TestBatchSpreadsOverHosts: a Pool of 8 on two empty Hosts is provisioned
 // in one batch, and the batch is split 4 and 4. Grown to 10 with a third,
@@ -217,7 +220,101 @@ func TestBatchSpreadsOverHosts(t *testing.T) {
 	h.createPool(h.spec("other", 1, hostC, hostA))
 	for _, r := range h.b.VMs() {
 		if r.Pool.Name == "other" && r.Host != hostC {
-			t.Fatalf("other's microvm on %s, want host-c: first in flintlock_hosts, and other's own count is a tie", r.Host)
+			t.Fatalf("other's microvm on %s, want host-c: it has the least memory reserved", r.Host)
+		}
+	}
+}
+
+//= docs/requirements/10-battery.md#hosts
+//= type=test
+//# battery SHALL place each new MicroVM of a Pool on the Host, of
+//# those in the Pool's `flintlock_hosts` that it holds and has not cordoned,
+//# with the least memory reserved, summing the template `memory_in_mb` of
+//# every Pool's MicroVMs on the Host that are not `DELETING` or `FAILED` and
+//# of every placement it has reserved there, and SHALL give a tie to the Host
+//# with the fewest of the Pool's own MicroVMs and then to the Host that comes
+//# first in `flintlock_hosts`.
+
+// TestPlacementByMemoryAcrossPools: one 2048 MiB MicroVM of "big" lands on
+// host-a, the first of two empty Hosts. Four 256 MiB MicroVMs of "small"
+// then all go to host-b, which has less memory reserved until it holds 1024
+// MiB, though host-a has none of small's own. By count alone they would
+// split 2 and 2.
+func TestPlacementByMemoryAcrossPools(t *testing.T) {
+	h := newHarness(t, Config{}, hostA, hostB)
+	big := h.spec("big", 1, hostA, hostB)
+	big.Template.MemoryInMb = 2048
+	h.createPool(big)
+	h.createPool(h.spec("small", 4, hostA, hostB))
+
+	got := map[string]int{}
+	for _, r := range h.b.VMs() {
+		if r.Pool.Name == "small" {
+			got[r.Host]++
+		}
+	}
+	if want := map[string]int{hostB: 4}; !sameCounts(got, want) {
+		t.Fatalf("small's placement = %v, want %v", got, want)
+	}
+}
+
+//= docs/requirements/10-battery.md#balloon
+//= type=test
+//# battery SHALL send each MicroVM of a Pool to `flintlockd` with
+//# the `balloon` of the Pool's `microvm_template`, as the template sets it.
+
+// TestBalloonReachesFlintlockd: a Pool whose template has a balloon creates
+// each MicroVM on its Host with it.
+func TestBalloonReachesFlintlockd(t *testing.T) {
+	h := newHarness(t, Config{}, hostA)
+	spec := h.spec("pool", 2, hostA)
+	spec.Template.Balloon = &types.Balloon{FreePageReporting: true}
+	h.createPool(spec)
+
+	vms := h.stubs[hostA].fl.MicroVMs()
+	if len(vms) != 2 {
+		t.Fatalf("host-a holds %d microvms, want 2", len(vms))
+	}
+	for _, vm := range vms {
+		if !vm.GetSpec().GetBalloon().GetFreePageReporting() {
+			t.Fatalf("microvm %s has balloon %v, want free_page_reporting", vm.GetSpec().GetUid(), vm.GetSpec().GetBalloon())
+		}
+	}
+}
+
+//= docs/requirements/10-battery.md#balloon
+//= type=test
+//# If `flintlockd` answers a `CreateMicroVM` whose spec has a
+//# `balloon` with a spec that has none, then battery SHALL delete that
+//# MicroVM and fail its provision.
+
+// TestBalloonDroppedByFlintlockd: a Host whose flintlockd drops the balloon
+// gets the MicroVM deleted again, and the Pool gets no available MicroVM.
+func TestBalloonDroppedByFlintlockd(t *testing.T) {
+	h := newHarness(t, Config{}, hostA)
+	host := h.stubs[hostA]
+	host.mu.Lock()
+	host.dropBalloon = true
+	host.mu.Unlock()
+
+	spec := h.spec("pool", 1, hostA)
+	spec.Template.Balloon = &types.Balloon{FreePageReporting: true}
+	if _, err := h.client.CreatePool(h.ctx, spec); err != nil {
+		t.Fatalf("CreatePool: %v", err)
+	}
+
+	select {
+	case uid := <-host.deletions:
+		created, _ := host.counts()
+		if created < 1 {
+			t.Fatalf("host-a deleted %s before it created anything", uid)
+		}
+	case <-h.ctx.Done():
+		t.Fatal("host-a never deleted the microvm without its balloon")
+	}
+	for _, r := range h.b.VMs() {
+		if r.Phase == poolmgrv1.VMPhase_AVAILABLE {
+			t.Fatalf("microvm %s is available, want none while the host drops the balloon", r.UID)
 		}
 	}
 }

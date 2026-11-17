@@ -43,6 +43,9 @@ status and the claims give a consumer the visibility it needs, and a
   less than 1024 or greater than 32768.
 - **RS-016** The CRDs SHALL reject a `Pool` whose `spec.template.interfaces`
   does not hold at least one network interface.
+- **RS-017** The `Pool` resource SHALL carry an optional `spec.template.balloon`
+  with the field `freePageReporting`, and the Pool Controller SHALL send
+  it to battery as the template's `balloon`.
 
 A Pool's name and namespace in battery are the resource's own, so `PoolSpec`'s
 `name` and `namespace` have no field in `spec`. The proposal on battery#46
@@ -60,6 +63,12 @@ interface. A template outside those limits was accepted, declared to
 battery, and then every MicroVM of its Pool failed in `flintlockd` (#141).
 The limits are flintlock v0.15.2's: a later flintlock that relaxes them
 changes these requirements and the markers on `MicroVMTemplate` together.
+
+RS-017 is flintlock's `balloon` (flintlock#1415), which battery v0.7.0
+passes through (BA-099). With `freePageReporting`, a guest returns the
+memory it frees to its Host, so a Host can hold more busy MicroVMs than the
+sum of their `memoryInMb`. A `flintlockd` without the field drops it, and
+battery then fails the Pool's provisions on that Host (BA-100).
 
 ## MicroVMClaim {#microvmclaim}
 

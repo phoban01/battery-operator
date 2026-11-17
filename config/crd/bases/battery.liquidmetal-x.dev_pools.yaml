@@ -205,6 +205,19 @@ spec:
                         rule: has(self.containerSource) != has(self.virtiofsSource)
                     type: array
                     x-kubernetes-list-type: atomic
+                  balloon:
+                    description: |-
+                      balloon attaches a memory balloon to each MicroVM. With
+                      freePageReporting, the guest returns the memory it frees to the Host.
+                      It needs battery v0.7.0 and a flintlockd with flintlock#1415.
+                    properties:
+                      freePageReporting:
+                        description: |-
+                          freePageReporting makes the guest report the memory it frees, and the
+                          VMM return it to the Host. The guest kernel needs
+                          CONFIG_VIRTIO_BALLOON and CONFIG_PAGE_REPORTING.
+                        type: boolean
+                    type: object
                   cpuConfig:
                     description: cpuConfig sets the CPU features presented to the
                       guest.

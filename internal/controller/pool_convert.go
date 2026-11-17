@@ -130,6 +130,13 @@ func templateToFlintlock(t batteryv1alpha1.MicroVMTemplate, namespace string) *t
 			KvmCapabilitiesToDisable: slices.Clone(c.KVMCapabilitiesToDisable),
 		}
 	}
+	if b := t.Balloon; b != nil {
+		//= docs/requirements/01-resources.md#pool
+		//# The `Pool` resource SHALL carry an optional `spec.template.balloon`
+		//# with the field `freePageReporting`, and the Pool Controller SHALL send
+		//# it to battery as the template's `balloon`.
+		out.Balloon = &types.Balloon{FreePageReporting: b.FreePageReporting}
+	}
 	return out
 }
 

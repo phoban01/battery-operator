@@ -283,6 +283,9 @@ func (b *Battery) provision(ctx context.Context, vm *vmState) {
 		b.dropReserved(vm, errors.New("pool deleted"))
 		return
 	}
+	//= docs/requirements/10-battery.md#balloon
+	//# battery SHALL send each MicroVM of a Pool to `flintlockd` with
+	//# the `balloon` of the Pool's `microvm_template`, as the template sets it.
 	spec := proto.CloneOf(ps.spec.Template)
 	hooks := ps.spec.CreateCommands
 	b.mu.Unlock()
@@ -311,6 +314,15 @@ func (b *Battery) provision(ctx context.Context, vm *vmState) {
 	uid := created.GetMicrovm().GetSpec().GetUid()
 	if uid == "" {
 		b.dropReserved(vm, fmt.Errorf("create microvm on %s: host returned no uid", vm.host))
+		return
+	}
+	if spec.GetBalloon() != nil && created.GetMicrovm().GetSpec().GetBalloon() == nil {
+		//= docs/requirements/10-battery.md#balloon
+		//# If `flintlockd` answers a `CreateMicroVM` whose spec has a
+		//# `balloon` with a spec that has none, then battery SHALL delete that
+		//# MicroVM and fail its provision.
+		b.deleteOrphan(h, uid)
+		b.dropReserved(vm, fmt.Errorf("create microvm on %s: %w", vm.host, errBalloonDropped))
 		return
 	}
 
