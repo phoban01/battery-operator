@@ -21,7 +21,7 @@
 # resolve a new one with
 # `docker buildx imagetools inspect mirror.gcr.io/library/ubuntu:24.04`.
 
-ARG GUEST_AGENT_VERSION=0.4.0
+ARG GUEST_AGENT_VERSION=0.5.0
 
 #= docs/requirements/13-guest-image.md#guest-build
 #/ The Guest Images' Containerfiles SHALL pin every base image by
@@ -33,8 +33,8 @@ ARG GUEST_AGENT_VERSION=0.4.0
 FROM mirror.gcr.io/library/ubuntu:24.04@sha256:534baea6a22c03a63003dbc8dbe78fe34bc0d7e595d9a9dc9834884ff530eb55 AS rootfs
 ARG GUEST_AGENT_VERSION
 # From the release's checksums.txt.
-ARG GUEST_AGENT_SHA256_ARM64=c3c8bd3650d4725806f543fb8fe117ce75c42aa523441f426d71c42104e2f025
-ARG GUEST_AGENT_SHA256_AMD64=07bd0a393dc3416518154e8069705de247df642583f13a1f2983bf89b19ee933
+ARG GUEST_AGENT_SHA256_ARM64=a4f898ff21526e570ca64f4b9a8a6df35bfe8fb1ea4382ad78b4ed3343eb1063
+ARG GUEST_AGENT_SHA256_AMD64=02eaea8959efc17b021a405bc218bce844d4cc8f9a0dd8769e59151c311f0dd6
 ARG TARGETARCH
 #= docs/requirements/13-guest-image.md#guest-rootfs
 #/ The Guest Images' root filesystem image SHALL enable

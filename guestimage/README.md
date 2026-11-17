@@ -10,7 +10,7 @@ pulls them. The requirements are in
 | Image | Holds |
 |-------|-------|
 | `kernel/` | Firecracker's CI kernel 6.1.128 at `boot/vmlinux`: an ELF `vmlinux` on x86_64, an uncompressed `Image` on arm64. Nothing else. |
-| `rootfs/` | Ubuntu 24.04 with systemd and flintlock's guest agent v0.4.0, enabled at boot. systemd-networkd leaves `eth0` to flintlock's metadata service and configures `eth1` and after by DHCP. Each MicroVM makes its own machine ID at boot. |
+| `rootfs/` | Ubuntu 24.04 with systemd and flintlock's guest agent v0.5.0, enabled at boot. systemd-networkd leaves `eth0` to flintlock's metadata service and configures `eth1` and after by DHCP. Each MicroVM makes its own machine ID at boot. |
 
 The kernel has no virtio-pci. It boots on Firecracker and not on Cloud
 Hypervisor (#202). A Pool with Cloud Hypervisor needs a kernel of its own.
